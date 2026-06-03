@@ -498,14 +498,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             % [Stabilization P2] do not run the close path twice
             if app.IsDeleting, return; end
 
-            % [P3] Strict canClose flag. Only delete(app) when ALL save paths succeed
-            % (or the user explicitly chose to discard).
-            canClose = true;
+            % [P3] Abort close immediately when apply/save paths fail
+            % (or when the user cancels).
             try
                 pendingTimer = ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
                                && strcmpi(app.EditApplyTimer.Running, 'on');
                 if app.ProjectDirty || pendingTimer
-                    sel = '';
                     try
                         sel = uiconfirm(app.UIFigure, ...
                             ['저장되지 않은 편집 사항이 있습니다.', sprintf('\n'), ...
@@ -526,7 +524,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                     app.applyPendingDialogChanges();
                                 catch ME
                                     app.logCaught(ME, 'close-apply');
-                                    cont = '';
                                     try
                                         cont = uiconfirm(app.UIFigure, ...
                                             sprintf('대기 중 편집 적용 실패:\n%s\n계속 닫을까요?', ME.message), ...
@@ -534,15 +531,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                             'Options', {'그래도 닫기', '취소'}, ...
                                             'DefaultOption', 2, 'CancelOption', 2);
                                     catch
+                                        cont = '';
                                     end
-                                    if ~strcmp(cont, '그래도 닫기'), canClose = false; return; end
+                                    if ~strcmp(cont, '그래도 닫기'), return; end
                                 end
                             end
                             % --- Project save (must succeed or user aborts) ---
                             if isempty(app.ProjectFilePath)
                                 [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
                                 if isequal(fn, 0)
-                                    canClose = false; return;     % user cancelled save destination
+                                    return;     % user cancelled save destination
                                 end
                                 app.ProjectFilePath = fullfile(pn, fn);
                             end
@@ -550,7 +548,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             try, okSave = app.saveProjectFile(app.ProjectFilePath); catch ME, app.logCaught(ME, 'close-save-project'); end
                             if ~okSave
                                 try, uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project'); catch, end
-                                canClose = false; return;
+                                return;
                             end
                             try, app.clearProjectAutosave(); catch, end
                             % --- Option drafts (warn on failure, ask whether to proceed) ---
@@ -572,7 +570,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 end
                             end
                             if ~isempty(optionFailures)
-                                cont = '';
                                 try
                                     cont = uiconfirm(app.UIFigure, ...
                                         sprintf(['다음 option 파일 저장 실패:\n%s\n', ...
@@ -581,8 +578,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                         'Options', {'그래도 닫기', '취소'}, ...
                                         'DefaultOption', 2, 'CancelOption', 2);
                                 catch
+                                    cont = '';
                                 end
-                                if ~strcmp(cont, '그래도 닫기'), canClose = false; return; end
+                                if ~strcmp(cont, '그래도 닫기'), return; end
                             end
                         case '버리고 닫기'
                             % Discard path: stop the autosave timer cleanly, do not write.
@@ -590,8 +588,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
                 end
             catch ME, app.logCaught(ME, 'silent'); end
-
-            if ~canClose, return; end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
@@ -634,7 +630,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.UI(fIdx).panelVideo.Visible = newState;
                 if newState
                     % [V3.12 2.1] 영상 로드되어 있으면 영상 비율 기반 너비 사용
-                    targetWidth = app.getVideoPanelTargetWidth(fIdx);
+                    targetWidth = app.getVideoPanelTargetWidth();
                     widths{6} = targetWidth; % 5를 6으로 수정
                     app.UI(fIdx).btnVid.Text = '비디오 ▾';
                 else
@@ -833,7 +829,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
         % [V3.22 #3-5] VideoReader 생성 (실패 시 errordlg + [] 반환)
         function vr = openVideoReader(app, fIdx, fullPath, fname)
-            vr = [];
             try
                 vr = VideoReader(fullPath);
                 app.VideoState(fIdx).videoReader = vr;
@@ -847,6 +842,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     fprintf('[Video] loaded: %s (fIdx=%d)\n', fname, fIdx);
                 end
             catch e
+                vr = [];
                 if app.DebugMode
                     fprintf('[Video] load failed: %s\n  %s\n', fullPath, e.message);
                 end
@@ -962,7 +958,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % [V3.12 2.1] 영상 가로:세로 비율에 따라 비디오 패널 너비 동적 조정
         function adjustVideoPanelWidth(app, fIdx)
             try
-                targetWidth = app.getVideoPanelTargetWidth(fIdx);
+                targetWidth = app.getVideoPanelTargetWidth();
 
                 if app.UI(fIdx).PanelVisible.video
                     widths = app.UI(fIdx).dataGrid.ColumnWidth;
@@ -1370,7 +1366,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
             fprintf('[ErrorLog] %d entries:\n', numel(log));
             for k = 1:numel(log)
-                tstr = '';
                 try
                     tstr = char(datetime(log(k).time, 'Format', 'HH:mm:ss.SSS'));
                 catch
@@ -2012,8 +2007,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 % [Stabilization P1] seq-read heuristic uses last DECODED frame (read position
                 % of the VideoReader), not last DISPLAYED frame.
                 lastF = app.LastDecodedFrame(fIdx);
-                fps = app.VideoSyncState(fIdx).VideoFps;
-                if fps <= 0, fps = 70; end
                 step = clampedFrame - lastF;
                 if lastF > 0 && step >= 1 && step <= app.MAX_SEQ_READ_STEP
                     for k = 1:step
@@ -4051,9 +4044,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             gl.RowSpacing = 5; gl.Padding = [10 10 10 10];
 
             uilabel(gl, 'Text', '== Flight 1 ↔ Flight 2 비행시간 sync ==', 'FontWeight', 'bold').Layout.Column = [1 5];
-            uilabel(gl, 'Text', 'Flight 1 기준 시간(s):');
+            lbl = uilabel(gl, 'Text', 'Flight 1 기준 시간(s):');
+            lbl.Tooltip = lbl.Text;
             app.EDSyncF1Time = uieditfield(gl, 'numeric', 'Value', 0);
-            uilabel(gl, 'Text', 'Flight 2 기준 시간(s):');
+            lbl = uilabel(gl, 'Text', 'Flight 2 기준 시간(s):');
+            lbl.Tooltip = lbl.Text;
             app.EDSyncF2Time = uieditfield(gl, 'numeric', 'Value', 0);
             uibutton(gl, 'Text', '동기 적용', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(true));
@@ -4061,16 +4056,20 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(false));
             for fIdx = 1:2
                 uilabel(gl, 'Text', sprintf('== Flight %d AVI sync ==', fIdx), 'FontWeight', 'bold').Layout.Column = [1 5];
-                uilabel(gl, 'Text', 'Anchor Frame:');
+                lbl = uilabel(gl, 'Text', 'Anchor Frame:');
+                lbl.Tooltip = lbl.Text;
                 ef = uieditfield(gl, 'numeric', 'Value', 0, 'Limits', [0 Inf]);
                 app.(sprintf('EDVSync%dFrame', fIdx)) = ef;
-                uilabel(gl, 'Text', 'Anchor Time(s):');
+                lbl = uilabel(gl, 'Text', 'Anchor Time(s):');
+                lbl.Tooltip = lbl.Text;
                 et = uieditfield(gl, 'numeric', 'Value', 0);
                 app.(sprintf('EDVSync%dTime', fIdx)) = et;
-                uilabel(gl, 'Text', 'Video FPS:');
+                lbl = uilabel(gl, 'Text', 'Video FPS:');
+                lbl.Tooltip = lbl.Text;
                 vf = uieditfield(gl, 'numeric', 'Value', 70, 'Limits', [1 Inf]);
                 app.(sprintf('EDVSync%dVFPS', fIdx)) = vf;
-                uilabel(gl, 'Text', 'Data FPS:');
+                lbl = uilabel(gl, 'Text', 'Data FPS:');
+                lbl.Tooltip = lbl.Text;
                 df = uieditfield(gl, 'numeric', 'Value', 50, 'Limits', [1 Inf]);
                 app.(sprintf('EDVSync%dDFPS', fIdx)) = df;
                 btnA = uibutton(gl, 'Text', '동기 적용', ...
@@ -5330,7 +5329,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             targetWidth = round(max(minW, min(targetWidth, maxW)));
         end
 
-        function targetWidth = getVideoPanelTargetWidth(app, fIdx)
+        function targetWidth = getVideoPanelTargetWidth(app)
             panelWidths = app.getResponsivePanelWidths();
             targetWidth = panelWidths(4);
             targetWidth = round(max(app.getMinVideoPanelWidth(), min(targetWidth, 900)));
@@ -5346,7 +5345,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         continue;
                     end
 
-                    widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, app.getVideoPanelTargetWidth(fIdx)};
+                    widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, app.getVideoPanelTargetWidth()};
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         if ~app.UI(fIdx).PanelVisible.attitude, widths{1} = 0; end
                         if ~app.UI(fIdx).PanelVisible.map, widths{2} = 0; end
@@ -6659,11 +6658,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
-        function applyProjectState(app, st, opts)
+        function applyProjectState(app, st, ~)
             % Apply a loaded .fdproj-shaped struct to runtime state.
-            % opts.skipFiles = true skips heavy data/AVI loads (Phase 5 owns full path).
-            if nargin < 3 || isempty(opts), opts = struct(); end
-            if ~isfield(opts, 'skipFiles'), opts.skipFiles = true; end
             if isempty(st), return; end
             st = app.migrateProjectState(st);
             try
@@ -7067,25 +7063,6 @@ end
 % parfeval은 클래스 메서드를 직접 받지 못하므로 file-level function 정의
 % worker는 자체 VideoReader를 생성해 디코딩 후 frame 반환
 % =========================================================================
-function img = asyncDecodeFrame(filePath, frameNo, fps)
-    img = [];
-    try
-        vr = VideoReader(filePath);
-        try
-            img = read(vr, frameNo);
-        catch
-            relTime = (frameNo - 1) / max(1, fps);
-            relTime = max(0, min(relTime, vr.Duration - 0.05));
-            vr.CurrentTime = relTime;
-            if hasFrame(vr)
-                img = readFrame(vr);
-            end
-        end
-    catch
-        img = [];
-    end
-end
-
 % =========================================================================
 % [V3.21 #2-A / V3.22 #4] persistent VideoReader worker function
 % - 매 호출마다 VR 재생성(50ms) → persistent로 재사용(3ms)
