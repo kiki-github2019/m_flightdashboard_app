@@ -2623,73 +2623,133 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
 
             dataTbl = readtable(filepath, opts);
+            % [Phase 2 D4] record source path BEFORE applyOptionFile so resolveOptionFilePath
+            % can fall back to model-recorded option path if set later.
+            try
+                app.Models(fIdx).dataFilePath = app.normalizeAbsPath(filepath);
+            catch ME, app.logCaught(ME, 'silent'); end
             app.applyOptionFile(fIdx, dataTbl, false);
 
             if any(ismissing(app.Models(fIdx).rawData), 'all')
                 app.Models(fIdx).rawData = fillmissing(app.Models(fIdx).rawData, 'linear', 'DataVariables', @isnumeric);
+                % Keep unscaled mirror in sync when imputation runs.
+                try
+                    app.Models(fIdx).rawDataUnscaled = fillmissing(app.Models(fIdx).rawDataUnscaled, 'linear', 'DataVariables', @isnumeric);
+                catch ME, app.logCaught(ME, 'silent'); end
             end
         end
 
         function applyOptionFile(app, fIdx, dataTbl, isMock)
+            % [Phase 2] Backward-compatible entry point. Stores unscaled source (D4) then
+            % delegates to parseOptionFileToDraft + applyOptionDraftToModel so repeated
+            % invocations cannot double-scale.
+            app.Models(fIdx).rawDataUnscaled = dataTbl;
+            optPath = app.resolveOptionFilePath(fIdx);
             csvHeaders = dataTbl.Properties.VariableNames;
-            numHeaders = length(csvHeaders);
-            optFileName = sprintf('option%d.dat', fIdx);
+            draft = app.parseOptionFileToDraft(optPath, csvHeaders);
+            app.applyOptionDraftToModel(fIdx, draft, isMock);
+            if isempty(app.Models(fIdx).optionFilePath) && isfile(optPath)
+                app.Models(fIdx).optionFilePath = app.normalizeAbsPath(optPath);
+            end
+        end
 
+        function optPath = resolveOptionFilePath(app, fIdx)
+            % Prefer model-recorded path; fall back to conventional optionN.dat next to pwd.
+            optPath = '';
+            try
+                optPath = char(app.Models(fIdx).optionFilePath);
+            catch
+            end
+            if isempty(optPath) || ~isfile(optPath)
+                optPath = sprintf('option%d.dat', fIdx);
+            end
+        end
+
+        function draft = parseOptionFileToDraft(app, optPath, csvHeaders)
+            % Pure parser. Returns {sourcePath, mappedCols, displayMeta(struct array)}.
             reqKeys = app.REQ_KEYS;
             mappedCols = struct();
             for i = 1:length(reqKeys)
                 mappedCols.(reqKeys{i}) = '';
             end
-
             displayMeta = struct('header', {}, 'unit', {}, 'format', {}, 'scale', {}, 'order', {});
-
-            if isfile(optFileName)
-                lines = readlines(optFileName, 'EmptyLineRule', 'skip');
-                section = 0;
-                for i = 1:length(lines)
-                    lineStr = strtrim(lines(i));
-                    if startsWith(lineStr, '#'), section = section + 1; continue; end
-                    if section == 1
-                        parts = split(lineStr, ':');
-                        if length(parts) >= 2
-                            k = char(strtrim(parts(1)));
-                            v = char(strtrim(parts(2)));
-                            if isfield(mappedCols, k) && ismember(v, csvHeaders)
-                                mappedCols.(k) = v;
+            if ~isempty(optPath) && isfile(optPath)
+                try
+                    lines = readlines(optPath, 'EmptyLineRule', 'skip');
+                    section = 0;
+                    for i = 1:length(lines)
+                        lineStr = strtrim(lines(i));
+                        if startsWith(lineStr, '#'), section = section + 1; continue; end
+                        if section == 1
+                            parts = split(lineStr, ':');
+                            if length(parts) >= 2
+                                k = char(strtrim(parts(1)));
+                                v = char(strtrim(parts(2)));
+                                if isfield(mappedCols, k) && ismember(v, csvHeaders)
+                                    mappedCols.(k) = v;
+                                end
                             end
-                        end
-                    elseif section == 2
-                        parts = split(lineStr, ',');
-                        if length(parts) >= 4
-                            hdr   = char(strtrim(parts(1)));
-                            unit  = char(strtrim(parts(2)));
-                            fmt   = char(strtrim(parts(3)));
-                            order = str2double(strtrim(parts(4)));
-                            if length(parts) >= 5
-                                scale = str2double(strtrim(parts(5)));
-                            else
-                                scale = 1.0;
-                            end
-                            if ~isnan(order) && ismember(hdr, csvHeaders)
-                                newEntry = struct('header', hdr, 'unit', unit, 'format', fmt, ...
-                                                  'scale', scale, 'order', order);
-                                displayMeta(end+1) = newEntry; %#ok<AGROW>
+                        elseif section == 2
+                            parts = split(lineStr, ',');
+                            if length(parts) >= 4
+                                hdr   = char(strtrim(parts(1)));
+                                unit  = char(strtrim(parts(2)));
+                                fmt   = char(strtrim(parts(3)));
+                                order = str2double(strtrim(parts(4)));
+                                if length(parts) >= 5
+                                    scale = str2double(strtrim(parts(5)));
+                                else
+                                    scale = 1.0;
+                                end
+                                % D5: scale=0 guard (avoid silent zeroing of columns)
+                                if isnan(scale) || scale == 0, scale = 1.0; end
+                                if ~isnan(order) && ismember(hdr, csvHeaders)
+                                    displayMeta(end+1) = struct('header', hdr, 'unit', unit, ...
+                                        'format', fmt, 'scale', scale, 'order', order); %#ok<AGROW>
+                                end
                             end
                         end
                     end
-                end
+                catch ME, app.logCaught(ME, 'option-parse'); end
             end
+            draft = struct('sourcePath', char(optPath), ...
+                           'mappedCols', mappedCols, ...
+                           'displayMeta', displayMeta);
+        end
 
-            for i = 1:length(reqKeys)
-                if isempty(mappedCols.(reqKeys{i})) && (i <= numHeaders)
-                    mappedCols.(reqKeys{i}) = csvHeaders{i};
-                end
+        function [ok, info] = validateOptionDraft(app, draft, csvHeaders) %#ok<INUSL>
+            % [D5] basic validation; Phase 5 extends with brokenPlots etc.
+            info = struct('brokenMappings', {{}}, 'brokenColumns', {{}}, 'reasons', {{}});
+            if isempty(draft) || ~isstruct(draft)
+                ok = false; info.reasons{end+1} = 'empty draft'; return;
             end
+            try
+                reqKeys = fieldnames(draft.mappedCols);
+                for i = 1:numel(reqKeys)
+                    v = draft.mappedCols.(reqKeys{i});
+                    if ~isempty(v) && ~ismember(v, csvHeaders)
+                        info.brokenMappings{end+1} = sprintf('%s -> %s', reqKeys{i}, v); %#ok<AGROW>
+                    end
+                end
+                for i = 1:numel(draft.displayMeta)
+                    if ~ismember(draft.displayMeta(i).header, csvHeaders)
+                        info.brokenColumns{end+1} = draft.displayMeta(i).header; %#ok<AGROW>
+                    end
+                    if isnan(draft.displayMeta(i).scale) || draft.displayMeta(i).scale == 0
+                        info.reasons{end+1} = sprintf('scale 비정상: %s', draft.displayMeta(i).header); %#ok<AGROW>
+                    end
+                end
+            catch ME, app.logCaught(ME, 'option-validate'); end
+            ok = isempty(info.brokenMappings) && isempty(info.brokenColumns) && isempty(info.reasons);
+        end
 
+        function displayMeta = buildDisplayMetaFromDraft(~, displayMeta, csvHeaders, isMock)
+            % Normalize order + auto-fill missing columns (used by applyOptionDraftToModel).
+            numHeaders = numel(csvHeaders);
             if isempty(displayMeta)
                 for i = 1:numHeaders
                     displayMeta(end+1) = struct('header', csvHeaders{i}, 'unit', '-', ...
-                                                'format', '%.6f', 'scale', 1.0, 'order', i); %#ok<AGROW>
+                        'format', '%.6f', 'scale', 1.0, 'order', i); %#ok<AGROW>
                 end
             else
                 orders = [displayMeta.order];
@@ -2697,33 +2757,99 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     [~, sortIdx] = sort([displayMeta.order]);
                     displayMeta = displayMeta(sortIdx);
                 else
-                    for i = 1:length(displayMeta)
-                        displayMeta(i).order = i;
-                    end
+                    for i = 1:length(displayMeta), displayMeta(i).order = i; end
                 end
-
                 existingHeaders = {displayMeta.header};
-                missingHeaders = setdiff(csvHeaders, existingHeaders, 'stable');
+                missingHeaders  = setdiff(csvHeaders, existingHeaders, 'stable');
                 for i = 1:length(missingHeaders)
                     displayMeta(end+1) = struct('header', missingHeaders{i}, 'unit', '-', ...
-                                                'format', '%.6f', 'scale', 1.0, ...
-                                                'order', length(displayMeta) + i); %#ok<AGROW>
+                        'format', '%.6f', 'scale', 1.0, ...
+                        'order', length(displayMeta) + i); %#ok<AGROW>
+                end
+            end
+            if isMock
+                for i = 1:length(displayMeta), displayMeta(i).scale = 1.0; end
+            end
+        end
+
+        function applyOptionDraftToModel(app, fIdx, draft, isMock)
+            % [Phase 2/D4 hybrid] always rebuilds rawData from rawDataUnscaled. No accumulation.
+            if nargin < 4, isMock = false; end
+            src = app.Models(fIdx).rawDataUnscaled;
+            if isempty(src) || height(src) == 0
+                return;
+            end
+            csvHeaders = src.Properties.VariableNames;
+
+            % Auto-fill mappedCols defaults (first N CSV columns) if unset.
+            mappedCols = draft.mappedCols;
+            reqKeys    = app.REQ_KEYS;
+            for i = 1:length(reqKeys)
+                if (~isfield(mappedCols, reqKeys{i}) || isempty(mappedCols.(reqKeys{i}))) ...
+                        && (i <= numel(csvHeaders))
+                    mappedCols.(reqKeys{i}) = csvHeaders{i};
                 end
             end
 
+            displayMeta = app.buildDisplayMetaFromDraft(draft.displayMeta, csvHeaders, isMock);
+
+            % Re-derive scaled rawData from unscaled source (D4 invariant: no double-scale).
+            scaled = src;
             for i = 1:length(displayMeta)
-                if isMock, displayMeta(i).scale = 1.0; end
-                colName = displayMeta(i).header;
-                if displayMeta(i).scale ~= 1.0
-                    dataTbl.(colName) = dataTbl.(colName) * displayMeta(i).scale;
+                col = displayMeta(i).header;
+                s   = displayMeta(i).scale;
+                if isnumeric(s) && ~isnan(s) && s ~= 1.0 && ismember(col, scaled.Properties.VariableNames)
+                    try
+                        scaled.(col) = scaled.(col) * s;
+                    catch ME, app.logCaught(ME, 'option-scale'); end
                 end
             end
 
-            app.Models(fIdx).rawData = dataTbl;
-            app.Models(fIdx).mappedCols = mappedCols;
+            app.Models(fIdx).rawData     = scaled;
+            app.Models(fIdx).mappedCols  = mappedCols;
             app.Models(fIdx).displayMeta = displayMeta;
             app.Models(fIdx).selectedRow = 1;
-            app.Models(fIdx).isMockData = isMock;
+            app.Models(fIdx).isMockData  = isMock;
+            % Stash the resolved draft as the editor baseline.
+            app.OptionDrafts{fIdx} = struct('sourcePath', char(draft.sourcePath), ...
+                                            'mappedCols', mappedCols, 'displayMeta', displayMeta);
+        end
+
+        function ok = writeOptionFileAtomic(app, optPath, draft)
+            % Atomic write of option file: temp -> .bak of old -> movefile.
+            ok = false;
+            if nargin < 3 || isempty(optPath) || isempty(draft), return; end
+            try
+                lines = {};
+                lines{end+1} = '# RequiredColumns'; %#ok<AGROW>
+                reqKeys = app.REQ_KEYS;
+                for i = 1:length(reqKeys)
+                    v = '';
+                    if isfield(draft.mappedCols, reqKeys{i}), v = char(draft.mappedCols.(reqKeys{i})); end
+                    lines{end+1} = sprintf('%s: %s', reqKeys{i}, v); %#ok<AGROW>
+                end
+                lines{end+1} = ''; %#ok<AGROW>
+                lines{end+1} = '# DisplayColumns'; %#ok<AGROW>
+                for i = 1:numel(draft.displayMeta)
+                    dm = draft.displayMeta(i);
+                    lines{end+1} = sprintf('%s, %s, %s, %d, %g', ...
+                        dm.header, dm.unit, dm.format, dm.order, dm.scale); %#ok<AGROW>
+                end
+                tmp = [optPath '.tmp'];
+                fid = fopen(tmp, 'w');
+                if fid < 0, error('FlightDataDashboard:OptionWrite', '임시 파일 열기 실패: %s', tmp); end
+                cleanup = onCleanup(@() fclose(fid));
+                fprintf(fid, '%s\n', lines{:});
+                clear cleanup;
+                if isfile(optPath)
+                    try, copyfile(optPath, [optPath '.bak'], 'f'); catch, end
+                end
+                movefile(tmp, optPath, 'f');
+                ok = true;
+            catch ME
+                app.logCaught(ME, 'option-write');
+                try, uialert(app.UIFigure, sprintf('option 파일 저장 실패:\n%s', ME.message), 'Options'); catch, end
+            end
         end
 
         function generateMockFlightData(app, fIdx)
