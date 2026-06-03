@@ -2594,11 +2594,255 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.UI(fIdx).xLimListeners{tabIdx}{end+1} = L;
 
             allAxes = [app.UI(fIdx).plotAxes{tabIdx}{:}];
-            if numel(allAxes) > 1
+            % [Phase 4 D3] honour LinkXWithinTab flag (defaults true) instead of forcing link.
+            if numel(allAxes) > 1 && app.getLinkXWithinTab(fIdx, tabIdx)
                 linkaxes(allAxes, 'x');
             end
 
+            % [Phase 4] capture the freshly added plot into PlotConfigState for project save.
+            try, app.recordPlotInConfig(fIdx, tabIdx, struct( ...
+                    'YColumn', yCol, 'YLabel', yLabelStr, ...
+                    'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
+                    'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT)); catch, end
+
             drawnow;
+        end
+    end
+
+    % =========================================================================
+    % [Phase 4] PlotConfig capture/apply + LinkXWithinTab gating (D3)
+    % =========================================================================
+    methods (Access = private)
+        function cfg = ensurePlotConfigShape(app, cfg)
+            if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg, 'Flights')
+                empty = struct('PlotTabs', []);
+                cfg = struct('Flights', [empty, empty]);
+            end
+            for fIdx = 1:2
+                if numel(cfg.Flights) < fIdx
+                    cfg.Flights(fIdx).PlotTabs = [];
+                end
+                if ~isfield(cfg.Flights(fIdx), 'PlotTabs')
+                    cfg.Flights(fIdx).PlotTabs = [];
+                end
+            end
+            app.PlotConfigState = cfg;
+        end
+
+        function tf = getLinkXWithinTab(app, fIdx, tabIdx)
+            tf = true;   % default
+            try
+                cfg = app.PlotConfigState;
+                if isstruct(cfg) && isfield(cfg, 'Flights') ...
+                        && numel(cfg.Flights) >= fIdx ...
+                        && isfield(cfg.Flights(fIdx), 'PlotTabs') ...
+                        && numel(cfg.Flights(fIdx).PlotTabs) >= tabIdx ...
+                        && isfield(cfg.Flights(fIdx).PlotTabs(tabIdx), 'LinkXWithinTab')
+                    tf = logical(cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab);
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function setLinkXWithinTab(app, fIdx, tabIdx, enabled)
+            % [D3] central toggle. Updates PlotConfigState and live axes link state.
+            cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+            try
+                if numel(cfg.Flights(fIdx).PlotTabs) < tabIdx
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots = [];
+                end
+                cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab = logical(enabled);
+                app.PlotConfigState = cfg;
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                axesCell = app.UI(fIdx).plotAxes{tabIdx};
+                if iscell(axesCell), allAxes = [axesCell{:}]; else, allAxes = axesCell; end
+                if numel(allAxes) > 1
+                    if enabled, linkaxes(allAxes, 'x'); else, linkaxes(allAxes, 'off'); end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function disableLinkXOnIndividualEdit(app, fIdx, tabIdx)
+            % [D3] Called when a single-plot X range is edited; auto-off + leaves a Link off marker.
+            app.setLinkXWithinTab(fIdx, tabIdx, false);
+            try
+                if isfield(app.UI(fIdx), 'plotTabs') && numel(app.UI(fIdx).plotTabs) >= tabIdx ...
+                        && isvalid(app.UI(fIdx).plotTabs(tabIdx))
+                    baseTitle = char(app.UI(fIdx).plotTabs(tabIdx).Title);
+                    if ~contains(baseTitle, '[Link off]')
+                        app.UI(fIdx).plotTabs(tabIdx).Title = [baseTitle ' [Link off]'];
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            app.markProjectDirtyAndScheduleRefresh('linkx-off');
+        end
+
+        function recordPlotInConfig(app, fIdx, tabIdx, entry)
+            cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+            try
+                if numel(cfg.Flights(fIdx).PlotTabs) < tabIdx
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Title          = sprintf('Tab %d', tabIdx);
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab = true;
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots          = [];
+                end
+                plots = cfg.Flights(fIdx).PlotTabs(tabIdx).Plots;
+                if isempty(plots)
+                    plots = entry;
+                else
+                    plots(end+1) = entry; %#ok<AGROW>
+                end
+                cfg.Flights(fIdx).PlotTabs(tabIdx).Plots = plots;
+                app.PlotConfigState = cfg;
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function cfg = capturePlotConfigFromUi(app)
+            cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+            for fIdx = 1:2
+                try
+                    if ~isfield(app.UI(fIdx), 'plotAxes') || isempty(app.UI(fIdx).plotAxes)
+                        continue;
+                    end
+                    numTabs = numel(app.UI(fIdx).plotAxes);
+                    for tabIdx = 1:numTabs
+                        axesCell = app.UI(fIdx).plotAxes{tabIdx};
+                        plots = struct('YColumn', {}, 'YLabel', {}, 'XLim', {}, ...
+                                       'YLimMode', {}, 'YLim', {}, 'Height', {}, 'Order', {});
+                        if iscell(axesCell)
+                            for p = 1:numel(axesCell)
+                                ax = axesCell{p};
+                                if isempty(ax) || ~isvalid(ax), continue; end
+                                ylabStr = '';
+                                try, ylabStr = char(ax.YLabel.String); catch, end
+                                plots(end+1) = struct('YColumn', '', 'YLabel', ylabStr, ...
+                                    'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
+                                    'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT, ...
+                                    'Order', p); %#ok<AGROW>
+                            end
+                        end
+                        titleStr = sprintf('Tab %d', tabIdx);
+                        try, titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title); catch, end
+                        link = app.getLinkXWithinTab(fIdx, tabIdx);
+                        cfg.Flights(fIdx).PlotTabs(tabIdx) = struct( ...
+                            'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots);
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
+            app.PlotConfigState = cfg;
+        end
+
+        function applyPlotAxisConfig(app, fIdx, tabIdx, plotIdx, axisCfg)
+            % Apply XLim/YLim/YLimMode to a specific plot. If the X-range is changed individually,
+            % auto-off the tab link (D3) so the edit actually takes effect.
+            try
+                axesCell = app.UI(fIdx).plotAxes{tabIdx};
+                if ~iscell(axesCell) || numel(axesCell) < plotIdx, return; end
+                ax = axesCell{plotIdx};
+                if isempty(ax) || ~isvalid(ax), return; end
+                xChanged = isfield(axisCfg, 'XLim') && ~isequal(ax.XLim, axisCfg.XLim);
+                if xChanged && app.getLinkXWithinTab(fIdx, tabIdx)
+                    app.disableLinkXOnIndividualEdit(fIdx, tabIdx);
+                end
+                if isfield(axisCfg, 'XLim'),     ax.XLim     = axisCfg.XLim; end
+                if isfield(axisCfg, 'YLim'),     ax.YLim     = axisCfg.YLim; end
+                if isfield(axisCfg, 'YLimMode'), ax.YLimMode = axisCfg.YLimMode; end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function syncSelectedPlotXLimToAll(app, fIdx, tabIdx, plotIdx)
+            % Apply this plot's X range to every plot in every tab of every flight.
+            try
+                axesCell = app.UI(fIdx).plotAxes{tabIdx};
+                if ~iscell(axesCell) || numel(axesCell) < plotIdx, return; end
+                srcAx = axesCell{plotIdx};
+                if isempty(srcAx) || ~isvalid(srcAx), return; end
+                xlim = srcAx.XLim;
+            catch ME, app.logCaught(ME, 'silent'); return; end
+            for f = 1:2
+                try
+                    if ~isfield(app.UI(f), 'plotAxes'), continue; end
+                    for t = 1:numel(app.UI(f).plotAxes)
+                        axc = app.UI(f).plotAxes{t};
+                        if ~iscell(axc), continue; end
+                        for p = 1:numel(axc)
+                            ax = axc{p};
+                            if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
+                        end
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
+            app.markProjectDirtyAndScheduleRefresh('xlim-sync-all');
+        end
+
+        function applyTabXLimToTab(app, fIdx, srcTabIdx, dstFIdx, dstTabIdx)
+            try
+                srcAxesCell = app.UI(fIdx).plotAxes{srcTabIdx};
+                if ~iscell(srcAxesCell) || isempty(srcAxesCell), return; end
+                srcAx = srcAxesCell{1};
+                if isempty(srcAx) || ~isvalid(srcAx), return; end
+                xlim = srcAx.XLim;
+                dstCell = app.UI(dstFIdx).plotAxes{dstTabIdx};
+                if iscell(dstCell)
+                    for p = 1:numel(dstCell)
+                        ax = dstCell{p};
+                        if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            app.markProjectDirtyAndScheduleRefresh('xlim-tab');
+        end
+
+        function applyTabXLimToAllTabs(app, fIdx, srcTabIdx)
+            try
+                srcAxesCell = app.UI(fIdx).plotAxes{srcTabIdx};
+                if ~iscell(srcAxesCell) || isempty(srcAxesCell), return; end
+                srcAx = srcAxesCell{1};
+                if isempty(srcAx) || ~isvalid(srcAx), return; end
+                xlim = srcAx.XLim;
+            catch ME, app.logCaught(ME, 'silent'); return; end
+            for f = 1:2
+                try
+                    if ~isfield(app.UI(f), 'plotAxes'), continue; end
+                    for t = 1:numel(app.UI(f).plotAxes)
+                        axc = app.UI(f).plotAxes{t};
+                        if ~iscell(axc), continue; end
+                        for p = 1:numel(axc)
+                            ax = axc{p};
+                            if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
+                        end
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
+            app.markProjectDirtyAndScheduleRefresh('xlim-all-tabs');
+        end
+
+        function rebuildPlotsFromConfig(app, fIdx, cfg)
+            % Lightweight rebuild stub: clears tabs then re-adds plots by YColumn order.
+            % Full UI rebuild matches setupDataUI semantics; left for follow-up.
+            if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg, 'Flights') ...
+                    || numel(cfg.Flights) < fIdx
+                return;
+            end
+            tabs = cfg.Flights(fIdx).PlotTabs;
+            if isempty(tabs), return; end
+            try, app.clearAllTabs(fIdx); catch, end
+            for t = 1:numel(tabs)
+                try, app.addPlotTab(fIdx); catch, end
+                if isfield(tabs(t), 'Plots') && ~isempty(tabs(t).Plots)
+                    for p = 1:numel(tabs(t).Plots)
+                        yCol = tabs(t).Plots(p).YColumn;
+                        if isempty(yCol), continue; end
+                        idx = find(strcmp({app.Models(fIdx).displayMeta.header}, yCol), 1);
+                        if ~isempty(idx)
+                            app.Models(fIdx).selectedRow = idx;
+                            try, app.plotSelectedVariable(fIdx); catch, end
+                        end
+                    end
+                end
+                if isfield(tabs(t), 'LinkXWithinTab')
+                    app.setLinkXWithinTab(fIdx, t, tabs(t).LinkXWithinTab);
+                end
+            end
         end
     end
 
