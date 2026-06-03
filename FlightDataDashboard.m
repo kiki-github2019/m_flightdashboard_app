@@ -71,6 +71,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         VideoSyncState    % [V3.12] 비디오-비행데이터 동기화 정보 (배열 [1x2])
         WindowMinBtn
         WindowMaxBtn
+        BoardToggleButtons
 
         CoastlineData
         FixedAreaBounds
@@ -141,6 +142,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         AutosaveTimer        = []              % .fdproj.autosave snapshot timer (D2)
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
+        BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
+        BoardPanelVisibleSnapshot = {[], []}   % saved per-board visibility/width state for restore
 
         % [Audit fix #1] Edit dialog UI handles (all default to [])
         EditDialogStatusLbl  = []
@@ -635,6 +638,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
             end
             app.UI(fIdx).dataGrid.ColumnWidth = widths;
+            app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
         % ---------------------------------------------------------------------
@@ -1207,6 +1211,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
                 catch ME_silent, app.logCaught(ME_silent, 'silent'); end
             end
+            app.refreshBoardOffSummaryPanel(fIdx);
         end
 
         % [V3.15 항목 1] 슬라이더 드래그 중 콜백 (ValueChangingFcn)
@@ -2457,6 +2462,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isfield(app.UI(fIdx), 'hgHdg') && isvalid(app.UI(fIdx).hgHdg)
                     set(app.UI(fIdx).hgHdg, 'Matrix', makehgtform('zrotate', -hdg * pi / 180));
                 end
+                app.refreshBoardOffSummaryPanel(fIdx);
             catch ME
                 app.logCaught(ME, 'numericPanels');
             end
@@ -2593,6 +2599,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             timeCol = app.Models(fIdx).mappedCols.Time;
             currTime = app.Models(fIdx).rawData.(timeCol)(currIdx);
             app.updatePlotTimeLines(fIdx, currIdx, currTime);
+            app.refreshBoardOffSummaryPanel(fIdx);
         end
 
         function updatePlotTimeLines(app, fIdx, currIdx, currTime)
@@ -2684,6 +2691,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.UI(fIdx).xLimListeners{tabIdx} = {};
 
             app.UI(fIdx).tabGroup.SelectedTab = newTab;
+            app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
         function clearCurrentTab(app, fIdx)
@@ -2710,6 +2718,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.UI(fIdx).timeMarkers{tabIdx} = {};
             app.UI(fIdx).plotData{tabIdx} = {};
             app.UI(fIdx).xLimListeners{tabIdx} = {};
+            app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
         function clearAllTabs(app, fIdx)
@@ -2732,6 +2741,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.UI(fIdx).xLimListeners = cell(1, app.MAX_TABS);
 
             app.addPlotTab(fIdx);
+            app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
         function deleteGraphicsHandles(~, handleCell)
@@ -2907,6 +2917,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT)); catch, end
 
             drawnow;
+            app.refreshBoardOffSummaryPanel(fIdx, true);
         end
     end
 
@@ -5010,6 +5021,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 app.initPlots(fIdx);
                 app.updateDashboard(fIdx, 1);
+                app.refreshBoardOffSummaryPanel(fIdx, true);
             end
         end
 
@@ -5198,6 +5210,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 % app.updateVideoFrame(fIdx, currTime);  % <--- 이 줄을 주석 처리하여 완전 분리
             end
             app.updatePlotTimeLines(fIdx, index, currTime);
+            app.refreshBoardOffSummaryPanel(fIdx);
 
             drawnow limitrate;
         end
@@ -5338,6 +5351,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
                     app.UI(fIdx).dataGrid.Scrollable = 'on';
                     app.setVideoDisplaySize(fIdx);
+                    app.refreshBoardOffSummaryPanel(fIdx);
                 end
                 app.updateWindowControlLabels();
                 drawnow limitrate;
@@ -5668,6 +5682,421 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             ctrl.vidFrameMarker = gobjects(0);
         end
 
+        function toggleBoardVisibility(app, fIdx)
+            try
+                if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
+                    return;
+                end
+
+                if app.BoardOffState(fIdx)
+                    app.BoardOffState(fIdx) = false;
+                    app.restoreBoardPanelState(fIdx);
+                    if isfield(app.UI(fIdx), 'boardOffPanel')
+                        app.setUiVisible(app.UI(fIdx).boardOffPanel, false);
+                    end
+                    app.applyResponsiveLayout();
+                else
+                    otherIdx = 3 - fIdx;
+                    if otherIdx >= 1 && otherIdx <= numel(app.BoardOffState) && app.BoardOffState(otherIdx)
+                        app.updateBoardToggleButtons();
+                        return;
+                    end
+                    app.captureBoardPanelState(fIdx);
+                    app.BoardOffState(fIdx) = true;
+                    app.setUiVisible(app.UI(fIdx).panel, false);
+                    if isfield(app.UI(fIdx), 'boardOffPanel')
+                        app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
+                    end
+                    app.refreshBoardOffSummaryPanel(fIdx, true);
+                end
+
+                app.updateBoardToggleButtons();
+                drawnow limitrate;
+            catch ME
+                app.logCaught(ME, 'boardToggle');
+            end
+        end
+
+        function captureBoardPanelState(app, fIdx)
+            try
+                snap = struct();
+                snap.panelVisible = app.isUiVisible(app.UI(fIdx).panel);
+                if isfield(app.UI(fIdx), 'PanelVisible')
+                    snap.PanelVisible = app.UI(fIdx).PanelVisible;
+                end
+                if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
+                    snap.ColumnWidth = app.UI(fIdx).dataGrid.ColumnWidth;
+                end
+                app.BoardPanelVisibleSnapshot{fIdx} = snap;
+            catch ME
+                app.BoardPanelVisibleSnapshot{fIdx} = [];
+                app.logCaught(ME, 'boardCapture');
+            end
+        end
+
+        function restoreBoardPanelState(app, fIdx)
+            try
+                snap = app.BoardPanelVisibleSnapshot{fIdx};
+                if isempty(snap) || ~isstruct(snap)
+                    app.setUiVisible(app.UI(fIdx).panel, true);
+                    return;
+                end
+                if isfield(snap, 'PanelVisible')
+                    app.UI(fIdx).PanelVisible = snap.PanelVisible;
+                end
+                if isfield(snap, 'ColumnWidth') && isfield(app.UI(fIdx), 'dataGrid') && ...
+                        ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
+                    app.UI(fIdx).dataGrid.ColumnWidth = snap.ColumnWidth;
+                end
+                if isfield(snap, 'panelVisible')
+                    app.setUiVisible(app.UI(fIdx).panel, snap.panelVisible);
+                else
+                    app.setUiVisible(app.UI(fIdx).panel, true);
+                end
+            catch ME
+                app.setUiVisible(app.UI(fIdx).panel, true);
+                app.logCaught(ME, 'boardRestore');
+            end
+        end
+
+        function updateBoardToggleButtons(app)
+            labelsOff = {'상단 보드 off', '하단 보드 off'};
+            labelsOn  = {'상단 보드 on', '하단 보드 on'};
+            try
+                if isempty(app.BoardToggleButtons), return; end
+                activeOff = find(app.BoardOffState, 1);
+                for k = 1:min(2, numel(app.BoardToggleButtons))
+                    btn = app.BoardToggleButtons(k);
+                    if isempty(btn) || ~isvalid(btn), continue; end
+                    if app.BoardOffState(k)
+                        btn.Text = labelsOn{k};
+                        btn.Enable = 'on';
+                        btn.BackgroundColor = [0.75 0.20 0.20];
+                        btn.FontColor = [1 1 1];
+                    else
+                        btn.Text = labelsOff{k};
+                        if isempty(activeOff)
+                            btn.Enable = 'on';
+                        else
+                            btn.Enable = 'off';
+                        end
+                        btn.BackgroundColor = [0.18 0.18 0.22];
+                        btn.FontColor = [1 1 1];
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'boardButtons');
+            end
+        end
+
+        function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
+            if nargin < 3, forceRebuild = false; end
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ~app.BoardOffState(fIdx)
+                    return;
+                end
+                if ~isfield(app.UI(fIdx), 'boardOffPanel') || isempty(app.UI(fIdx).boardOffPanel) || ...
+                        ~isvalid(app.UI(fIdx).boardOffPanel)
+                    return;
+                end
+
+                if isfield(app.UI(fIdx), 'dataTable') && ~isempty(app.UI(fIdx).dataTable) && ...
+                        isvalid(app.UI(fIdx).dataTable) && isfield(app.UI(fIdx), 'boardOffTable') && ...
+                        ~isempty(app.UI(fIdx).boardOffTable) && isvalid(app.UI(fIdx).boardOffTable)
+                    app.UI(fIdx).boardOffTable.Data = app.UI(fIdx).dataTable.Data;
+                end
+
+                sig = app.getBoardOffPlotSignature(fIdx);
+                if forceRebuild || ~strcmp(sig, app.UI(fIdx).boardOffSignature)
+                    app.rebuildBoardOffPlots(fIdx);
+                    app.UI(fIdx).boardOffSignature = sig;
+                else
+                    app.syncBoardOffPlotMarkers(fIdx);
+                end
+            catch ME
+                app.logCaught(ME, 'boardSummary');
+            end
+        end
+
+        function sig = getBoardOffPlotSignature(app, fIdx)
+            sigParts = {};
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI)
+                    sig = '';
+                    return;
+                end
+                tabs = app.UI(fIdx).plotTabs;
+                selectedIdx = 0;
+                try
+                    selectedIdx = find(tabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
+                    if isempty(selectedIdx), selectedIdx = 0; end
+                catch
+                    selectedIdx = 0;
+                end
+                sigParts{end+1} = sprintf('sel=%d;tabs=%d', selectedIdx, numel(tabs)); %#ok<AGROW>
+                for tIdx = 1:numel(tabs)
+                    tabTitle = '';
+                    try, tabTitle = char(tabs(tIdx).Title); catch, end
+                    plotCount = 0;
+                    if tIdx <= numel(app.UI(fIdx).plotAxes) && ~isempty(app.UI(fIdx).plotAxes{tIdx})
+                        plotCount = numel(app.UI(fIdx).plotAxes{tIdx});
+                    end
+                    sigParts{end+1} = sprintf('T%d:%s:%d', tIdx, tabTitle, plotCount); %#ok<AGROW>
+                    for pIdx = 1:plotCount
+                        yLabel = '';
+                        try
+                            ax = app.UI(fIdx).plotAxes{tIdx}{pIdx};
+                            if ~isempty(ax) && isvalid(ax), yLabel = char(ax.YLabel.String); end
+                        catch
+                        end
+                        yLen = 0;
+                        try, yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx}); catch, end
+                        sigParts{end+1} = sprintf('P%d:%d:%s', pIdx, yLen, yLabel); %#ok<AGROW>
+                    end
+                end
+                sig = strjoin(sigParts, '|');
+            catch
+                sig = '';
+            end
+        end
+
+        function rebuildBoardOffPlots(app, fIdx)
+            try
+                tg = app.UI(fIdx).boardOffTabGroup;
+                if isempty(tg) || ~isvalid(tg), return; end
+                try, delete(tg.Children); catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+
+                app.UI(fIdx).boardOffPlotTabs = [];
+                app.UI(fIdx).boardOffPlotLayouts = {};
+                app.UI(fIdx).boardOffPlotAxes = cell(1, app.MAX_TABS);
+                app.UI(fIdx).boardOffTimeLines = cell(1, app.MAX_TABS);
+                app.UI(fIdx).boardOffTimeMarkers = cell(1, app.MAX_TABS);
+                app.UI(fIdx).boardOffPlotData = cell(1, app.MAX_TABS);
+
+                sourceTabs = app.UI(fIdx).plotTabs;
+                if isempty(sourceTabs)
+                    app.createEmptyBoardOffTab(fIdx, tg, 'Tab 1');
+                    return;
+                end
+
+                timeData = [];
+                currIdx = 1;
+                currTime = 0;
+                if ~isempty(app.Models(fIdx).rawData)
+                    currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                    timeCol = app.Models(fIdx).mappedCols.Time;
+                    timeData = app.Models(fIdx).rawData.(timeCol);
+                    currTime = timeData(currIdx);
+                end
+
+                selectedIdx = 1;
+                try
+                    tmpIdx = find(sourceTabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
+                    if ~isempty(tmpIdx), selectedIdx = tmpIdx; end
+                catch
+                end
+
+                for tIdx = 1:numel(sourceTabs)
+                    tabTitle = sprintf('Tab %d', tIdx);
+                    try, tabTitle = char(sourceTabs(tIdx).Title); catch, end
+                    newTab = uitab(tg, 'Title', tabTitle);
+                    app.UI(fIdx).boardOffPlotTabs(end+1) = newTab;
+                    plotLayout = uigridlayout(newTab, 'ColumnWidth', {'1x'}, 'RowHeight', {}, ...
+                        'Padding', [5 5 5 5], 'RowSpacing', 5, 'Scrollable', 'on');
+                    app.UI(fIdx).boardOffPlotLayouts{tIdx} = plotLayout;
+                    app.UI(fIdx).boardOffPlotAxes{tIdx} = {};
+                    app.UI(fIdx).boardOffTimeLines{tIdx} = {};
+                    app.UI(fIdx).boardOffTimeMarkers{tIdx} = {};
+                    app.UI(fIdx).boardOffPlotData{tIdx} = {};
+
+                    plotCount = 0;
+                    if tIdx <= numel(app.UI(fIdx).plotData) && ~isempty(app.UI(fIdx).plotData{tIdx})
+                        plotCount = numel(app.UI(fIdx).plotData{tIdx});
+                    end
+                    if plotCount == 0
+                        plotLayout.RowHeight = {'1x'};
+                        uilabel(plotLayout, 'Text', '표시할 plot 없음', ...
+                            'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
+                        continue;
+                    end
+
+                    for pIdx = 1:plotCount
+                        yData = app.UI(fIdx).plotData{tIdx}{pIdx};
+                        if isempty(timeData)
+                            xData = 1:numel(yData);
+                            currX = min(currIdx, numel(xData));
+                        else
+                            n = min(numel(timeData), numel(yData));
+                            xData = timeData(1:n);
+                            yData = yData(1:n);
+                            currX = currTime;
+                        end
+                        plotLayout.RowHeight{end+1} = app.PLOT_ROW_HEIGHT;
+                        rowIdx = numel(plotLayout.RowHeight);
+                        p = uipanel(plotLayout, 'BorderType', 'line', 'BackgroundColor', 'w');
+                        p.Layout.Row = rowIdx;
+                        p.Layout.Column = 1;
+                        axGrid = uigridlayout(p, [1 1], 'Padding', [5 5 5 5]);
+                        ax = uiaxes(axGrid);
+                        ax.Layout.Row = 1;
+                        ax.Layout.Column = 1;
+                        grid(ax, 'on');
+                        set(ax, 'XMinorGrid', 'on', 'YMinorGrid', 'on');
+                        plot(ax, xData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82], 'HitTest', 'off');
+                        xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
+                        yLabelStr = '';
+                        try
+                            srcAx = app.UI(fIdx).plotAxes{tIdx}{pIdx};
+                            if ~isempty(srcAx) && isvalid(srcAx)
+                                yLabelStr = char(srcAx.YLabel.String);
+                                ax.XLim = srcAx.XLim;
+                                ax.YLimMode = srcAx.YLimMode;
+                                if strcmpi(char(srcAx.YLimMode), 'manual')
+                                    ax.YLim = srcAx.YLim;
+                                end
+                            end
+                        catch
+                        end
+                        ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
+                        hold(ax, 'on');
+                        markerIdx = max(1, min(currIdx, numel(yData)));
+                        tl = xline(ax, currX, 'r', 'LineWidth', 3.0, 'Alpha', 0.5, 'HitTest', 'off');
+                        mk = plot(ax, currX, yData(markerIdx), 'p', ...
+                            'MarkerFaceColor', [0.98 0.75 0.14], 'MarkerEdgeColor', [0.71 0.33 0.04], ...
+                            'MarkerSize', 14, 'HitTest', 'off');
+                        try
+                            disableDefaultInteractivity(ax);
+                            ax.Toolbar.Visible = 'off';
+                        catch
+                        end
+                        app.UI(fIdx).boardOffPlotAxes{tIdx}{pIdx} = ax;
+                        app.UI(fIdx).boardOffTimeLines{tIdx}{pIdx} = tl;
+                        app.UI(fIdx).boardOffTimeMarkers{tIdx}{pIdx} = mk;
+                        app.UI(fIdx).boardOffPlotData{tIdx}{pIdx} = yData;
+                    end
+                end
+
+                if selectedIdx <= numel(app.UI(fIdx).boardOffPlotTabs)
+                    try, tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx); catch, end
+                end
+                app.syncBoardOffPlotMarkers(fIdx);
+            catch ME
+                app.logCaught(ME, 'boardRebuild');
+            end
+        end
+
+        function createEmptyBoardOffTab(app, fIdx, tg, tabTitle)
+            newTab = uitab(tg, 'Title', tabTitle);
+            app.UI(fIdx).boardOffPlotTabs = newTab;
+            grid = uigridlayout(newTab, [1 1], 'Padding', [8 8 8 8]);
+            uilabel(grid, 'Text', '표시할 plot 없음', ...
+                'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
+        end
+
+        function syncBoardOffPlotMarkers(app, fIdx)
+            try
+                if isempty(app.Models(fIdx).rawData), return; end
+                currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                timeCol = app.Models(fIdx).mappedCols.Time;
+                times = app.Models(fIdx).rawData.(timeCol);
+                currTime = times(currIdx);
+                for tIdx = 1:min(numel(app.UI(fIdx).boardOffTimeLines), numel(app.UI(fIdx).boardOffPlotData))
+                    if isempty(app.UI(fIdx).boardOffTimeLines{tIdx}), continue; end
+                    for pIdx = 1:numel(app.UI(fIdx).boardOffTimeLines{tIdx})
+                        try
+                            tl = app.UI(fIdx).boardOffTimeLines{tIdx}{pIdx};
+                            mk = app.UI(fIdx).boardOffTimeMarkers{tIdx}{pIdx};
+                            yData = app.UI(fIdx).boardOffPlotData{tIdx}{pIdx};
+                            if ~isempty(tl) && isvalid(tl), tl.Value = currTime; end
+                            if ~isempty(mk) && isvalid(mk)
+                                markerIdx = max(1, min(currIdx, numel(yData)));
+                                set(mk, 'XData', currTime, 'YData', yData(markerIdx));
+                            end
+                            if tIdx <= numel(app.UI(fIdx).plotAxes) && pIdx <= numel(app.UI(fIdx).plotAxes{tIdx}) && ...
+                                    pIdx <= numel(app.UI(fIdx).boardOffPlotAxes{tIdx})
+                                srcAx = app.UI(fIdx).plotAxes{tIdx}{pIdx};
+                                dstAx = app.UI(fIdx).boardOffPlotAxes{tIdx}{pIdx};
+                                if ~isempty(srcAx) && isvalid(srcAx) && ~isempty(dstAx) && isvalid(dstAx)
+                                    dstAx.XLim = srcAx.XLim;
+                                    dstAx.YLimMode = srcAx.YLimMode;
+                                    if strcmpi(char(srcAx.YLimMode), 'manual')
+                                        dstAx.YLim = srcAx.YLim;
+                                    end
+                                end
+                            end
+                        catch ME_silent
+                            app.logCaught(ME_silent, 'silent');
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'boardSyncMarkers');
+            end
+        end
+
+        function tf = isUiVisible(~, h)
+            tf = false;
+            try
+                if isempty(h) || ~isvalid(h), return; end
+                v = h.Visible;
+                if islogical(v)
+                    tf = v;
+                else
+                    tf = strcmpi(char(v), 'on');
+                end
+            catch
+                tf = false;
+            end
+        end
+
+        function setUiVisible(~, h, tf)
+            try
+                if isempty(h) || ~isvalid(h), return; end
+                if tf
+                    h.Visible = 'on';
+                else
+                    h.Visible = 'off';
+                end
+            catch
+            end
+        end
+
+        function offUi = createBoardOffSummaryPanel(~, parentGrid, fIdx)
+            pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
+                'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', [0.98 0.98 0.98], ...
+                'Visible', 'off');
+            pnl.Layout.Row = fIdx;
+            pnl.Layout.Column = 1;
+
+            root = uigridlayout(pnl, [1 2]);
+            root.ColumnWidth = {300, '1x'};
+            root.RowHeight = {'1x'};
+            root.Padding = [4 4 4 4];
+            root.ColumnSpacing = 6;
+
+            infoPanel = uipanel(root, 'Title', '현재 비행 정보', ...
+                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
+            infoPanel.Layout.Column = 1;
+            infoGrid = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
+            tblBgColor = [0.23 0.51 0.96];
+            if fIdx == 2, tblBgColor = [0.31 0.27 0.90]; end
+            tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], ...
+                'FontWeight', 'bold', 'RowStriping', 'off', 'ColumnName', {'항목', '값'}, ...
+                'RowName', [], 'ColumnWidth', {'26x', '24x'}, 'FontSize', 11, 'FontName', 'Consolas');
+
+            plotPanel = uipanel(root, 'Title', 'H: 데이터 뷰 패널', ...
+                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+            plotPanel.Layout.Column = 2;
+            plotGrid = uigridlayout(plotPanel, [1 1], 'Padding', [2 2 2 2]);
+            tg = uitabgroup(plotGrid);
+            blankTab = uitab(tg, 'Title', 'Tab 1');
+            blankGrid = uigridlayout(blankTab, [1 1], 'Padding', [8 8 8 8]);
+            uilabel(blankGrid, 'Text', '표시할 plot 없음', ...
+                'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
+
+            offUi = struct('panel', pnl, 'table', tbl, 'tabGroup', tg);
+        end
+
         function createLayout(app)
             % [V3.22 #7] 메인 레이아웃 골격 + 헤더는 buildHeaderBar로 위임
             % 비행경로별 빌드는 기존 in-place 코드 유지 (위험도 관리)
@@ -5704,7 +6133,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
                         'vidVideoFpsInput', {}, 'vidDataFpsInput', {}, ...
                         'vidFrameAxes', {}, 'vidFrameXLine', {}, 'vidFrameMarker', {}, ...
-                        'vidCacheBudget', {}, 'vidVdubSlider', {}, 'vidVdubLabel', {});
+                        'vidCacheBudget', {}, 'vidVdubSlider', {}, 'vidVdubLabel', {}, ...
+                        'boardOffPanel', {}, 'boardOffTable', {}, 'boardOffTabGroup', {}, ...
+                        'boardOffPlotTabs', {}, 'boardOffPlotLayouts', {}, 'boardOffPlotAxes', {}, ...
+                        'boardOffTimeLines', {}, 'boardOffTimeMarkers', {}, 'boardOffPlotData', {}, ...
+                        'boardOffSignature', {});
 
             for fIdx = 1:2
                 % [V3.22 #7] 비행경로 fIdx 빌드 - 섹션 가이드 (위→아래 빌드 순서):
@@ -5718,6 +6151,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 % --- (a) 메인 패널 + 컨트롤바 ---
                 UI_temp(fIdx).panel = uipanel(bodyGrid, 'Title', titleStrs{fIdx}, 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', panelColors{fIdx});
+                UI_temp(fIdx).panel.Layout.Row = fIdx;
+                UI_temp(fIdx).panel.Layout.Column = 1;
                 fGrid = uigridlayout(UI_temp(fIdx).panel, [2 1]);
                 fGrid.ColumnWidth = {'1x'};
                 fGrid.RowHeight = {45, '1x'};
@@ -5901,6 +6336,18 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 UI_temp(fIdx).vidFrameAxes = ctrl.vidFrameAxes;
                 UI_temp(fIdx).vidFrameXLine = ctrl.vidFrameXLine;
                 UI_temp(fIdx).vidFrameMarker = ctrl.vidFrameMarker;
+
+                offUi = app.createBoardOffSummaryPanel(bodyGrid, fIdx);
+                UI_temp(fIdx).boardOffPanel = offUi.panel;
+                UI_temp(fIdx).boardOffTable = offUi.table;
+                UI_temp(fIdx).boardOffTabGroup = offUi.tabGroup;
+                UI_temp(fIdx).boardOffPlotTabs = [];
+                UI_temp(fIdx).boardOffPlotLayouts = {};
+                UI_temp(fIdx).boardOffPlotAxes = cell(1, app.MAX_TABS);
+                UI_temp(fIdx).boardOffTimeLines = cell(1, app.MAX_TABS);
+                UI_temp(fIdx).boardOffTimeMarkers = cell(1, app.MAX_TABS);
+                UI_temp(fIdx).boardOffPlotData = cell(1, app.MAX_TABS);
+                UI_temp(fIdx).boardOffSignature = '';
             end
 
             linkaxes([UI_temp(1).mapAxes, UI_temp(2).mapAxes], 'xy');
@@ -6004,8 +6451,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', 'w', 'BorderType', 'none');
-            glHeader = uigridlayout(hHeaderPanel, [1 9]);
-            glHeader.ColumnWidth = {140, 140, 140, '1x', 80, 150, 150, 72, 80};
+            glHeader = uigridlayout(hHeaderPanel, [1 12]);
+            glHeader.ColumnWidth = {140, 140, 140, 110, 110, '1x', 80, 150, 150, 72, 80, 110};
             glHeader.RowHeight = {'fit'};
             glHeader.Padding = [5 5 5 5];
             glHeader.ColumnSpacing = 5;
@@ -6016,6 +6463,15 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                      'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.handleFlightFile(2));
             uibutton(glHeader, 'Text', '해안선 정보', 'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', ...
                      'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.handleCoastFile());
+            app.BoardToggleButtons = gobjects(1, 2);
+            app.BoardToggleButtons(1) = uibutton(glHeader, 'Text', '상단 보드 off', ...
+                'BackgroundColor', [0.18 0.18 0.22], 'FontColor', 'w', ...
+                'FontSize', 12, 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~, ~) app.toggleBoardVisibility(1));
+            app.BoardToggleButtons(2) = uibutton(glHeader, 'Text', '하단 보드 off', ...
+                'BackgroundColor', [0.18 0.18 0.22], 'FontColor', 'w', ...
+                'FontSize', 12, 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~, ~) app.toggleBoardVisibility(2));
             uilabel(glHeader, 'Text', '');
 
             % [V3.15 항목 5-3] DebugMode GUI 체크박스
@@ -6034,13 +6490,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             % [Audit fix #1] Entry point to the modeless settings/edit dialog.
             try
-                glHeader.ColumnWidth = [glHeader.ColumnWidth, {110}];
                 uibutton(glHeader, 'Text', '⚙ 설정/편집', ...
                     'BackgroundColor', [0.20 0.20 0.25], 'FontColor', 'w', ...
                     'FontSize', 12, 'FontWeight', 'bold', ...
                     'Tooltip', 'Project/Files/Sync/Options/Plot Manager/Export 편집기 열기', ...
                     'ButtonPushedFcn', @(~,~) app.openEditDialog());
             catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            app.updateBoardToggleButtons();
         end
 
         function [ax, lbl] = createGaugePanel(~, parentPnl, titleStr)

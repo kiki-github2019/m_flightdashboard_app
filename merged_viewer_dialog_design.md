@@ -17,6 +17,28 @@
 - 대용량 AVI는 export 시 메모리에 올리지 않고 `copyfile`로 파일 단위 복사한다.
 - 주 화면 자동 반영은 debounce timer로 처리한다. 사용자가 연속 편집 중일 때 매번 전체 refresh하지 않는다.
 
+## 1.1 Main Dashboard Board Toggle
+
+목표: 메인 화면 상단 헤더의 `해안선 정보` 버튼 옆에 `상단 보드 off`, `하단 보드 off` 버튼을 추가하고 Flight 1/2 보드를 선택적으로 숨겨 데이터 확인 공간을 확보한다.
+
+UI 규칙:
+- `상단 보드 off`: Flight Data 1 보드를 off mode로 전환한다.
+- `하단 보드 off`: Flight Data 2 보드를 off mode로 전환한다.
+- off 상태인 버튼은 각각 `상단 보드 on`, `하단 보드 on`으로 표시한다.
+- 상단/하단 보드를 동시에 off 할 수 없으며, 한 보드가 off이면 다른 보드 off 버튼은 비활성화한다.
+
+Off mode 배치:
+- 전체 GUI 창 크기는 유지한다.
+- off 된 원본 보드 패널은 숨기고, 같은 영역에 off-mode 전용 요약/데이터 재배치 패널을 표시한다.
+- off-mode 패널에는 해당 flight의 `현재 비행 정보`와 `데이터 뷰 패널`을 복제 표시한다.
+- `현재 비행 정보`와 `데이터 뷰 패널`은 좌우 열 배치로 두고, `데이터 뷰 패널`의 가로 길이를 더 크게 배정한다.
+- 원본 plot/tab 객체를 직접 이동하지 않고, 필요한 table data와 plot 표시 상태만 복제 또는 동기화한다.
+
+복귀 동작:
+- `상단 보드 on`, `하단 보드 on`을 누르면 원본 보드를 이전 숨김/표시 상태로 복원한다.
+- 복귀 시 off-mode 전용 패널은 숨긴다.
+- 기존 `자세`, `지도/고도`, `비디오` 패널의 접힘/펼침 상태와 가로 폭을 보존한다.
+
 ## 2. 예시 그림
 
 ### 2.1 Dialog 화면 와이어프레임
@@ -659,4 +681,3 @@ Summarize only changed files, verification performed, and any remaining risks.
   - 미래 v2: v1 fields를 v2 schema로 변환.
 - 알 수 없는 version: `uialert`로 오류 표시 후 로드 중단.
 - 모든 migration은 in-memory에서만 수행, 원본 파일은 사용자가 `저장`을 명시할 때만 갱신.
-
