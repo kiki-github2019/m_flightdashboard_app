@@ -3654,7 +3654,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if fIdx == 1, tblBgColor = [0.23 0.51 0.96]; else, tblBgColor = [0.31 0.27 0.90]; end
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
                                              'RowStriping', 'off', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
-                                             'ColumnWidth', {'auto', '1x'}, 'FontSize', 12, 'FontName', 'Consolas');
+                                             'ColumnWidth', {'1.45x', '1x'}, 'FontSize', 11, 'FontName', 'Consolas');
                 cm = uicontextmenu(app.UIFigure);
                 uimenu(cm, 'Text', 'H 영역에 Plot 추가 (현재 탭)', 'MenuSelectedFcn', @(~,~) app.plotSelectedVariable(fIdx));
                 UI_temp(fIdx).dataTable.ContextMenu = cm;
@@ -3715,7 +3715,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 uilabel(glVB, 'Text', '크기:', 'FontSize', 11, 'FontWeight', 'bold');
                 UI_temp(fIdx).vidResolutionDropdown = uidropdown(glVB, ...
                     'Items', {'320x240', '640x480', '720x512'}, ...
-                    'Value', '320x240', 'FontSize', 11, ...
+                    'Value', '720x512', 'FontSize', 11, ...
                     'ValueChangedFcn', @(~,~) app.onVideoResolutionChanged(fIdx));
                 UI_temp(fIdx).vidControlBtn = uibutton(glVB, 'Text', '제어창', ...
                     'FontSize', 11, 'ButtonPushedFcn', @(~,~) app.toggleVideoControlDialog(fIdx));
@@ -3728,13 +3728,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     'Scrollable', 'on', 'BackgroundColor', [0.94 0.94 0.94]);
                 UI_temp(fIdx).vidContainer.Layout.Row = 2;
                 UI_temp(fIdx).vidAxes = uiaxes(UI_temp(fIdx).vidContainer, ...
-                    'Units', 'pixels', 'Position', [8 8 320 240]);
+                    'Units', 'pixels', 'Position', [8 8 720 512]);
                 axis(UI_temp(fIdx).vidAxes, 'image');
                 axis(UI_temp(fIdx).vidAxes, 'off');
                 disableDefaultInteractivity(UI_temp(fIdx).vidAxes);
                 UI_temp(fIdx).vidAxes.Toolbar.Visible = 'off';
-                UI_temp(fIdx).vidImageHandle = image(UI_temp(fIdx).vidAxes, zeros(240,320,3,'uint8'), ...
-                    'XData', [1 320], 'YData', [1 240]);
+                UI_temp(fIdx).vidImageHandle = image(UI_temp(fIdx).vidAxes, zeros(512,720,3,'uint8'), ...
+                    'XData', [1 720], 'YData', [1 512]);
                 ctrl = app.createVideoControlDialog(fIdx);
                 UI_temp(fIdx).vidControlDialog = ctrl.vidControlDialog;
                 UI_temp(fIdx).vidSyncFrameInput = ctrl.vidSyncFrameInput;
