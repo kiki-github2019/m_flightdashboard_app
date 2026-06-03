@@ -2069,8 +2069,52 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % - V3.11: 마커/xline + 현재시간 라벨 + H 패널 책장 넘기기
         % - V3.12 1.1: Map 비행경로 + 빨간 삼각형 실시간 갱신 추가
         % - V3.12 2.2.3: 비디오 동기 설정 시 Frame 마커 갱신 + 영상 프레임 갱신
-        % - 테이블/게이지는 여전히 드래그 종료 시 1회만 갱신 (현 정책 유지)
+        % - 현재 비행 정보/자세 숫자는 드래그 중에도 즉시 갱신
         % ---------------------------------------------------------------------
+        function updateNumericPanelsOnly(app, fIdx, idx)
+            try
+                if isempty(app.Models(fIdx).rawData), return; end
+
+                if isfield(app.UI(fIdx), 'dataTable') && isvalid(app.UI(fIdx).dataTable)
+                    metaList = app.Models(fIdx).displayMeta;
+                    dataCell = cell(length(metaList), 2);
+                    for i = 1:length(metaList)
+                        m = metaList(i);
+                        val = app.Models(fIdx).rawData.(m.header)(idx);
+                        dataCell{i, 1} = sprintf('%s (%s)', m.header, m.unit);
+                        dataCell{i, 2} = sprintf(m.format, val);
+                    end
+                    app.UI(fIdx).dataTable.Data = dataCell;
+                end
+
+                pitch = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Pitch)(idx);
+                roll  = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Roll)(idx);
+                hdg   = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Heading)(idx);
+
+                if isfield(app.UI(fIdx), 'pitchLabel') && isvalid(app.UI(fIdx).pitchLabel)
+                    app.UI(fIdx).pitchLabel.Text = sprintf('Pitch %+.3f°', pitch);
+                end
+                if isfield(app.UI(fIdx), 'rollLabel') && isvalid(app.UI(fIdx).rollLabel)
+                    app.UI(fIdx).rollLabel.Text = sprintf('Roll %+.3f°', roll);
+                end
+                if isfield(app.UI(fIdx), 'hdgLabel') && isvalid(app.UI(fIdx).hdgLabel)
+                    app.UI(fIdx).hdgLabel.Text = sprintf('Heading %+.3f°', hdg);
+                end
+
+                if isfield(app.UI(fIdx), 'hgPitch') && isvalid(app.UI(fIdx).hgPitch)
+                    set(app.UI(fIdx).hgPitch, 'Matrix', makehgtform('zrotate', -pitch * pi / 180));
+                end
+                if isfield(app.UI(fIdx), 'hgRoll') && isvalid(app.UI(fIdx).hgRoll)
+                    set(app.UI(fIdx).hgRoll, 'Matrix', makehgtform('zrotate', -roll * pi / 180));
+                end
+                if isfield(app.UI(fIdx), 'hgHdg') && isvalid(app.UI(fIdx).hgHdg)
+                    set(app.UI(fIdx).hgHdg, 'Matrix', makehgtform('zrotate', -hdg * pi / 180));
+                end
+            catch ME
+                app.logCaught(ME, 'numericPanels');
+            end
+        end
+
         function updateMarkersOnly(app, fIdx, idx)
             % [V3.17 (4)(11)] persistent inCascade → InCascade 인스턴스 속성으로 이동
             % [V3.17 (5)] drawnow를 외부(goToFrame)에서 처리하므로 자체 호출은 가드
@@ -2103,6 +2147,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         app.UI(fIdx).spinner.Value = currTime;
                     end
                 end
+                app.updateNumericPanelsOnly(fIdx, idx);
             catch ME, app.logCaught(ME, 'silent'); end
 
             % [V3.12 1.1] Map 비행경로 + 빨간 삼각형 실시간 갱신 (가벼움)
