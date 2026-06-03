@@ -3979,7 +3979,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             uilabel(gl, 'Text', 'Project 파일:', 'FontWeight', 'bold');
             app.EDProjectPathLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
-            app.EDProjectPathLbl.Layout.Column = [2 2];
+            app.EDProjectPathLbl.Layout.Column = 2;
             uibutton(gl, 'Text', '열기...', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogOpenProject());
             uibutton(gl, 'Text', '다른 이름으로...', ...
@@ -3987,7 +3987,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             uilabel(gl, 'Text', '저장:', 'FontWeight', 'bold');
             app.EDProjectStatusLbl = uilabel(gl, 'Text', '미저장', 'FontColor', [0.4 0.4 0.4]);
-            app.EDProjectStatusLbl.Layout.Column = [2 2];
+            app.EDProjectStatusLbl.Layout.Column = 2;
             uibutton(gl, 'Text', '저장', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSaveProject());
             uibutton(gl, 'Text', '자동 로드', ...
@@ -4015,7 +4015,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     kind = pairs{k}{1};
                     uilabel(gl, 'Text', [pairs{k}{2} ':'], 'FontWeight', 'bold');
                     lbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
-                    lbl.Layout.Column = [2 2];
+                    lbl.Layout.Column = 2;
                     app.EDFilesPathLbl.(sprintf('f%d_%s', fIdx, kind)) = lbl;
                     uibutton(gl, 'Text', '변경...', ...
                         'ButtonPushedFcn', @(~,~) app.requestFileChangeAndRefresh(fIdx, kind));
