@@ -639,6 +639,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
             end
             app.UI(fIdx).dataGrid.ColumnWidth = widths;
+            app.reflowBoardColumns(fIdx);
             app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
@@ -5338,29 +5339,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function applyResponsiveLayout(app)
             try
                 if isempty(app.UI), return; end
-                panelWidths = app.getResponsivePanelWidths();
                 for fIdx = 1:min(2, numel(app.UI))
                     if ~isfield(app.UI(fIdx), 'dataGrid') || ...
                        isempty(app.UI(fIdx).dataGrid) || ~isvalid(app.UI(fIdx).dataGrid)
                         continue;
                     end
 
-                    widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, app.getVideoPanelTargetWidth()};
-                    if isfield(app.UI(fIdx), 'PanelVisible')
-                        if ~app.UI(fIdx).PanelVisible.attitude, widths{1} = 0; end
-                        if ~app.UI(fIdx).PanelVisible.map, widths{2} = 0; end
-                        if ~app.UI(fIdx).PanelVisible.video, widths{6} = 0; end
-                    end
-                    activeOff = find(app.BoardOffState, 1);
-                    if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
-                        widths{3} = 0;
-                        widths{4} = 0;
-                        widths{5} = 0;
-                    end
-
-                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
-                    app.UI(fIdx).dataGrid.Scrollable = 'on';
-                    app.setVideoDisplaySize(fIdx);
+                    app.reflowBoardColumns(fIdx);
                     app.refreshBoardOffSummaryPanel(fIdx);
                 end
                 app.updateWindowControlLabels();
@@ -5722,7 +5707,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
                     end
-                    app.hideBoardInfoPlotColumns(sourceIdx);
+                    app.reflowBoardColumns(sourceIdx);
                     app.refreshBoardOffSummaryPanel(fIdx, true);
                 end
 
@@ -5759,6 +5744,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 snap = app.BoardPanelVisibleSnapshot{fIdx};
                 if isempty(snap) || ~isstruct(snap)
                     app.setUiVisible(app.UI(fIdx).panel, true);
+                    app.reflowBoardColumns(fIdx);
                     return;
                 end
                 if isfield(snap, 'PanelVisible')
@@ -5773,6 +5759,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 else
                     app.setUiVisible(app.UI(fIdx).panel, true);
                 end
+                app.reflowBoardColumns(fIdx);
             catch ME
                 app.setUiVisible(app.UI(fIdx).panel, true);
                 app.logCaught(ME, 'boardRestore');
@@ -5791,10 +5778,80 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     widths{3} = 0;  % current flight info
                     widths{4} = 0;  % H data-view panel
                     widths{5} = 0;  % H/I splitter
+                    if isfield(app.UI(fIdx), 'PanelVisible')
+                        st = app.UI(fIdx).PanelVisible;
+                        if isfield(st, 'video') && st.video && numel(widths) >= 6
+                            widths{6} = '1x';
+                        elseif isfield(st, 'map') && st.map
+                            widths{2} = '1x';
+                        elseif isfield(st, 'attitude') && st.attitude
+                            widths{1} = '1x';
+                        end
+                    end
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 end
             catch ME
                 app.logCaught(ME, 'boardHideMovedColumns');
+            end
+        end
+
+        function syncBoardPanelHandles(app, fIdx)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ~isfield(app.UI(fIdx), 'PanelVisible')
+                    return;
+                end
+                st = app.UI(fIdx).PanelVisible;
+                if isfield(st, 'attitude') && isfield(app.UI(fIdx), 'panelAttitude')
+                    app.setUiVisible(app.UI(fIdx).panelAttitude, st.attitude);
+                end
+                if isfield(st, 'map') && isfield(app.UI(fIdx), 'panelMapAlt')
+                    app.setUiVisible(app.UI(fIdx).panelMapAlt, st.map);
+                end
+                if isfield(st, 'video') && isfield(app.UI(fIdx), 'panelVideo')
+                    app.setUiVisible(app.UI(fIdx).panelVideo, st.video);
+                end
+            catch ME
+                app.logCaught(ME, 'boardSyncPanelHandles');
+            end
+        end
+
+        function reflowBoardColumns(app, fIdx)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ...
+                        ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ...
+                        ~isvalid(app.UI(fIdx).dataGrid)
+                    return;
+                end
+                app.syncBoardPanelHandles(fIdx);
+                panelWidths = app.getResponsivePanelWidths();
+                widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, app.getVideoPanelTargetWidth()};
+                if isfield(app.UI(fIdx), 'PanelVisible')
+                    st = app.UI(fIdx).PanelVisible;
+                    if isfield(st, 'attitude') && ~st.attitude, widths{1} = 0; end
+                    if isfield(st, 'map') && ~st.map, widths{2} = 0; end
+                    if isfield(st, 'video') && ~st.video, widths{6} = 0; end
+                end
+                activeOff = find(app.BoardOffState, 1);
+                if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
+                    widths{3} = 0;
+                    widths{4} = 0;
+                    widths{5} = 0;
+                    if isfield(app.UI(fIdx), 'PanelVisible')
+                        st = app.UI(fIdx).PanelVisible;
+                        if isfield(st, 'video') && st.video
+                            widths{6} = '1x';
+                        elseif isfield(st, 'map') && st.map
+                            widths{2} = '1x';
+                        elseif isfield(st, 'attitude') && st.attitude
+                            widths{1} = '1x';
+                        end
+                    end
+                end
+                app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                app.UI(fIdx).dataGrid.Scrollable = 'on';
+                app.setVideoDisplaySize(fIdx);
+            catch ME
+                app.logCaught(ME, 'boardReflowColumns');
             end
         end
 
@@ -6015,10 +6072,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
                         hold(ax, 'on');
                         markerIdx = max(1, min(currIdx, numel(yData)));
-                        tl = xline(ax, currX, 'r', 'LineWidth', 3.0, 'Alpha', 0.5, 'HitTest', 'off');
+                        tl = xline(ax, currX, 'r', 'LineWidth', 3.0, 'Alpha', 0.5, 'HitTest', 'on');
                         mk = plot(ax, currX, yData(markerIdx), 'p', ...
                             'MarkerFaceColor', [0.98 0.75 0.14], 'MarkerEdgeColor', [0.71 0.33 0.04], ...
-                            'MarkerSize', 14, 'HitTest', 'off');
+                            'MarkerSize', 14, 'HitTest', 'on');
+                        tl.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(sourceIdx, tIdx, src, event);
+                        mk.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(sourceIdx, tIdx, src, event);
                         try
                             disableDefaultInteractivity(ax);
                             ax.Toolbar.Visible = 'off';
@@ -6090,6 +6149,83 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
+        function syncBoardOffSelectedTab(app, offIdx)
+            try
+                if offIdx < 1 || offIdx > numel(app.UI) || ~app.BoardOffState(offIdx)
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                if sourceIdx < 1 || sourceIdx > numel(app.UI), return; end
+                tg = app.UI(offIdx).boardOffTabGroup;
+                if isempty(tg) || ~isvalid(tg) || isempty(app.UI(offIdx).boardOffPlotTabs)
+                    return;
+                end
+                tabIdx = find(app.UI(offIdx).boardOffPlotTabs == tg.SelectedTab, 1);
+                if isempty(tabIdx), return; end
+                if tabIdx <= numel(app.UI(sourceIdx).plotTabs) && ~isempty(app.UI(sourceIdx).plotTabs(tabIdx)) && ...
+                        isvalid(app.UI(sourceIdx).plotTabs(tabIdx))
+                    app.UI(sourceIdx).tabGroup.SelectedTab = app.UI(sourceIdx).plotTabs(tabIdx);
+                    app.updateTabTimeLines(sourceIdx);
+                end
+            catch ME
+                app.logCaught(ME, 'boardSyncSelectedTab');
+            end
+        end
+
+        function boardOffAddPlotTab(app, offIdx)
+            try
+                if offIdx < 1 || offIdx > numel(app.BoardOffState) || ~app.BoardOffState(offIdx)
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                app.syncBoardOffSelectedTab(offIdx);
+                app.addPlotTab(sourceIdx);
+                app.refreshBoardOffSummaryPanel(offIdx, true);
+            catch ME
+                app.logCaught(ME, 'boardOffAddTab');
+            end
+        end
+
+        function boardOffClearCurrentTab(app, offIdx)
+            try
+                if offIdx < 1 || offIdx > numel(app.BoardOffState) || ~app.BoardOffState(offIdx)
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                app.syncBoardOffSelectedTab(offIdx);
+                app.clearCurrentTab(sourceIdx);
+                app.refreshBoardOffSummaryPanel(offIdx, true);
+            catch ME
+                app.logCaught(ME, 'boardOffClearTab');
+            end
+        end
+
+        function boardOffTableSelection(app, offIdx, event)
+            try
+                if offIdx < 1 || offIdx > numel(app.BoardOffState) || isempty(event.Indices)
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                app.Models(sourceIdx).selectedRow = event.Indices(1, 1);
+            catch ME
+                app.logCaught(ME, 'boardOffTableSelection');
+            end
+        end
+
+        function boardOffPlotSelectedVariable(app, offIdx)
+            try
+                if offIdx < 1 || offIdx > numel(app.BoardOffState) || ~app.BoardOffState(offIdx)
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                app.syncBoardOffSelectedTab(offIdx);
+                app.plotSelectedVariable(sourceIdx);
+                app.refreshBoardOffSummaryPanel(offIdx, true);
+            catch ME
+                app.logCaught(ME, 'boardOffPlotSelected');
+            end
+        end
+
         function tf = isUiVisible(~, h)
             tf = false;
             try
@@ -6117,7 +6253,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
-        function offUi = createBoardOffSummaryPanel(~, parentGrid, fIdx)
+        function offUi = createBoardOffSummaryPanel(app, parentGrid, fIdx)
             pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
                 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', [0.98 0.98 0.98], ...
                 'Visible', 'off');
@@ -6139,12 +6275,27 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], ...
                 'FontWeight', 'bold', 'RowStriping', 'off', 'ColumnName', {'항목', '값'}, ...
                 'RowName', [], 'ColumnWidth', {'26x', '24x'}, 'FontSize', 11, 'FontName', 'Consolas');
+            cm = uicontextmenu(app.UIFigure);
+            uimenu(cm, 'Text', 'H 영역에 Plot 추가 (현재 행)', ...
+                'MenuSelectedFcn', @(~,~) app.boardOffPlotSelectedVariable(fIdx));
+            tbl.ContextMenu = cm;
+            tbl.CellSelectionCallback = @(~, event) app.boardOffTableSelection(fIdx, event);
 
             plotPanel = uipanel(root, 'Title', 'H: 데이터 뷰 패널', ...
                 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w');
             plotPanel.Layout.Column = 2;
-            plotGrid = uigridlayout(plotPanel, [1 1], 'Padding', [2 2 2 2]);
+            plotGrid = uigridlayout(plotPanel, [2 1], 'Padding', [2 2 2 2]);
+            plotGrid.RowHeight = {30, '1x'};
+            btnPnl = uipanel(plotGrid, 'BorderType', 'none', 'BackgroundColor', 'w');
+            btnPnl.Layout.Row = 1;
+            uibutton(btnPnl, 'Text', '+ 빈 탭 추가', 'Position', [5 5 90 22], ...
+                'ButtonPushedFcn', @(~,~) app.boardOffAddPlotTab(fIdx));
+            uibutton(btnPnl, 'Text', '현재 탭 지우기', 'Position', [100 5 100 22], ...
+                'ButtonPushedFcn', @(~,~) app.boardOffClearCurrentTab(fIdx));
+
             tg = uitabgroup(plotGrid);
+            tg.Layout.Row = 2;
+            tg.SelectionChangedFcn = @(~,~) app.syncBoardOffSelectedTab(fIdx);
             blankTab = uitab(tg, 'Title', 'Tab 1');
             blankGrid = uigridlayout(blankTab, [1 1], 'Padding', [8 8 8 8]);
             uilabel(blankGrid, 'Text', '표시할 plot 없음', ...
