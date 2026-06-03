@@ -2816,6 +2816,304 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.markProjectDirtyAndScheduleRefresh('xlim-all-tabs');
         end
 
+        % =================================================================
+        % [Phase 6] Export everything to folder (D1 AVI lock + D6 verify)
+        % =================================================================
+        function ok = exportEverythingToFolder(app, parentFolder, opts)
+            % Copy every file recorded in current project state to a timestamped folder
+            % and rewrite the copied project's path fields to point inside it.
+            ok = false;
+            if nargin < 3 || isempty(opts), opts = struct(); end
+            if ~isfield(opts, 'verifyHash'), opts.verifyHash = false; end
+            if nargin < 2 || isempty(parentFolder)
+                parentFolder = uigetdir(pwd, 'Export 대상 parent 폴더 선택');
+                if isequal(parentFolder, 0), return; end
+            end
+            if ~isfolder(parentFolder)
+                try, uialert(app.UIFigure, 'parent 폴더가 존재하지 않습니다.', 'Export'); catch, end
+                return;
+            end
+
+            folderName = char(datetime('now', 'Format', 'yyyy-MM-dd_HH-mm-ss'));
+            target = fullfile(parentFolder, ['FlightDashboard_' folderName]);
+            if isfolder(target)
+                target = [target '_' char(java.util.UUID.randomUUID.toString.substring(0,4))];
+            end
+            mkdir(target);
+
+            st = app.collectCurrentProjectState();
+            fileList = app.buildExportFileList(st);
+            if isempty(fileList)
+                try, uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export'); catch, end
+                return;
+            end
+
+            d = uiprogressdlg(app.UIFigure, 'Title', 'Export', ...
+                'Message', '대상 파일 수집 중', 'Cancelable', 'on');
+            cleanupDlg = onCleanup(@() app.safeClose(d));
+
+            % [D1] release AVI VideoReader handles before copying when source path is currently open.
+            releasedFlights = app.releaseOpenAvisForExport(fileList);
+            cleanupReopen = onCleanup(@() app.reopenReleasedAvis(releasedFlights));
+
+            copyMap = containers.Map('KeyType', 'char', 'ValueType', 'char');
+            failures = {};
+            n = numel(fileList);
+            for i = 1:n
+                if d.CancelRequested
+                    failures{end+1} = 'cancelled by user'; %#ok<AGROW>
+                    break;
+                end
+                entry = fileList(i);
+                d.Value   = (i - 1) / max(1, n);
+                d.Message = sprintf('복사 중 (%d/%d): %s', i, n, entry.role);
+                % [D1] self-overwrite guard
+                srcAbs = app.normalizeAbsPath(entry.src);
+                if startsWith(srcAbs, app.normalizeAbsPath(target))
+                    failures{end+1} = sprintf('자기 자신 덮어쓰기 차단: %s', srcAbs); %#ok<AGROW>
+                    continue;
+                end
+                [~, base, ext] = fileparts(entry.src);
+                dstName = [entry.prefix base ext];
+                dstPath = fullfile(target, dstName);
+                % basename collision resolution
+                k = 1;
+                while isfile(dstPath)
+                    dstName = sprintf('%s%s_%d%s', entry.prefix, base, k, ext);
+                    dstPath = fullfile(target, dstName);
+                    k = k + 1;
+                end
+                try
+                    copyfile(entry.src, dstPath, 'f');
+                    copyMap(srcAbs) = dstPath;
+                catch ME
+                    failures{end+1} = sprintf('%s: %s', entry.src, ME.message); %#ok<AGROW>
+                    app.logCaught(ME, 'export-copy');
+                end
+            end
+
+            d.Value   = 0.92;
+            d.Message = 'project 파일 경로 재작성 중';
+            stRewritten = app.rewriteProjectPathsForExport(st, copyMap);
+            projDstName = 'project.fdproj';
+            if ~isempty(app.ProjectFilePath)
+                [~, b, ~] = fileparts(app.ProjectFilePath);
+                if ~isempty(b), projDstName = [b '.fdproj']; end
+            end
+            projDst = fullfile(target, projDstName);
+            try
+                txt = jsonencode(stRewritten, 'PrettyPrint', true);
+                fid = fopen(projDst, 'w');
+                if fid < 0, error('FlightDataDashboard:ExportWrite', 'project 파일 쓰기 실패'); end
+                cleanupFid = onCleanup(@() fclose(fid));
+                fwrite(fid, txt, 'char');
+                clear cleanupFid;
+            catch ME
+                failures{end+1} = sprintf('project write: %s', ME.message); %#ok<AGROW>
+            end
+
+            d.Value   = 0.96;
+            d.Message = '검증 중';
+            verifyReport = app.verifyExportedProject(projDst, copyMap, opts.verifyHash);
+
+            ok = isempty(failures) && verifyReport.allPresent && verifyReport.allSizeMatch ...
+                 && (~opts.verifyHash || verifyReport.allHashMatch);
+
+            d.Value   = 1.0;
+            d.Message = '완료';
+
+            if ~ok
+                msg = sprintf('Export에서 문제가 발생했습니다.\n실패: %d개\n검증: 존재=%d/%d, 크기=%d/%d', ...
+                    numel(failures), verifyReport.presentCount, verifyReport.totalCount, ...
+                    verifyReport.sizeMatchCount, verifyReport.totalCount);
+                sel = '';
+                try
+                    sel = uiconfirm(app.UIFigure, msg, 'Export 실패', ...
+                        'Options', {'폴더 유지', '폴더 삭제', '재시도'}, ...
+                        'DefaultOption', 1, 'CancelOption', 1);
+                catch
+                end
+                switch sel
+                    case '폴더 삭제'
+                        try, rmdir(target, 's'); catch, end
+                    case '재시도'
+                        try, rmdir(target, 's'); catch, end
+                        app.exportEverythingToFolder(parentFolder, opts);
+                end
+            end
+        end
+
+        function list = buildExportFileList(app, st)
+            % Returns struct array with fields: role, src, prefix.
+            list = struct('role', {}, 'src', {}, 'prefix', {});
+            if isempty(st), return; end
+            seen = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+            addEntry = @(role, src, prefix) struct('role', role, 'src', src, 'prefix', prefix);
+            if isfield(st, 'Flights')
+                for i = 1:numel(st.Flights)
+                    flightPrefix = sprintf('flight%d_', i);
+                    fields = {{'DataFile','data'}, {'AviFile','avi'}, {'OptionFile','option'}};
+                    for k = 1:numel(fields)
+                        f = fields{k}{1}; tag = fields{k}{2};
+                        if isfield(st.Flights(i), f) && ~isempty(st.Flights(i).(f))
+                            p = app.normalizeAbsPath(st.Flights(i).(f));
+                            if isfile(p) && ~isKey(seen, p)
+                                seen(p) = true;
+                                list(end+1) = addEntry(sprintf('flight%d.%s', i, tag), p, flightPrefix); %#ok<AGROW>
+                            end
+                        end
+                    end
+                end
+            end
+            if isfield(st, 'AuxFiles') && iscell(st.AuxFiles)
+                for i = 1:numel(st.AuxFiles)
+                    p = app.normalizeAbsPath(st.AuxFiles{i});
+                    if isfile(p) && ~isKey(seen, p)
+                        seen(p) = true;
+                        list(end+1) = addEntry(sprintf('aux%d', i), p, 'aux_'); %#ok<AGROW>
+                    end
+                end
+            end
+        end
+
+        function flights = releaseOpenAvisForExport(app, fileList)
+            % [D1] If a file in the export list matches a flight's currently open AVI, release VR.
+            flights = [];
+            try
+                for fIdx = 1:2
+                    aviPath = app.normalizeAbsPath(app.Models(fIdx).aviFilePath);
+                    if isempty(aviPath), continue; end
+                    for i = 1:numel(fileList)
+                        if strcmpi(app.normalizeAbsPath(fileList(i).src), aviPath)
+                            if ~isempty(app.VideoState(fIdx).videoReader) ...
+                                    && isvalid(app.VideoState(fIdx).videoReader)
+                                try, delete(app.VideoState(fIdx).videoReader); catch, end
+                            end
+                            app.VideoState(fIdx).videoReader = [];
+                            flights(end+1) = fIdx; %#ok<AGROW>
+                            break;
+                        end
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function reopenReleasedAvis(app, flights)
+            for k = 1:numel(flights)
+                fIdx = flights(k);
+                try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+            end
+        end
+
+        function st = rewriteProjectPathsForExport(app, st, copyMap)
+            if isempty(st), return; end
+            remap = @(p) app.remapPath(p, copyMap);
+            if isfield(st, 'Flights')
+                for i = 1:numel(st.Flights)
+                    st.Flights(i).DataFile   = remap(st.Flights(i).DataFile);
+                    st.Flights(i).AviFile    = remap(st.Flights(i).AviFile);
+                    st.Flights(i).OptionFile = remap(st.Flights(i).OptionFile);
+                end
+            end
+            if isfield(st, 'AuxFiles') && iscell(st.AuxFiles)
+                for i = 1:numel(st.AuxFiles)
+                    st.AuxFiles{i} = remap(st.AuxFiles{i});
+                end
+            end
+        end
+
+        function out = remapPath(app, p, copyMap)
+            out = char(p);
+            if isempty(out), return; end
+            key = app.normalizeAbsPath(p);
+            if isKey(copyMap, key)
+                out = copyMap(key);
+            end
+        end
+
+        function report = verifyExportedProject(app, projDst, copyMap, verifyHash)
+            % [D6] verify project file readable, paths exist, sizes match, optional SHA256.
+            report = struct('allPresent', false, 'allSizeMatch', false, 'allHashMatch', true, ...
+                            'presentCount', 0, 'sizeMatchCount', 0, 'hashMatchCount', 0, ...
+                            'totalCount', 0, 'errors', {{}});
+            try
+                if ~isfile(projDst)
+                    report.errors{end+1} = sprintf('project 파일 없음: %s', projDst); return;
+                end
+                txt = fileread(projDst);
+                st  = jsondecode(txt);
+                pairs = app.collectPathPairs(st, copyMap);
+                report.totalCount = numel(pairs);
+                if report.totalCount == 0
+                    report.allPresent   = true;
+                    report.allSizeMatch = true;
+                    return;
+                end
+                presentOK = true; sizeOK = true; hashOK = true;
+                for i = 1:numel(pairs)
+                    src = pairs(i).src; dst = pairs(i).dst;
+                    if isfile(dst)
+                        report.presentCount = report.presentCount + 1;
+                        sd = dir(src); dd = dir(dst);
+                        if ~isempty(sd) && ~isempty(dd) && sd(1).bytes == dd(1).bytes
+                            report.sizeMatchCount = report.sizeMatchCount + 1;
+                        else
+                            sizeOK = false;
+                            report.errors{end+1} = sprintf('size mismatch: %s', dst); %#ok<AGROW>
+                        end
+                        if verifyHash
+                            try
+                                hSrc = app.sha256File(src);
+                                hDst = app.sha256File(dst);
+                                if strcmp(hSrc, hDst)
+                                    report.hashMatchCount = report.hashMatchCount + 1;
+                                else
+                                    hashOK = false;
+                                    report.errors{end+1} = sprintf('hash mismatch: %s', dst); %#ok<AGROW>
+                                end
+                            catch ME, app.logCaught(ME, 'export-hash'); hashOK = false; end
+                        end
+                    else
+                        presentOK = false;
+                        report.errors{end+1} = sprintf('missing: %s', dst); %#ok<AGROW>
+                    end
+                end
+                report.allPresent   = presentOK;
+                report.allSizeMatch = sizeOK;
+                report.allHashMatch = hashOK;
+            catch ME
+                app.logCaught(ME, 'export-verify');
+                report.errors{end+1} = ME.message;
+            end
+        end
+
+        function pairs = collectPathPairs(~, ~, copyMap)
+            pairs = struct('src', {}, 'dst', {});
+            keys = copyMap.keys;
+            for i = 1:numel(keys)
+                pairs(end+1) = struct('src', keys{i}, 'dst', copyMap(keys{i})); %#ok<AGROW>
+            end
+        end
+
+        function h = sha256File(~, p)
+            % Streaming SHA256 via java.security.MessageDigest (no Toolbox dependency).
+            md  = java.security.MessageDigest.getInstance('SHA-256');
+            fid = fopen(p, 'r');
+            if fid < 0, error('FlightDataDashboard:HashOpen', 'cannot open %s', p); end
+            cleanup = onCleanup(@() fclose(fid));
+            while true
+                buf = fread(fid, 1024*1024, '*uint8');
+                if isempty(buf), break; end
+                md.update(buf);
+            end
+            digest = typecast(md.digest(), 'uint8');
+            h = lower(reshape(dec2hex(digest, 2).', 1, []));
+        end
+
+        function safeClose(~, d)
+            try, if ~isempty(d) && isvalid(d), close(d); end, catch, end
+        end
+
         function info = validateMappedColsAgainstData(app, fIdx)
             % [D5] return struct with missing required keys vs current rawData/Unscaled headers.
             info = struct('brokenMappings', {{}}, 'reasons', {{}});
