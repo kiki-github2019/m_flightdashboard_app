@@ -136,6 +136,35 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         AutosaveTimer        = []              % .fdproj.autosave snapshot timer (D2)
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
+
+        % [Audit fix #1] Edit dialog UI handles (all default to [])
+        EditDialogStatusLbl  = []
+        EditDialogDirtyLbl   = []
+        EditDialogTimeLbl    = []
+        EDProjectPathLbl     = []
+        EDProjectStatusLbl   = []
+        EDProjectAutosaveCB  = []
+        EDFilesPathLbl       = struct()
+        EDSyncF1Time         = []
+        EDSyncF2Time         = []
+        EDVSync1Frame        = []
+        EDVSync1Time         = []
+        EDVSync1VFPS         = []
+        EDVSync1DFPS         = []
+        EDVSync2Frame        = []
+        EDVSync2Time         = []
+        EDVSync2VFPS         = []
+        EDVSync2DFPS         = []
+        EDOptFlightDD        = []
+        EDOptReqTable        = []
+        EDOptDspTable        = []
+        EDPlotFlightDD       = []
+        EDPlotTree           = []
+        EDPlotLinkCB         = []
+        EDExpParentEdit      = []
+        EDExpPreviewLbl      = []
+        EDExpHashCB          = []
+        EDExpLogArea         = []
     end
 
     methods (Access = public)
@@ -448,6 +477,63 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function UIFigureCloseRequest(app, ~, ~)
+            % [Audit fix #6] If we have pending dialog edits or a dirty project,
+            % offer Save+Apply / Discard / Cancel before tearing down resources.
+            try
+                pendingTimer = ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
+                               && strcmpi(app.EditApplyTimer.Running, 'on');
+                if app.ProjectDirty || pendingTimer
+                    sel = '';
+                    try
+                        sel = uiconfirm(app.UIFigure, ...
+                            ['저장되지 않은 편집 사항이 있습니다.', sprintf('\n'), ...
+                             'project / option 파일을 저장하고 닫을까요?'], ...
+                            '저장되지 않은 변경사항', ...
+                            'Options', {'적용 후 저장하고 닫기', '버리고 닫기', '취소'}, ...
+                            'DefaultOption', 1, 'CancelOption', 3);
+                    catch
+                        sel = '적용 후 저장하고 닫기';
+                    end
+                    switch sel
+                        case '취소'
+                            return;
+                        case '적용 후 저장하고 닫기'
+                            if pendingTimer
+                                try, stop(app.EditApplyTimer); catch, end
+                                try, app.applyPendingDialogChanges(); catch, end
+                            end
+                            % Save project file (creates one if none chosen yet)
+                            try
+                                if isempty(app.ProjectFilePath)
+                                    [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, ...
+                                        '저장할 project 파일');
+                                    if ~isequal(fn, 0)
+                                        app.ProjectFilePath = fullfile(pn, fn);
+                                    end
+                                end
+                                if ~isempty(app.ProjectFilePath)
+                                    if app.saveProjectFile(app.ProjectFilePath)
+                                        app.clearProjectAutosave();
+                                    end
+                                end
+                            catch ME, app.logCaught(ME, 'close-save-project'); end
+                            % Persist any option drafts to disk.
+                            for fIdx = 1:2
+                                try
+                                    draft = app.OptionDrafts{fIdx};
+                                    if ~isempty(draft) && isfield(draft, 'sourcePath') ...
+                                            && ~isempty(draft.sourcePath)
+                                        app.writeOptionFileAtomic(draft.sourcePath, draft);
+                                    end
+                                catch ME, app.logCaught(ME, 'close-save-option'); end
+                            end
+                        case '버리고 닫기'
+                            % Stop the autosave timer cleanly without writing.
+                            if pendingTimer, try, stop(app.EditApplyTimer); catch, end, end
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     app.UIFigure.WindowButtonMotionFcn = '';
@@ -553,32 +639,53 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         %       4) VR 생성 → 5) TotalFrames + UI 동기화 → 6) 첫 프레임 로드
         % 각 단계는 실패 시 명확한 종료 조건을 가지며 책임이 한정됨
         function loadAviFile(app, fIdx)
+            % [User entry] file picker wrapper. For programmatic loads
+            % (project auto-load, file replacement, export reopen) call
+            % loadAviFileFromPath(fIdx, fullPath, opts) directly.
             [fname, pname] = uigetfile({'*.avi;*.mp4;*.mkv', 'Video Files (*.avi, *.mp4)'}, sprintf('비디오 선택 %d', fIdx));
             if isequal(fname, 0), return; end
             fullPath = fullfile(pname, fname);
+            app.loadAviFileFromPath(fIdx, fullPath, struct('promptOnSync', true));
+        end
 
-            % 1) 사용자 확인 (기존 동기 설정 해제)
-            if ~app.confirmVideoReplace(fIdx), return; end
+        function ok = loadAviFileFromPath(app, fIdx, fullPath, opts)
+            % [Audit fix #3 + #4] Path-based AVI load with no file picker.
+            % opts.promptOnSync (default false): ask before clearing existing video sync.
+            ok = false;
+            if nargin < 4 || isempty(opts), opts = struct(); end
+            if ~isfield(opts, 'promptOnSync'), opts.promptOnSync = false; end
+            if isempty(fullPath) || ~isfile(fullPath)
+                try, uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video'); catch, end
+                return;
+            end
 
-            % 2) 프레임 캐시 무효화
+            if opts.promptOnSync
+                if ~app.confirmVideoReplace(fIdx), return; end
+            elseif app.VideoSyncState(fIdx).IsSynced
+                % Programmatic load: silently reset video sync without prompting.
+                app.resetVideoSync(fIdx);
+            end
+
             app.invalidateFrameCache(fIdx);
-
-            % 3) 기존 VR/Future 정리 + startTime 산출
             startTime = app.computeStartTimeFromFlightData(fIdx);
             app.cleanupVideoResources(fIdx);
 
-            % 4) VideoReader 생성
-            vr = app.openVideoReader(fIdx, fullPath, fname);
+            [~, fname, fext] = fileparts(fullPath);
+            vr = app.openVideoReader(fIdx, fullPath, [fname fext]);
             if isempty(vr), return; end
-            app.VideoState(fIdx).videoStartTime = startTime;
+
+            % Keep both path mirrors in lockstep (#3 invariant).
+            absPath = app.normalizeAbsPath(fullPath);
+            app.VideoFilePath{fIdx}        = absPath;
+            app.Models(fIdx).aviFilePath   = absPath;
+
+            app.VideoState(fIdx).videoStartTime          = startTime;
             app.VideoState(fIdx).videoReader.CurrentTime = 0;
-            app.LastVideoUpdate{fIdx} = uint64(0);
+            app.LastVideoUpdate{fIdx}                    = uint64(0);
 
-            % 5) TotalFrames 산정 + UI 위젯 동기화
             app.applyVideoLoadedUI(fIdx, vr);
-
-            % 6) 첫 프레임 로드 + 표시 + 캐시 저장
             app.loadFirstFrame(fIdx);
+            ok = true;
         end
 
         % --------- loadAviFile 헬퍼들 (V3.22 #3) ---------
@@ -639,7 +746,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             try
                 vr = VideoReader(fullPath);
                 app.VideoState(fIdx).videoReader = vr;
-                app.VideoFilePath{fIdx} = fullPath;
+                % Always store canonical absolute path so picker/path callers agree.
+                try
+                    app.VideoFilePath{fIdx} = app.normalizeAbsPath(fullPath);
+                catch
+                    app.VideoFilePath{fIdx} = fullPath;
+                end
                 if app.DebugMode
                     fprintf('[Video] loaded: %s (fIdx=%d)\n', fname, fIdx);
                 end
@@ -2842,7 +2954,41 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             mkdir(target);
 
             st = app.collectCurrentProjectState();
-            fileList = app.buildExportFileList(st);
+            [fileList, missingList] = app.buildExportFileList(st);
+
+            % [Audit fix #5] Force the user to decide on missing files instead of silent-omit.
+            if ~isempty(missingList)
+                names = arrayfun(@(e) sprintf('  - %s: %s', e.role, e.src), missingList, 'UniformOutput', false);
+                msg = sprintf(['project에 기록된 다음 파일을 찾을 수 없습니다:\n%s\n\n', ...
+                               '어떻게 처리할까요?'], strjoin(names, sprintf('\n')));
+                sel = '';
+                try
+                    sel = uiconfirm(app.UIFigure, msg, '누락 파일', ...
+                        'Options', {'누락 제외하고 진행', '파일 다시 선택', '중단'}, ...
+                        'DefaultOption', 1, 'CancelOption', 3);
+                catch
+                end
+                switch sel
+                    case '파일 다시 선택'
+                        for k = 1:numel(missingList)
+                            if missingList(k).fIdx > 0
+                                kind = strsplit(missingList(k).role, '.');
+                                app.requestFileChange(missingList(k).fIdx, kind{end});
+                            end
+                        end
+                        % Recurse once with the freshly chosen files.
+                        app.exportEverythingToFolder(parentFolder, opts);
+                        return;
+                    case '중단'
+                        try, uialert(app.UIFigure, 'export 가 취소되었습니다.', 'Export'); catch, end
+                        return;
+                    case '누락 제외하고 진행'
+                        % proceed with current fileList; verification will explicitly fail on missing.
+                    otherwise
+                        return;
+                end
+            end
+
             if isempty(fileList)
                 try, uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export'); catch, end
                 return;
@@ -2917,6 +3063,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             verifyReport = app.verifyExportedProject(projDst, copyMap, opts.verifyHash);
 
             ok = isempty(failures) && verifyReport.allPresent && verifyReport.allSizeMatch ...
+                 && verifyReport.allWithinFolder ...
                  && (~opts.verifyHash || verifyReport.allHashMatch);
 
             d.Value   = 1.0;
@@ -2943,34 +3090,49 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
-        function list = buildExportFileList(app, st)
-            % Returns struct array with fields: role, src, prefix.
-            list = struct('role', {}, 'src', {}, 'prefix', {});
+        function [list, missing] = buildExportFileList(app, st)
+            % [Audit fix #5] Build list from EVERY recorded path. Missing files are returned
+            % in the `missing` struct array so callers can surface skip/reselect/abort instead
+            % of silently dropping entries.
+            list    = struct('role', {}, 'src', {}, 'prefix', {});
+            missing = struct('role', {}, 'src', {}, 'prefix', {}, 'fIdx', {});
             if isempty(st), return; end
             seen = containers.Map('KeyType', 'char', 'ValueType', 'logical');
             addEntry = @(role, src, prefix) struct('role', role, 'src', src, 'prefix', prefix);
+            addMissing = @(role, src, prefix, fIdx) struct('role', role, 'src', src, ...
+                'prefix', prefix, 'fIdx', fIdx);
             if isfield(st, 'Flights')
                 for i = 1:numel(st.Flights)
                     flightPrefix = sprintf('flight%d_', i);
                     fields = {{'DataFile','data'}, {'AviFile','avi'}, {'OptionFile','option'}};
                     for k = 1:numel(fields)
                         f = fields{k}{1}; tag = fields{k}{2};
-                        if isfield(st.Flights(i), f) && ~isempty(st.Flights(i).(f))
-                            p = app.normalizeAbsPath(st.Flights(i).(f));
-                            if isfile(p) && ~isKey(seen, p)
+                        if ~isfield(st.Flights(i), f) || isempty(st.Flights(i).(f))
+                            continue;
+                        end
+                        p = app.normalizeAbsPath(st.Flights(i).(f));
+                        if isfile(p)
+                            if ~isKey(seen, p)
                                 seen(p) = true;
                                 list(end+1) = addEntry(sprintf('flight%d.%s', i, tag), p, flightPrefix); %#ok<AGROW>
                             end
+                        else
+                            missing(end+1) = addMissing(sprintf('flight%d.%s', i, tag), p, flightPrefix, i); %#ok<AGROW>
                         end
                     end
                 end
             end
             if isfield(st, 'AuxFiles') && iscell(st.AuxFiles)
                 for i = 1:numel(st.AuxFiles)
+                    if isempty(st.AuxFiles{i}), continue; end
                     p = app.normalizeAbsPath(st.AuxFiles{i});
-                    if isfile(p) && ~isKey(seen, p)
-                        seen(p) = true;
-                        list(end+1) = addEntry(sprintf('aux%d', i), p, 'aux_'); %#ok<AGROW>
+                    if isfile(p)
+                        if ~isKey(seen, p)
+                            seen(p) = true;
+                            list(end+1) = addEntry(sprintf('aux%d', i), p, 'aux_'); %#ok<AGROW>
+                        end
+                    else
+                        missing(end+1) = addMissing(sprintf('aux%d', i), p, 'aux_', 0); %#ok<AGROW>
                     end
                 end
             end
@@ -3001,7 +3163,14 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function reopenReleasedAvis(app, flights)
             for k = 1:numel(flights)
                 fIdx = flights(k);
-                try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+                p = app.Models(fIdx).aviFilePath;
+                if isempty(p) && numel(app.VideoFilePath) >= fIdx
+                    p = app.VideoFilePath{fIdx};
+                end
+                if isempty(p) || ~isfile(p), continue; end
+                try
+                    app.loadAviFileFromPath(fIdx, p, struct('promptOnSync', false));
+                catch ME, app.logCaught(ME, 'silent'); end
             end
         end
 
@@ -3032,16 +3201,34 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function report = verifyExportedProject(app, projDst, copyMap, verifyHash)
-            % [D6] verify project file readable, paths exist, sizes match, optional SHA256.
+            % [D6 + Audit fix #5] verify project file readable, ALL referenced paths exist
+            % inside the export folder, sizes match, and (optionally) SHA256 matches.
+            % Also asserts every Flight/Aux path field in the rewritten project lives under
+            % the export folder (no stale absolute path leaked through).
             report = struct('allPresent', false, 'allSizeMatch', false, 'allHashMatch', true, ...
+                            'allWithinFolder', true, ...
                             'presentCount', 0, 'sizeMatchCount', 0, 'hashMatchCount', 0, ...
                             'totalCount', 0, 'errors', {{}});
             try
                 if ~isfile(projDst)
                     report.errors{end+1} = sprintf('project 파일 없음: %s', projDst); return;
                 end
+                exportRoot = app.normalizeAbsPath(fileparts(projDst));
                 txt = fileread(projDst);
                 st  = jsondecode(txt);
+
+                % [Audit fix #5] Confirm every project path field lives inside exportRoot.
+                projPaths = app.collectProjectPathFields(st);
+                for i = 1:numel(projPaths)
+                    p = projPaths{i};
+                    if isempty(p), continue; end
+                    pAbs = app.normalizeAbsPath(p);
+                    if ~startsWith(pAbs, exportRoot)
+                        report.allWithinFolder = false;
+                        report.errors{end+1} = sprintf('project가 외부 경로를 참조함: %s', pAbs); %#ok<AGROW>
+                    end
+                end
+
                 pairs = app.collectPathPairs(st, copyMap);
                 report.totalCount = numel(pairs);
                 if report.totalCount == 0
@@ -3092,6 +3279,30 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             keys = copyMap.keys;
             for i = 1:numel(keys)
                 pairs(end+1) = struct('src', keys{i}, 'dst', copyMap(keys{i})); %#ok<AGROW>
+            end
+        end
+
+        function out = collectProjectPathFields(~, st)
+            % Flat list of every path string in a project-state struct.
+            out = {};
+            if isempty(st), return; end
+            if isfield(st, 'Flights')
+                for i = 1:numel(st.Flights)
+                    f = st.Flights(i);
+                    fields = {'DataFile', 'AviFile', 'OptionFile'};
+                    for k = 1:numel(fields)
+                        if isfield(f, fields{k}) && ~isempty(f.(fields{k}))
+                            out{end+1} = char(f.(fields{k})); %#ok<AGROW>
+                        end
+                    end
+                end
+            end
+            if isfield(st, 'AuxFiles') && iscell(st.AuxFiles)
+                for i = 1:numel(st.AuxFiles)
+                    if ~isempty(st.AuxFiles{i})
+                        out{end+1} = char(st.AuxFiles{i}); %#ok<AGROW>
+                    end
+                end
             end
         end
 
@@ -3182,8 +3393,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         sprintf('Flight %d AVI 선택', fIdx));
                     if isequal(fn, 0), return; end
                     fullpath = fullfile(pn, fn);
-                    app.Models(fIdx).aviFilePath = app.normalizeAbsPath(fullpath);
-                    try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'file-change-avi'); end
+                    try
+                        % [Fix #3] path-based loader keeps VideoFilePath{}/aviFilePath in sync.
+                        app.loadAviFileFromPath(fIdx, fullpath, struct('promptOnSync', true));
+                    catch ME, app.logCaught(ME, 'file-change-avi'); end
                 case 'option'
                     [fn, pn] = uigetfile({'*.dat;*.txt', 'Option file'}, ...
                         sprintf('Flight %d option 선택', fIdx));
@@ -3259,7 +3472,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                     advance(stepBase(fIdx, 3), sprintf('Flight %d AVI 메타데이터 로드 중', fIdx));
                     if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
-                        try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'auto-load-avi'); end
+                        try
+                            app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false));
+                        catch ME, app.logCaught(ME, 'auto-load-avi'); end
                     elseif ~isempty(m.aviFilePath)
                         app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
                     end
@@ -3336,32 +3551,812 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function rebuildPlotsFromConfig(app, fIdx, cfg)
-            % Lightweight rebuild stub: clears tabs then re-adds plots by YColumn order.
-            % Full UI rebuild matches setupDataUI semantics; left for follow-up.
+            % [Audit fix #7] Restore tabs to match saved config exactly.
+            % - clearAllTabs auto-creates one default tab; consume that as the first
+            %   restored tab and only add (numel(tabs)-1) extras to avoid drift.
+            % - Reset PlotConfigState for this flight before replaying so that
+            %   recordPlotInConfig (called from plotSelectedVariable) does not
+            %   duplicate existing entries.
+            % - Apply saved XLim/YLim/YLimMode/Height after each plot is created.
             if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg, 'Flights') ...
                     || numel(cfg.Flights) < fIdx
                 return;
             end
             tabs = cfg.Flights(fIdx).PlotTabs;
             if isempty(tabs), return; end
+
             try, app.clearAllTabs(fIdx); catch, end
-            for t = 1:numel(tabs)
+
+            % After clearAllTabs there is exactly one fresh tab.
+            existingTabCount = numel(app.UI(fIdx).plotTabs);
+            for t = (existingTabCount + 1):numel(tabs)
                 try, app.addPlotTab(fIdx); catch, end
-                if isfield(tabs(t), 'Plots') && ~isempty(tabs(t).Plots)
-                    for p = 1:numel(tabs(t).Plots)
-                        yCol = tabs(t).Plots(p).YColumn;
+            end
+
+            % Clear the in-memory PlotConfig for this flight; recordPlotInConfig will refill it.
+            cfgOut = app.ensurePlotConfigShape(app.PlotConfigState);
+            cfgOut.Flights(fIdx).PlotTabs = [];
+            app.PlotConfigState = cfgOut;
+
+            for t = 1:numel(tabs)
+                tabSpec = tabs(t);
+                if isfield(tabSpec, 'Title') && ~isempty(tabSpec.Title) ...
+                        && numel(app.UI(fIdx).plotTabs) >= t ...
+                        && isvalid(app.UI(fIdx).plotTabs(t))
+                    try, app.UI(fIdx).plotTabs(t).Title = char(tabSpec.Title); catch, end
+                end
+                if isfield(tabSpec, 'Plots') && ~isempty(tabSpec.Plots)
+                    plotsSpec = tabSpec.Plots;
+                    for p = 1:numel(plotsSpec)
+                        spec = plotsSpec(p);
+                        yCol = '';
+                        if isfield(spec, 'YColumn'), yCol = char(spec.YColumn); end
                         if isempty(yCol), continue; end
                         idx = find(strcmp({app.Models(fIdx).displayMeta.header}, yCol), 1);
-                        if ~isempty(idx)
-                            app.Models(fIdx).selectedRow = idx;
-                            try, app.plotSelectedVariable(fIdx); catch, end
+                        if isempty(idx), continue; end
+                        % Force the plotSelectedVariable target row + active tab.
+                        app.Models(fIdx).selectedRow = idx;
+                        try
+                            if numel(app.UI(fIdx).plotTabs) >= t && isvalid(app.UI(fIdx).plotTabs(t))
+                                app.UI(fIdx).tabGroup.SelectedTab = app.UI(fIdx).plotTabs(t);
+                            end
+                        catch, end
+                        try, app.plotSelectedVariable(fIdx); catch, end
+                        % Apply axis spec to the freshly added plot.
+                        try
+                            axesCell = app.UI(fIdx).plotAxes{t};
+                            if iscell(axesCell) && ~isempty(axesCell)
+                                ax = axesCell{end};
+                                if isvalid(ax)
+                                    if isfield(spec, 'XLim') && ~isempty(spec.XLim) ...
+                                            && numel(spec.XLim) == 2, ax.XLim = spec.XLim; end
+                                    if isfield(spec, 'YLimMode') && ~isempty(spec.YLimMode)
+                                        ax.YLimMode = char(spec.YLimMode);
+                                    end
+                                    if isfield(spec, 'YLim') && ~isempty(spec.YLim) ...
+                                            && numel(spec.YLim) == 2, ax.YLim = spec.YLim; end
+                                end
+                            end
+                        catch ME, app.logCaught(ME, 'silent'); end
+                    end
+                end
+                if isfield(tabSpec, 'LinkXWithinTab')
+                    app.setLinkXWithinTab(fIdx, t, logical(tabSpec.LinkXWithinTab));
+                end
+            end
+        end
+    end
+
+    % =========================================================================
+    % [Audit fix #1/#2/#8] Modeless Settings/Edit dialog
+    % Tabs: Project / Files / Sync / Options / Plot Manager / Export
+    % =========================================================================
+    methods (Access = private)
+        function openEditDialog(app)
+            try
+                if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                    figure(app.EditDialog);
+                    return;
+                end
+            catch
+            end
+
+            pos = [120, 120, 980, 660];
+            try
+                if ~isempty(app.ProjectState) && isfield(app.ProjectState, 'UiState') ...
+                        && isfield(app.ProjectState.UiState, 'EditDialogPosition') ...
+                        && numel(app.ProjectState.UiState.EditDialogPosition) == 4
+                    pos = app.ProjectState.UiState.EditDialogPosition;
+                end
+            catch
+            end
+
+            fig = uifigure('Name', '설정/프로젝트 편집기', ...
+                           'Position', pos, 'Resize', 'on', ...
+                           'CloseRequestFcn', @(~,~) app.closeEditDialog());
+            app.EditDialog = fig;
+
+            outer = uigridlayout(fig, [3 1]);
+            outer.RowHeight    = {28, '1x', 28};
+            outer.ColumnWidth  = {'1x'};
+            outer.Padding      = [6 6 6 6];
+            outer.RowSpacing   = 4;
+
+            % Top status bar
+            statusGrid = uigridlayout(outer, [1 3]);
+            statusGrid.RowHeight = {'fit'};
+            statusGrid.ColumnWidth = {'1x', 200, 160};
+            app.EditDialogStatusLbl = uilabel(statusGrid, 'Text', '준비', 'FontSize', 12);
+            app.EditDialogDirtyLbl  = uilabel(statusGrid, 'Text', '변경 없음', ...
+                'FontSize', 12, 'HorizontalAlignment', 'right', 'FontColor', [0.4 0.4 0.4]);
+            app.EditDialogTimeLbl   = uilabel(statusGrid, 'Text', '', ...
+                'FontSize', 11, 'HorizontalAlignment', 'right', 'FontColor', [0.4 0.4 0.4]);
+
+            tabs = uitabgroup(outer);
+            tabProject = uitab(tabs, 'Title', 'Project');
+            tabFiles   = uitab(tabs, 'Title', 'Files');
+            tabSync    = uitab(tabs, 'Title', 'Sync');
+            tabOpts    = uitab(tabs, 'Title', 'Options');
+            tabPlot    = uitab(tabs, 'Title', 'Plot Manager');
+            tabExport  = uitab(tabs, 'Title', 'Export');
+
+            app.buildEditTabProject(tabProject);
+            app.buildEditTabFiles(tabFiles);
+            app.buildEditTabSync(tabSync);
+            app.buildEditTabOptions(tabOpts);
+            app.buildEditTabPlot(tabPlot);
+            app.buildEditTabExport(tabExport);
+
+            % Bottom button row
+            bottom = uigridlayout(outer, [1 4]);
+            bottom.RowHeight = {'fit'};
+            bottom.ColumnWidth = {'1x', 120, 120, 100};
+            uilabel(bottom, 'Text', '');
+            uibutton(bottom, 'Text', '적용 (즉시 반영)', ...
+                'ButtonPushedFcn', @(~,~) app.applyPendingDialogChanges());
+            uibutton(bottom, 'Text', 'project 저장', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSaveProject());
+            uibutton(bottom, 'Text', '닫기', ...
+                'ButtonPushedFcn', @(~,~) app.closeEditDialog());
+
+            app.refreshEditDialog();
+        end
+
+        function closeEditDialog(app)
+            try
+                if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                    % Capture position into project ui state before closing.
+                    try
+                        if isempty(app.ProjectState), app.ProjectState = app.createDefaultProjectState(); end
+                        app.ProjectState.UiState.EditDialogPosition = app.EditDialog.Position;
+                    catch
+                    end
+                    delete(app.EditDialog);
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            app.EditDialog = [];
+        end
+
+        function refreshEditDialog(app)
+            % Refresh status, paths, sync values, option drafts, plot tree if dialog open.
+            try
+                if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
+                if isvalid(app.EditDialogDirtyLbl)
+                    if app.ProjectDirty
+                        app.EditDialogDirtyLbl.Text = '변경됨 ●';
+                        app.EditDialogDirtyLbl.FontColor = [0.8 0.2 0.2];
+                    else
+                        app.EditDialogDirtyLbl.Text = '변경 없음';
+                        app.EditDialogDirtyLbl.FontColor = [0.4 0.4 0.4];
+                    end
+                end
+                if isvalid(app.EditDialogTimeLbl) && ~isnat(app.LastEditApplyTime)
+                    app.EditDialogTimeLbl.Text = sprintf('마지막 적용 %s', ...
+                        char(datetime(app.LastEditApplyTime, 'Format', 'HH:mm:ss')));
+                end
+                % Refresh per-tab content if the handles still exist.
+                app.refreshProjectTab();
+                app.refreshFilesTab();
+                app.refreshSyncTab();
+                app.refreshOptionsTab();
+                app.refreshPlotTab();
+                app.refreshExportTab();
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function buildEditTabProject(app, parent)
+            gl = uigridlayout(parent, [6 4]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl.ColumnWidth = {120, '1x', 100, 100};
+            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+
+            uilabel(gl, 'Text', 'Project 파일:', 'FontWeight', 'bold');
+            app.EDProjectPathLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectPathLbl.Layout.Column = [2 2];
+            uibutton(gl, 'Text', '열기...', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogOpenProject());
+            uibutton(gl, 'Text', '다른 이름으로...', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSaveProjectAs());
+
+            uilabel(gl, 'Text', '저장:', 'FontWeight', 'bold');
+            app.EDProjectStatusLbl = uilabel(gl, 'Text', '미저장', 'FontColor', [0.4 0.4 0.4]);
+            app.EDProjectStatusLbl.Layout.Column = [2 2];
+            uibutton(gl, 'Text', '저장', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSaveProject());
+            uibutton(gl, 'Text', '자동 로드', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogAutoLoad());
+
+            uilabel(gl, 'Text', '자동 저장:', 'FontWeight', 'bold');
+            app.EDProjectAutosaveCB = uicheckbox(gl, 'Text', sprintf('%d초 간격 snapshot', app.AutosaveIntervalSec), ...
+                'Value', true, ...
+                'ValueChangedFcn', @(src,~) app.editDialogToggleAutosave(src.Value));
+            app.EDProjectAutosaveCB.Layout.Column = [2 4];
+        end
+
+        function buildEditTabFiles(app, parent)
+            gl = uigridlayout(parent, [10 4]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl.ColumnWidth = {120, '1x', 100, 100};
+            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+
+            app.EDFilesPathLbl = struct();
+            for fIdx = 1:2
+                head = uilabel(gl, 'Text', sprintf('=== Flight %d ===', fIdx), 'FontWeight', 'bold');
+                head.Layout.Column = [1 4];
+                pairs = {{'data', '비행데이터'}, {'avi', 'AVI'}, {'option', 'Option'}};
+                for k = 1:numel(pairs)
+                    kind = pairs{k}{1};
+                    uilabel(gl, 'Text', [pairs{k}{2} ':'], 'FontWeight', 'bold');
+                    lbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+                    lbl.Layout.Column = [2 2];
+                    app.EDFilesPathLbl.(sprintf('f%d_%s', fIdx, kind)) = lbl;
+                    uibutton(gl, 'Text', '변경...', ...
+                        'ButtonPushedFcn', @(~,~) app.requestFileChangeAndRefresh(fIdx, kind));
+                    uibutton(gl, 'Text', '다시 로드', ...
+                        'ButtonPushedFcn', @(~,~) app.editDialogReloadFile(fIdx, kind));
+                end
+            end
+            uibutton(gl, 'Text', 'Export everything to folder', ...
+                'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogExport());
+        end
+
+        function buildEditTabSync(app, parent)
+            gl = uigridlayout(parent, [12 5]);
+            gl.RowHeight = repmat({'fit'}, 1, 12);
+            gl.ColumnWidth = {130, 100, 100, 100, 100};
+            gl.RowSpacing = 5; gl.Padding = [10 10 10 10];
+
+            uilabel(gl, 'Text', '== Flight 1 ↔ Flight 2 비행시간 sync ==', 'FontWeight', 'bold').Layout.Column = [1 5];
+            uilabel(gl, 'Text', 'Flight 1 기준 시간(s):');
+            app.EDSyncF1Time = uieditfield(gl, 'numeric', 'Value', 0);
+            uilabel(gl, 'Text', 'Flight 2 기준 시간(s):');
+            app.EDSyncF2Time = uieditfield(gl, 'numeric', 'Value', 0);
+            uibutton(gl, 'Text', '동기 적용', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(true));
+            uibutton(gl, 'Text', '동기 해제', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(false));
+            for fIdx = 1:2
+                uilabel(gl, 'Text', sprintf('== Flight %d AVI sync ==', fIdx), 'FontWeight', 'bold').Layout.Column = [1 5];
+                uilabel(gl, 'Text', 'Anchor Frame:');
+                ef = uieditfield(gl, 'numeric', 'Value', 0, 'Limits', [0 Inf]);
+                app.(sprintf('EDVSync%dFrame', fIdx)) = ef;
+                uilabel(gl, 'Text', 'Anchor Time(s):');
+                et = uieditfield(gl, 'numeric', 'Value', 0);
+                app.(sprintf('EDVSync%dTime', fIdx)) = et;
+                uilabel(gl, 'Text', 'Video FPS:');
+                vf = uieditfield(gl, 'numeric', 'Value', 70, 'Limits', [1 Inf]);
+                app.(sprintf('EDVSync%dVFPS', fIdx)) = vf;
+                uilabel(gl, 'Text', 'Data FPS:');
+                df = uieditfield(gl, 'numeric', 'Value', 50, 'Limits', [1 Inf]);
+                app.(sprintf('EDVSync%dDFPS', fIdx)) = df;
+                btnA = uibutton(gl, 'Text', '동기 적용', ...
+                    'ButtonPushedFcn', @(~,~) app.editDialogApplyVideoSync(fIdx, true));
+                btnA.Layout.Column = [2 3];
+                btnB = uibutton(gl, 'Text', '동기 해제', ...
+                    'ButtonPushedFcn', @(~,~) app.editDialogApplyVideoSync(fIdx, false));
+                btnB.Layout.Column = [4 5];
+            end
+        end
+
+        function buildEditTabOptions(app, parent)
+            gl = uigridlayout(parent, [4 4]);
+            gl.RowHeight = {'fit', 'fit', '1x', 'fit'};
+            gl.ColumnWidth = {120, '1x', 100, 100};
+            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+
+            uilabel(gl, 'Text', 'Flight:', 'FontWeight', 'bold');
+            app.EDOptFlightDD = uidropdown(gl, 'Items', {'Flight 1', 'Flight 2'}, 'Value', 'Flight 1', ...
+                'ValueChangedFcn', @(~,~) app.refreshOptionsTab());
+            uibutton(gl, 'Text', '검증', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogValidateOptionDraft());
+            uibutton(gl, 'Text', '되돌리기', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogRevertOptionDraft());
+
+            tabs = uitabgroup(gl);
+            tabs.Layout.Row = [2 3]; tabs.Layout.Column = [1 4];
+            tabReq = uitab(tabs, 'Title', 'RequiredColumns');
+            tabDsp = uitab(tabs, 'Title', 'DisplayColumns');
+
+            app.EDOptReqTable = uitable(tabReq, 'Data', table(), ...
+                'ColumnEditable', [false true], ...
+                'CellEditCallback', @(src, evt) app.onOptionDraftEdit('req', src, evt));
+            app.EDOptReqTable.Position = [10 10 900 280];
+
+            app.EDOptDspTable = uitable(tabDsp, 'Data', table(), ...
+                'ColumnEditable', [true true true true true true], ...
+                'CellEditCallback', @(src, evt) app.onOptionDraftEdit('dsp', src, evt));
+            app.EDOptDspTable.Position = [10 10 900 280];
+
+            btnRow = uigridlayout(gl, [1 3]);
+            btnRow.Layout.Row = 4; btnRow.Layout.Column = [1 4];
+            btnRow.ColumnWidth = {'1x', 140, 160};
+            uilabel(btnRow, 'Text', '');
+            uibutton(btnRow, 'Text', '적용 (즉시 반영)', ...
+                'BackgroundColor', [0.15 0.38 0.82], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogApplyOptionDraft());
+            uibutton(btnRow, 'Text', 'option 파일 저장', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogWriteOptionDraft());
+        end
+
+        function buildEditTabPlot(app, parent)
+            gl = uigridlayout(parent, [5 6]);
+            gl.RowHeight = {'fit', 'fit', '1x', 'fit', 'fit'};
+            gl.ColumnWidth = {120, 100, 100, 100, 100, 100};
+            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+
+            uilabel(gl, 'Text', 'Flight:', 'FontWeight', 'bold');
+            app.EDPlotFlightDD = uidropdown(gl, 'Items', {'Flight 1', 'Flight 2'}, 'Value', 'Flight 1', ...
+                'ValueChangedFcn', @(~,~) app.refreshPlotTab());
+            uibutton(gl, 'Text', '캡처', ...
+                'ButtonPushedFcn', @(~,~) app.capturePlotConfigAndRefresh());
+            uibutton(gl, 'Text', '재구성', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogRebuildPlots());
+            uibutton(gl, 'Text', 'Sync X→All Tabs', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSyncTabXLimAll());
+            uibutton(gl, 'Text', 'Sync X→Plot', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSyncSelectedPlotXLimAll());
+
+            tree = uitree(gl);
+            tree.Layout.Row = [2 3]; tree.Layout.Column = [1 6];
+            app.EDPlotTree = tree;
+
+            uilabel(gl, 'Text', 'LinkXWithinTab:', 'FontWeight', 'bold');
+            app.EDPlotLinkCB = uicheckbox(gl, 'Text', '선택된 tab의 X축 link', 'Value', true, ...
+                'ValueChangedFcn', @(src,~) app.editDialogToggleSelectedTabLink(src.Value));
+            app.EDPlotLinkCB.Layout.Column = [2 3];
+            uibutton(gl, 'Text', '삭제(tab)', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogDeleteSelectedTab());
+        end
+
+        function buildEditTabExport(app, parent)
+            gl = uigridlayout(parent, [6 3]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl.ColumnWidth = {180, '1x', 140};
+            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+
+            uilabel(gl, 'Text', 'Export parent 폴더:', 'FontWeight', 'bold');
+            app.EDExpParentEdit = uieditfield(gl, 'text', 'Value', pwd);
+            uibutton(gl, 'Text', '폴더 선택...', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogPickExportFolder());
+
+            uilabel(gl, 'Text', '생성될 폴더:', 'FontWeight', 'bold');
+            app.EDExpPreviewLbl = uilabel(gl, 'Text', '(자동 생성)', 'FontColor', [0.3 0.3 0.7]);
+            uilabel(gl, 'Text', '');
+
+            uilabel(gl, 'Text', 'SHA256 검증:', 'FontWeight', 'bold');
+            app.EDExpHashCB = uicheckbox(gl, 'Text', '느림. 기본 off', 'Value', false);
+            uilabel(gl, 'Text', '');
+
+            uilabel(gl, 'Text', '');
+            uibutton(gl, 'Text', 'Export everything to folder', ...
+                'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogExport());
+            uilabel(gl, 'Text', '');
+
+            uilabel(gl, 'Text', 'Progress log:', 'FontWeight', 'bold');
+            app.EDExpLogArea = uitextarea(gl, 'Value', {''}, 'Editable', 'off');
+            app.EDExpLogArea.Layout.Row = 5; app.EDExpLogArea.Layout.Column = [2 3];
+        end
+
+        % ===== Refresh helpers ========================================
+        function refreshProjectTab(app)
+            try
+                if ~isempty(app.EDProjectPathLbl) && isvalid(app.EDProjectPathLbl)
+                    if isempty(app.ProjectFilePath)
+                        app.EDProjectPathLbl.Text = '(없음)';
+                    else
+                        app.EDProjectPathLbl.Text = app.ProjectFilePath;
+                    end
+                end
+                if ~isempty(app.EDProjectStatusLbl) && isvalid(app.EDProjectStatusLbl)
+                    if app.ProjectDirty
+                        app.EDProjectStatusLbl.Text = '변경됨 (미저장)';
+                    elseif ~isempty(app.ProjectFilePath)
+                        app.EDProjectStatusLbl.Text = '저장됨';
+                    else
+                        app.EDProjectStatusLbl.Text = '미저장';
+                    end
+                end
+            catch
+            end
+        end
+
+        function refreshFilesTab(app)
+            try
+                if ~isstruct(app.EDFilesPathLbl) || isempty(fieldnames(app.EDFilesPathLbl)), return; end
+                for fIdx = 1:2
+                    m = app.Models(fIdx);
+                    pairs = {{'data', m.dataFilePath}, {'avi', m.aviFilePath}, {'option', m.optionFilePath}};
+                    for k = 1:numel(pairs)
+                        key = sprintf('f%d_%s', fIdx, pairs{k}{1});
+                        if isfield(app.EDFilesPathLbl, key) && isvalid(app.EDFilesPathLbl.(key))
+                            v = pairs{k}{2};
+                            if isempty(v), v = '(없음)'; end
+                            app.EDFilesPathLbl.(key).Text = char(v);
                         end
                     end
                 end
-                if isfield(tabs(t), 'LinkXWithinTab')
-                    app.setLinkXWithinTab(fIdx, t, tabs(t).LinkXWithinTab);
-                end
+            catch
             end
+        end
+
+        function refreshSyncTab(app)
+            try
+                if ~isempty(app.EDSyncF1Time) && isvalid(app.EDSyncF1Time)
+                    app.EDSyncF1Time.Value = app.SyncState.SyncT1;
+                end
+                if ~isempty(app.EDSyncF2Time) && isvalid(app.EDSyncF2Time)
+                    app.EDSyncF2Time.Value = app.SyncState.SyncT2;
+                end
+                for fIdx = 1:2
+                    vss = app.VideoSyncState(fIdx);
+                    handles = {sprintf('EDVSync%dFrame', fIdx), vss.AnchorFrame; ...
+                               sprintf('EDVSync%dTime',  fIdx), vss.AnchorTime;  ...
+                               sprintf('EDVSync%dVFPS',  fIdx), vss.VideoFps;    ...
+                               sprintf('EDVSync%dDFPS',  fIdx), vss.DataFps};
+                    for r = 1:size(handles, 1)
+                        try
+                            if isprop(app, handles{r,1}) && ~isempty(app.(handles{r,1})) && isvalid(app.(handles{r,1}))
+                                app.(handles{r,1}).Value = double(handles{r,2});
+                            end
+                        catch, end
+                    end
+                end
+            catch
+            end
+        end
+
+        function refreshOptionsTab(app)
+            try
+                if isempty(app.EDOptFlightDD) || ~isvalid(app.EDOptFlightDD), return; end
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                draft = app.OptionDrafts{fIdx};
+                if isempty(draft)
+                    src = app.Models(fIdx).rawDataUnscaled;
+                    if isempty(src) || width(src) == 0
+                        if isvalid(app.EDOptReqTable), app.EDOptReqTable.Data = table(); end
+                        if isvalid(app.EDOptDspTable), app.EDOptDspTable.Data = table(); end
+                        return;
+                    end
+                    draft = app.parseOptionFileToDraft(app.resolveOptionFilePath(fIdx), src.Properties.VariableNames);
+                    app.OptionDrafts{fIdx} = draft;
+                end
+                % Required columns table
+                reqKeys = app.REQ_KEYS;
+                vals = cell(numel(reqKeys), 1);
+                for r = 1:numel(reqKeys)
+                    if isfield(draft.mappedCols, reqKeys{r})
+                        vals{r} = char(draft.mappedCols.(reqKeys{r}));
+                    else
+                        vals{r} = '';
+                    end
+                end
+                if isvalid(app.EDOptReqTable)
+                    app.EDOptReqTable.Data = table(reqKeys(:), vals, ...
+                        'VariableNames', {'Key', 'Column'});
+                end
+                % Display columns table
+                if isvalid(app.EDOptDspTable)
+                    n = numel(draft.displayMeta);
+                    headers = cell(n,1); units = cell(n,1); fmts = cell(n,1);
+                    orders = zeros(n,1); scales = ones(n,1); visible = true(n,1);
+                    for r = 1:n
+                        headers{r} = char(draft.displayMeta(r).header);
+                        units{r}   = char(draft.displayMeta(r).unit);
+                        fmts{r}    = char(draft.displayMeta(r).format);
+                        orders(r)  = draft.displayMeta(r).order;
+                        scales(r)  = draft.displayMeta(r).scale;
+                    end
+                    app.EDOptDspTable.Data = table(visible, headers, units, fmts, orders, scales, ...
+                        'VariableNames', {'Visible', 'Header', 'Unit', 'Format', 'Order', 'Scale'});
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function refreshPlotTab(app)
+            try
+                if isempty(app.EDPlotTree) || ~isvalid(app.EDPlotTree), return; end
+                delete(app.EDPlotTree.Children);
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights) >= fIdx
+                    tabs = cfg.Flights(fIdx).PlotTabs;
+                    for t = 1:numel(tabs)
+                        title = sprintf('Tab %d', t);
+                        if isfield(tabs(t), 'Title') && ~isempty(tabs(t).Title)
+                            title = char(tabs(t).Title);
+                        end
+                        node = uitreenode(app.EDPlotTree, 'Text', title, 'NodeData', struct('kind', 'tab', 'tab', t));
+                        if isfield(tabs(t), 'Plots')
+                            for p = 1:numel(tabs(t).Plots)
+                                pl = tabs(t).Plots(p);
+                                lbl = sprintf('Plot %d: %s', p, char(pl.YColumn));
+                                uitreenode(node, 'Text', lbl, 'NodeData', struct('kind', 'plot', 'tab', t, 'plot', p));
+                            end
+                        end
+                    end
+                    expand(app.EDPlotTree);
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function refreshExportTab(app)
+            try
+                if isempty(app.EDExpPreviewLbl) || ~isvalid(app.EDExpPreviewLbl), return; end
+                folderName = ['FlightDashboard_' char(datetime('now', 'Format', 'yyyy-MM-dd_HH-mm-ss'))];
+                app.EDExpPreviewLbl.Text = folderName;
+            catch
+            end
+        end
+
+        % ===== Button callbacks ========================================
+        function editDialogSaveProject(app)
+            if isempty(app.ProjectFilePath)
+                app.editDialogSaveProjectAs(); return;
+            end
+            ok = app.saveProjectFile(app.ProjectFilePath);
+            if ok
+                try, uialert(app.EditDialog, 'project 저장 완료', 'Project'); catch, end
+                app.refreshEditDialog();
+            end
+        end
+
+        function editDialogSaveProjectAs(app)
+            [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
+            if isequal(fn, 0), return; end
+            ok = app.saveProjectFile(fullfile(pn, fn));
+            if ok
+                try, uialert(app.EditDialog, 'project 저장 완료', 'Project'); catch, end
+                app.refreshEditDialog();
+            end
+        end
+
+        function editDialogOpenProject(app)
+            [fn, pn] = uigetfile({'*.fdproj', 'Project file'}, '열 project 파일');
+            if isequal(fn, 0), return; end
+            app.autoLoadProjectFromFile(fullfile(pn, fn));
+            app.refreshEditDialog();
+        end
+
+        function editDialogAutoLoad(app)
+            if isempty(app.ProjectFilePath)
+                app.editDialogOpenProject(); return;
+            end
+            app.autoLoadProjectFromFile(app.ProjectFilePath);
+            app.refreshEditDialog();
+        end
+
+        function editDialogToggleAutosave(app, on)
+            try
+                if ~on
+                    if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
+                        stop(app.AutosaveTimer); delete(app.AutosaveTimer); app.AutosaveTimer = [];
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function requestFileChangeAndRefresh(app, fIdx, kind)
+            app.requestFileChange(fIdx, kind);
+            app.refreshEditDialog();
+        end
+
+        function editDialogReloadFile(app, fIdx, kind)
+            m = app.Models(fIdx);
+            switch kind
+                case 'data'
+                    if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
+                        try, app.parseFlightData(fIdx, m.dataFilePath); catch ME, app.logCaught(ME, 'reload-data'); end
+                    end
+                case 'avi'
+                    if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
+                        try, app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false)); catch ME, app.logCaught(ME, 'reload-avi'); end
+                    end
+                case 'option'
+                    if ~isempty(m.optionFilePath) && isfile(m.optionFilePath) ...
+                            && ~isempty(m.rawDataUnscaled) && width(m.rawDataUnscaled) > 0
+                        draft = app.parseOptionFileToDraft(m.optionFilePath, m.rawDataUnscaled.Properties.VariableNames);
+                        app.applyOptionDraftToModel(fIdx, draft, false);
+                    end
+            end
+            app.refreshEditDialog();
+        end
+
+        function editDialogApplyFlightSync(app, enabled)
+            try
+                t1 = 0; t2 = 0;
+                if isvalid(app.EDSyncF1Time), t1 = app.EDSyncF1Time.Value; end
+                if isvalid(app.EDSyncF2Time), t2 = app.EDSyncF2Time.Value; end
+                app.setFlightDataSync(t1, t2, enabled);
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'sync-apply'); end
+        end
+
+        function editDialogApplyVideoSync(app, fIdx, enabled)
+            try
+                af = app.(sprintf('EDVSync%dFrame', fIdx)).Value;
+                at = app.(sprintf('EDVSync%dTime',  fIdx)).Value;
+                vf = app.(sprintf('EDVSync%dVFPS',  fIdx)).Value;
+                df = app.(sprintf('EDVSync%dDFPS',  fIdx)).Value;
+                app.setVideoSync(fIdx, af, at, vf, df, enabled);
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'video-sync-apply'); end
+        end
+
+        function onOptionDraftEdit(app, kind, ~, evt)
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                draft = app.OptionDrafts{fIdx};
+                if isempty(draft), return; end
+                if strcmp(kind, 'req')
+                    key = char(app.EDOptReqTable.Data.Key(evt.Indices(1)));
+                    draft.mappedCols.(key) = char(evt.NewData);
+                elseif strcmp(kind, 'dsp')
+                    r = evt.Indices(1);
+                    cols = app.EDOptDspTable.Data.Properties.VariableNames;
+                    field = cols{evt.Indices(2)};
+                    switch field
+                        case 'Header', draft.displayMeta(r).header = char(evt.NewData);
+                        case 'Unit',   draft.displayMeta(r).unit   = char(evt.NewData);
+                        case 'Format', draft.displayMeta(r).format = char(evt.NewData);
+                        case 'Order',  draft.displayMeta(r).order  = double(evt.NewData);
+                        case 'Scale'
+                            s = double(evt.NewData);
+                            if isnan(s) || s == 0, s = 1.0; end
+                            draft.displayMeta(r).scale = s;
+                    end
+                end
+                app.OptionDrafts{fIdx} = draft;
+                app.ProjectDirty = true;
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'option-edit'); end
+        end
+
+        function editDialogValidateOptionDraft(app)
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0
+                    try, uialert(app.EditDialog, '비행데이터를 먼저 로드하세요.', 'Options'); catch, end
+                    return;
+                end
+                [ok, info] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
+                if ok
+                    try, uialert(app.EditDialog, '검증 통과', 'Options'); catch, end
+                else
+                    msg = sprintf('검증 실패\n  Broken mappings: %s\n  Broken columns: %s\n  Reasons: %s', ...
+                        strjoin(info.brokenMappings, ', '), strjoin(info.brokenColumns, ', '), ...
+                        strjoin(info.reasons, ', '));
+                    try, uialert(app.EditDialog, msg, 'Options'); catch, end
+                end
+            catch ME, app.logCaught(ME, 'option-validate'); end
+        end
+
+        function editDialogApplyOptionDraft(app)
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0, return; end
+                [ok, ~] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
+                if ~ok
+                    try, uialert(app.EditDialog, '검증 실패: Apply 차단', 'Options'); catch, end
+                    return;
+                end
+                app.applyOptionDraftToModel(fIdx, app.OptionDrafts{fIdx}, false);
+                try, app.setupDataUI(fIdx); catch, end
+                try, app.updateDashboard(fIdx, app.Models(fIdx).currentIndex); catch, end
+                app.markProjectDirtyAndScheduleRefresh('option-apply');
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'option-apply'); end
+        end
+
+        function editDialogWriteOptionDraft(app)
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                draft = app.OptionDrafts{fIdx};
+                if isempty(draft), return; end
+                p = app.resolveOptionFilePath(fIdx);
+                ok = app.writeOptionFileAtomic(p, draft);
+                if ok, try, uialert(app.EditDialog, ['option 파일 저장 완료: ' p], 'Options'); catch, end
+                end
+            catch ME, app.logCaught(ME, 'option-write'); end
+        end
+
+        function editDialogRevertOptionDraft(app)
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0, return; end
+                app.OptionDrafts{fIdx} = app.parseOptionFileToDraft(app.resolveOptionFilePath(fIdx), src.Properties.VariableNames);
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'option-revert'); end
+        end
+
+        function capturePlotConfigAndRefresh(app)
+            app.capturePlotConfigFromUi();
+            app.refreshEditDialog();
+        end
+
+        function editDialogRebuildPlots(app)
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'plot-rebuild'); end
+        end
+
+        function editDialogToggleSelectedTabLink(app, on)
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~isfield(nd, 'tab'), return; end
+                app.setLinkXWithinTab(fIdx, nd.tab, on);
+            catch ME, app.logCaught(ME, 'plot-link'); end
+        end
+
+        function editDialogSyncTabXLimAll(app)
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if isfield(nd, 'tab'), app.applyTabXLimToAllTabs(fIdx, nd.tab); end
+            catch ME, app.logCaught(ME, 'plot-sync-tab'); end
+        end
+
+        function editDialogSyncSelectedPlotXLimAll(app)
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if strcmp(nd.kind, 'plot')
+                    app.syncSelectedPlotXLimToAll(fIdx, nd.tab, nd.plot);
+                end
+            catch ME, app.logCaught(ME, 'plot-sync-plot'); end
+        end
+
+        function editDialogDeleteSelectedTab(app)
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~strcmp(nd.kind, 'tab'), return; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) >= nd.tab
+                    cfg.Flights(fIdx).PlotTabs(nd.tab) = [];
+                    app.PlotConfigState = cfg;
+                    try, delete(app.UI(fIdx).plotTabs(nd.tab)); catch, end
+                    app.markProjectDirtyAndScheduleRefresh('tab-delete');
+                end
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'tab-delete'); end
+        end
+
+        function editDialogPickExportFolder(app)
+            p = uigetdir(app.EDExpParentEdit.Value, 'Export parent 폴더');
+            if isequal(p, 0), return; end
+            app.EDExpParentEdit.Value = p;
+        end
+
+        function editDialogExport(app)
+            try
+                parent = app.EDExpParentEdit.Value;
+                opts = struct('verifyHash', logical(app.EDExpHashCB.Value));
+                ok = app.exportEverythingToFolder(parent, opts);
+                lines = app.EDExpLogArea.Value;
+                if ~iscell(lines), lines = {char(lines)}; end
+                if ok
+                    lines{end+1} = sprintf('[%s] export OK', char(datetime('now', 'Format', 'HH:mm:ss')));
+                else
+                    lines{end+1} = sprintf('[%s] export FAIL — 자세한 내용은 console/dialog 참고', char(datetime('now', 'Format', 'HH:mm:ss')));
+                end
+                app.EDExpLogArea.Value = lines;
+            catch ME, app.logCaught(ME, 'export-btn'); end
         end
     end
 
@@ -4807,6 +5802,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 'FontSize', 12, 'ButtonPushedFcn', @(~, ~) app.minimizeWindow());
             app.WindowMaxBtn = uibutton(glHeader, 'Text', '최대화', ...
                 'FontSize', 12, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.toggleMaximizeWindow());
+
+            % [Audit fix #1] Entry point to the modeless settings/edit dialog.
+            try
+                glHeader.ColumnWidth = [glHeader.ColumnWidth, {110}];
+                uibutton(glHeader, 'Text', '⚙ 설정/편집', ...
+                    'BackgroundColor', [0.20 0.20 0.25], 'FontColor', 'w', ...
+                    'FontSize', 12, 'FontWeight', 'bold', ...
+                    'Tooltip', 'Project/Files/Sync/Options/Plot Manager/Export 편집기 열기', ...
+                    'ButtonPushedFcn', @(~,~) app.openEditDialog());
+            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
         end
 
         function [ax, lbl] = createGaugePanel(~, parentPnl, titleStr)
@@ -5133,6 +6138,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     catch ME, app.logCaught(ME, 'silent'); end
                 end
                 app.LastEditApplyTime = datetime('now');
+                % [Audit fix #1] keep dialog status/values in sync after debounce fires
+                try, app.refreshEditDialog(); catch, end
             catch ME, app.logCaught(ME, 'silent'); end
         end
 
