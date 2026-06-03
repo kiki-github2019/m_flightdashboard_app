@@ -955,6 +955,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             else
                                 app.IsUpdating(fIdx) = true;
                                 app.updateDashboard(fIdx, idx);
+                                if isfield(app.UI(fIdx), 'spinner') && isvalid(app.UI(fIdx).spinner)
+                                    currDataTime = app.Models(fIdx).rawData.(timeCol)(idx);
+                                    if abs(app.UI(fIdx).spinner.Value - currDataTime) > eps
+                                        app.UI(fIdx).spinner.Value = currDataTime;
+                                    end
+                                end
                                 app.IsUpdating(fIdx) = false;
                             end
                         catch e
