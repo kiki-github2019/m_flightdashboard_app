@@ -122,6 +122,20 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % - stack은 cell-wrap으로 저장 (struct array 차원 불일치 회피)
         ErrorLog            = struct('time', {}, 'tag', {}, 'identifier', {}, 'message', {}, 'stack', {})
         ErrorLogCapacity    = 200             % [V3.22 #1] ring buffer 최대 크기
+
+        % [Phase 1] Project state + edit dialog plumbing
+        ProjectState         = []              % cached struct mirroring .fdproj
+        ProjectFilePath      = ''              % absolute path of currently loaded project
+        ProjectDirty         = false           % true when in-memory state diverges from saved file
+        OptionDrafts         = {[], []}        % per-flight option editor draft buffers (Phase 2 fills)
+        PlotConfigState      = []              % captured PlotConfig (Phase 4 fills)
+        EditDialog           = []              % handle to edit uifigure (modeless)
+        EditApplyTimer       = []              % single-shot debounce timer (D2)
+        EditApplyDelaySec    = 0.35            % timer StartDelay
+        LastEditApplyTime    = NaT              % time of last applyPendingDialogChanges()
+        AutosaveTimer        = []              % .fdproj.autosave snapshot timer (D2)
+        AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
+        ProjectFileVersion   = 1               % current .fdproj schema version
     end
 
     methods (Access = public)
@@ -224,6 +238,28 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
             catch ME, app.logCaught(ME, 'silent'); end
 
+            % [Phase 1 D2] stop debounce + autosave timers before tearing down UI
+            try
+                if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer)
+                    try, stop(app.EditApplyTimer); catch, end %#ok<NOCOM>
+                    delete(app.EditApplyTimer);
+                    app.EditApplyTimer = [];
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
+                    try, stop(app.AutosaveTimer); catch, end %#ok<NOCOM>
+                    delete(app.AutosaveTimer);
+                    app.AutosaveTimer = [];
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                    delete(app.EditDialog);
+                    app.EditDialog = [];
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     delete(app.UIFigure);
@@ -232,10 +268,14 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function model = createEmptyModel(~)
-            model = struct('rawData', table(), 'mappedCols', struct(), 'displayMeta', struct(), ...
+            % [Phase 1/Phase 2 D4] rawDataUnscaled keeps the unscaled source so option scale
+            % changes never accumulate. File-path fields back the Project Files tab.
+            model = struct('rawData', table(), 'rawDataUnscaled', table(), ...
+                           'mappedCols', struct(), 'displayMeta', struct(), ...
                            'bounds', struct('minLat',0, 'maxLat',0, 'minLon',0, 'maxLon',0, 'isValid', false), ...
                            'altBounds', struct('minAlt',0, 'maxAlt',0), ...
-                           'currentIndex', 1, 'selectedRow', 1, 'isMockData', false);
+                           'currentIndex', 1, 'selectedRow', 1, 'isMockData', false, ...
+                           'dataFilePath', '', 'aviFilePath', '', 'optionFilePath', '');
         end
     end
 
@@ -3900,6 +3940,310 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             ax.PlotBoxAspectRatio = [1 1 1];
             axis(ax, [-1.35 1.35 -1.35 1.35]);
             axis(ax, 'off');
+        end
+    end
+
+    % =========================================================================
+    % [Phase 1] Project state model + JSON .fdproj I/O
+    % - createDefaultProjectState / collectCurrentProjectState / applyProjectState
+    % - loadProjectFile / saveProjectFile / saveProjectAutosave
+    % - normalizeProjectPaths / migrateProjectState (D7)
+    % - markProjectDirtyAndScheduleRefresh / applyPendingDialogChanges (D2)
+    % =========================================================================
+    methods (Access = private)
+        function st = createDefaultProjectState(app)
+            % Skeleton matching design §4. Phases 2-6 fill PlotConfig / FlightSync details.
+            flightTpl = struct( ...
+                'Name', '', 'DataFile', '', 'AviFile', '', 'OptionFile', '', ...
+                'VideoResolution', '', ...
+                'VideoSync', struct('IsSynced', false, 'AnchorFrame', 0, ...
+                                    'AnchorTime', 0, 'VideoFps', 70, 'DataFps', 50));
+            st = struct( ...
+                'Version',     app.ProjectFileVersion, ...
+                'SavedAt',     '', ...
+                'PathMode',    'absolute', ...
+                'Flights',     [flightTpl, flightTpl], ...
+                'FlightSync',  struct('IsSynced', false, 'SyncT1', 0, 'SyncT2', 0), ...
+                'PlotConfig',  struct(), ...
+                'UiState',     struct('WindowPosition', [], 'EditDialogPosition', [], 'ActiveTab', 'Project'), ...
+                'AuxFiles',    {{}});
+            for i = 1:2
+                st.Flights(i).Name = sprintf('Flight %d', i);
+            end
+        end
+
+        function st = collectCurrentProjectState(app)
+            % Snapshot the live runtime into a .fdproj-shaped struct.
+            st = app.createDefaultProjectState();
+            try
+                st.SavedAt = char(datetime('now','TimeZone','local','Format','yyyy-MM-dd''T''HH:mm:ssXXX'));
+            catch
+                st.SavedAt = char(datetime('now','Format','yyyy-MM-dd HH:mm:ss'));
+            end
+            for fIdx = 1:2
+                try
+                    m = app.Models(fIdx);
+                    st.Flights(fIdx).Name       = sprintf('Flight %d', fIdx);
+                    st.Flights(fIdx).DataFile   = app.normalizeAbsPath(m.dataFilePath);
+                    st.Flights(fIdx).AviFile    = app.normalizeAbsPath(m.aviFilePath);
+                    st.Flights(fIdx).OptionFile = app.normalizeAbsPath(m.optionFilePath);
+                    vss = app.VideoSyncState(fIdx);
+                    st.Flights(fIdx).VideoSync = struct( ...
+                        'IsSynced',    logical(vss.IsSynced), ...
+                        'AnchorFrame', double(vss.AnchorFrame), ...
+                        'AnchorTime',  double(vss.AnchorTime), ...
+                        'VideoFps',    double(vss.VideoFps), ...
+                        'DataFps',     double(vss.DataFps));
+                    if ~isempty(app.UI) && numel(app.UI) >= fIdx ...
+                            && isfield(app.UI(fIdx), 'videoResLabel') ...
+                            && ~isempty(app.UI(fIdx).videoResLabel) && isvalid(app.UI(fIdx).videoResLabel)
+                        st.Flights(fIdx).VideoResolution = char(app.UI(fIdx).videoResLabel.Text);
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
+            try
+                st.FlightSync = struct( ...
+                    'IsSynced', logical(app.SyncState.IsSynced), ...
+                    'SyncT1',   double(app.SyncState.SyncT1), ...
+                    'SyncT2',   double(app.SyncState.SyncT2));
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+                    st.UiState.WindowPosition = app.UIFigure.Position;
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                    st.UiState.EditDialogPosition = app.EditDialog.Position;
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            % Phase 4 will populate PlotConfig; preserve any cached structure for now.
+            if ~isempty(app.PlotConfigState)
+                st.PlotConfig = app.PlotConfigState;
+            end
+        end
+
+        function applyProjectState(app, st, opts)
+            % Apply a loaded .fdproj-shaped struct to runtime state.
+            % opts.skipFiles = true skips heavy data/AVI loads (Phase 5 owns full path).
+            if nargin < 3 || isempty(opts), opts = struct(); end
+            if ~isfield(opts, 'skipFiles'), opts.skipFiles = true; end
+            if isempty(st), return; end
+            st = app.migrateProjectState(st);
+            try
+                if isfield(st, 'FlightSync') && ~isempty(st.FlightSync)
+                    app.SyncState.IsSynced = logical(st.FlightSync.IsSynced);
+                    app.SyncState.SyncT1   = double(st.FlightSync.SyncT1);
+                    app.SyncState.SyncT2   = double(st.FlightSync.SyncT2);
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            if isfield(st, 'Flights')
+                for fIdx = 1:min(numel(st.Flights), 2)
+                    try
+                        f = st.Flights(fIdx);
+                        if isfield(f, 'DataFile'),   app.Models(fIdx).dataFilePath   = char(f.DataFile);   end
+                        if isfield(f, 'AviFile'),    app.Models(fIdx).aviFilePath    = char(f.AviFile);    end
+                        if isfield(f, 'OptionFile'), app.Models(fIdx).optionFilePath = char(f.OptionFile); end
+                        if isfield(f, 'VideoSync') && ~isempty(f.VideoSync)
+                            vs = f.VideoSync;
+                            app.VideoSyncState(fIdx).IsSynced    = logical(vs.IsSynced);
+                            app.VideoSyncState(fIdx).AnchorFrame = double(vs.AnchorFrame);
+                            app.VideoSyncState(fIdx).AnchorTime  = double(vs.AnchorTime);
+                            app.VideoSyncState(fIdx).VideoFps    = double(vs.VideoFps);
+                            app.VideoSyncState(fIdx).DataFps     = double(vs.DataFps);
+                        end
+                    catch ME, app.logCaught(ME, 'silent'); end
+                end
+            end
+            if isfield(st, 'UiState')
+                try
+                    if isfield(st.UiState, 'WindowPosition') && ~isempty(st.UiState.WindowPosition) ...
+                            && ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+                        app.UIFigure.Position = st.UiState.WindowPosition;
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
+            if isfield(st, 'PlotConfig')
+                app.PlotConfigState = st.PlotConfig;
+            end
+            app.ProjectState = st;
+            app.ProjectDirty = false;
+        end
+
+        function st = migrateProjectState(app, st)
+            % [D7] in-memory migration entry point. v1->v1 passthrough; future versions extend switch.
+            if isempty(st), return; end
+            if ~isfield(st, 'Version') || isempty(st.Version)
+                st.Version = 1;
+            end
+            switch double(st.Version)
+                case 1
+                    % v1 schema matches createDefaultProjectState; nothing to migrate.
+                otherwise
+                    msg = sprintf('알 수 없는 project version: %g (지원=%d)', double(st.Version), app.ProjectFileVersion);
+                    try
+                        uialert(app.UIFigure, msg, 'Project version');
+                    catch
+                        warning(msg);
+                    end
+                    error('FlightDataDashboard:UnsupportedProjectVersion', msg);
+            end
+        end
+
+        function st = loadProjectFile(app, filePath)
+            % Read and validate a .fdproj file. Caller decides whether to applyProjectState.
+            st = [];
+            if nargin < 2 || isempty(filePath) || ~isfile(filePath), return; end
+            try
+                txt = fileread(filePath);
+                st  = jsondecode(txt);
+                st  = app.migrateProjectState(st);
+                app.ProjectFilePath = app.normalizeAbsPath(filePath);
+            catch ME
+                app.logCaught(ME, 'project-load');
+                try, uialert(app.UIFigure, sprintf('project 파일 로드 실패:\n%s', ME.message), 'Project'); catch, end
+                st = [];
+            end
+        end
+
+        function ok = saveProjectFile(app, filePath)
+            % Atomic write: temp file + movefile + .bak of previous.
+            ok = false;
+            if nargin < 2 || isempty(filePath)
+                filePath = app.ProjectFilePath;
+            end
+            if isempty(filePath), return; end
+            try
+                st  = app.collectCurrentProjectState();
+                txt = jsonencode(st, 'PrettyPrint', true);
+                tmp = [filePath '.tmp'];
+                fid = fopen(tmp, 'w');
+                if fid < 0, error('FlightDataDashboard:ProjectWrite', '임시 파일 열기 실패: %s', tmp); end
+                cleanup = onCleanup(@() fclose(fid));
+                fwrite(fid, txt, 'char');
+                clear cleanup;
+                if isfile(filePath)
+                    try, copyfile(filePath, [filePath '.bak'], 'f'); catch, end
+                end
+                movefile(tmp, filePath, 'f');
+                app.ProjectFilePath = app.normalizeAbsPath(filePath);
+                app.ProjectState    = st;
+                app.ProjectDirty    = false;
+                app.clearProjectAutosave();
+                ok = true;
+            catch ME
+                app.logCaught(ME, 'project-save');
+                try, uialert(app.UIFigure, sprintf('project 저장 실패:\n%s', ME.message), 'Project'); catch, end
+            end
+        end
+
+        function saveProjectAutosave(app)
+            % [D2] crash-safe snapshot while edits are dirty. Lives next to project file or in tempdir.
+            try
+                if ~app.ProjectDirty, return; end
+                if isempty(app.ProjectFilePath)
+                    base = fullfile(tempdir, 'FlightDashboard.fdproj');
+                else
+                    base = app.ProjectFilePath;
+                end
+                autoPath = [base '.autosave.json'];
+                st  = app.collectCurrentProjectState();
+                txt = jsonencode(st, 'PrettyPrint', true);
+                fid = fopen(autoPath, 'w');
+                if fid < 0, return; end
+                cleanup = onCleanup(@() fclose(fid));
+                fwrite(fid, txt, 'char');
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function clearProjectAutosave(app)
+            try
+                if isempty(app.ProjectFilePath), return; end
+                autoPath = [app.ProjectFilePath '.autosave.json'];
+                if isfile(autoPath), delete(autoPath); end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function out = normalizeAbsPath(~, p)
+            % Convert to absolute form when the file exists; otherwise return as-is.
+            out = char(p);
+            if isempty(out), return; end
+            try
+                jf = java.io.File(out);
+                if jf.isAbsolute()
+                    out = char(jf.getCanonicalPath());
+                else
+                    out = char(java.io.File(fullfile(pwd, out)).getCanonicalPath());
+                end
+            catch
+                % fallback: use what(p) when file exists, else leave as-is
+                try
+                    if isfile(out)
+                        info = dir(out);
+                        out  = fullfile(info(1).folder, info(1).name);
+                    end
+                catch
+                end
+            end
+        end
+
+        function st = normalizeProjectPaths(app, st)
+            % Used by Export (Phase 6) to rewrite paths to a new folder. Default: absolute normalize.
+            if isempty(st), return; end
+            if isfield(st, 'Flights')
+                for i = 1:numel(st.Flights)
+                    st.Flights(i).DataFile   = app.normalizeAbsPath(st.Flights(i).DataFile);
+                    st.Flights(i).AviFile    = app.normalizeAbsPath(st.Flights(i).AviFile);
+                    st.Flights(i).OptionFile = app.normalizeAbsPath(st.Flights(i).OptionFile);
+                end
+            end
+            if isfield(st, 'AuxFiles') && iscell(st.AuxFiles)
+                for i = 1:numel(st.AuxFiles)
+                    st.AuxFiles{i} = app.normalizeAbsPath(st.AuxFiles{i});
+                end
+            end
+        end
+
+        function markProjectDirtyAndScheduleRefresh(app, ~)
+            % [D2] mark dirty + (re)start single-shot debounce timer.
+            app.ProjectDirty = true;
+            try
+                if isempty(app.EditApplyTimer) || ~isvalid(app.EditApplyTimer)
+                    app.EditApplyTimer = timer( ...
+                        'ExecutionMode', 'singleShot', ...
+                        'StartDelay', app.EditApplyDelaySec, ...
+                        'TimerFcn', @(~,~) app.applyPendingDialogChanges());
+                else
+                    if strcmpi(app.EditApplyTimer.Running, 'on'), stop(app.EditApplyTimer); end
+                    app.EditApplyTimer.StartDelay = app.EditApplyDelaySec;
+                end
+                start(app.EditApplyTimer);
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                if isempty(app.AutosaveTimer) || ~isvalid(app.AutosaveTimer)
+                    app.AutosaveTimer = timer( ...
+                        'ExecutionMode', 'fixedSpacing', ...
+                        'Period', app.AutosaveIntervalSec, ...
+                        'StartDelay', app.AutosaveIntervalSec, ...
+                        'TimerFcn', @(~,~) app.saveProjectAutosave());
+                    start(app.AutosaveTimer);
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function applyPendingDialogChanges(app)
+            % Default applier: refresh data UI for any flights with loaded data.
+            % Phases 2-4 extend this with option/sync/plot specific re-applies.
+            try
+                for fIdx = 1:2
+                    try
+                        if ~isempty(app.Models(fIdx).rawData) && height(app.Models(fIdx).rawData) > 0
+                            app.setupDataUI(fIdx);
+                        end
+                    catch ME, app.logCaught(ME, 'silent'); end
+                end
+                app.LastEditApplyTime = datetime('now');
+            catch ME, app.logCaught(ME, 'silent'); end
         end
     end
 

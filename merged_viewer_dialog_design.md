@@ -586,3 +586,77 @@ Do not print the full modified code in your response.
 Summarize only changed files, verification performed, and any remaining risks.
 ```
 
+## 10. 결정 필요 항목 (Decision Items)
+
+구현 착수 전 확정된 정책. 표 아래 항목별 세부 동작을 명시한다. 향후 변경 시 이 절을 갱신한다.
+
+| # | 항목 | 결정 |
+|---|---|---|
+| D1 | AVI 파일 잠금 처리 | export/교체 직전 `VideoReader` 해제 → 복사/교체 → 재오픈. 단, 현재 열린 AVI와 동일 경로 덮어쓰기는 사전 차단/경고. |
+| D2 | Debounce timer pending 변경 방어 | dialog `CloseRequestFcn`에서 `stop(timer)` + `applyPendingDialogChanges()` 동기 호출. timer는 single-shot, 새 변경 시 기존 timer 재시작(누적 없음). pending + dirty 상태에서 종료 시 "적용/버림/취소" 확인 dialog. |
+| D3 | `LinkXWithinTab` 자동 off 정책 | 개별 plot X범위 수정 시 해당 tab의 link를 자동 off. tab 헤더에 `Link off` 라벨과 toggle 버튼 노출. 확인 dialog는 사용하지 않는다. |
+| D4 | scale 중복 방지 — 메모리 전략 | hybrid 방식. 원본은 `Models(fIdx).rawDataUnscaled` 단일 보관, `Models(fIdx).rawData`는 unscaled에서 파생되는 view/캐시. scale 변경 시 unscaled에서 재생성. 풀 사본을 유지하지 않는다. |
+| D5 | 새 파일 로드 시 호환성 재검증 | flight data/option 교체 직후 `validateMappedColsAgainstData`, `validatePlotConfigAgainstData` 자동 실행. 깨진 항목은 dialog에 경고 row로 강조하고 해소 전까지 `Apply` 차단, dirty 유지. mapping/plot config reset은 명시적 버튼으로만. |
+| D6 | export verification 강화 | 존재 확인 + 원본/사본 파일 크기 일치 검증. SHA256 비교는 옵션 toggle(기본 off). 실패 시 "부분 폴더 유지/삭제/재시도" 선택 dialog. |
+| D7 | project 파일 version migration | `migrateProjectState(state)` helper 자리 미리 마련. v1→v1은 통과. version 불일치 시 migration 경로가 없으면 오류 dialog. |
+
+### D1 세부
+
+- export 시작 시 대상 AVI 경로 목록 수집.
+- 각 경로에 대해 `app.VideoReaders{fIdx}` 등 열린 핸들이 있으면 `delete` 또는 release 후 `copyfile`.
+- 복사 완료 후 동일 경로로 재오픈하여 원상 복귀.
+- 자기 자신 덮어쓰기 검사: `isequal(normalizeFullPath(src), normalizeFullPath(dst))`이면 사전에 `uialert`로 차단.
+
+### D2 세부
+
+- `app.EditApplyTimer`는 `Period`/`ExecutionMode` 없이 `StartDelay` 기반 single-shot.
+- `markProjectDirtyAndScheduleRefresh`에서 timer가 살아 있으면 `stop` 후 재시작.
+- `CloseRequestFcn` 흐름:
+  1. `stop(app.EditApplyTimer)` 호출.
+  2. pending 변경이 있고 dirty면 `uiconfirm`으로 "적용 후 닫기 / 버리고 닫기 / 취소".
+  3. "적용" 선택 시 `applyPendingDialogChanges()` 동기 호출 후 `delete(dialog)`.
+- main window crash 보호: project file은 dirty 상태에서 N초마다 임시 snapshot(`.fdproj.autosave.json`) 저장. 정상 종료 시 삭제.
+
+### D3 세부
+
+- `PlotConfig(fIdx).Tabs(tabIdx).LinkXWithinTab` 기본값 `true`.
+- 개별 plot X범위 편집 callback에서:
+  1. 해당 tab의 `LinkXWithinTab`을 `false`로 설정.
+  2. tab 헤더 라벨에 `Link off` 표시.
+  3. `linkaxes(allAxes, 'off')` 호출.
+- 사용자는 tab 헤더의 toggle 버튼으로 link를 다시 켤 수 있다. 켤 때 기준 X범위는 현재 활성 plot의 X범위로 통일.
+
+### D4 세부
+
+- `createEmptyModel`에 `rawDataUnscaled` table 필드 추가.
+- 비행데이터 로드 시 원본 그대로 `rawDataUnscaled`에 보관.
+- `rawData`는 매 option Apply 또는 scale 변경 시 `rawDataUnscaled`에서 컬럼별로 scale 곱해 생성.
+- 메모리 사용량은 unscaled 1벌 + 현재 표시용 1벌. unscaled 보관이 부담스러운 경우(향후 데이터 크기 증가 시) `rawData`를 view로 lazy 계산하도록 전환 가능.
+
+### D5 세부
+
+- 검증 함수 출력은 `{ok, brokenMappings, brokenPlots}` 구조.
+- `brokenMappings`: 새 컬럼 셋에 존재하지 않는 매핑 키 목록.
+- `brokenPlots`: 새 컬럼 셋에 존재하지 않는 plot의 Y column 목록.
+- dialog의 Options 탭/Plot Manager 탭에서 해당 row를 빨간색 강조하고 hover 텍스트로 사유 표시.
+- 모든 broken 항목이 해소되기 전까지 `Apply` 비활성. `Reset to default mapping` 버튼은 별도 노출, 클릭 시 확인 dialog.
+
+### D6 세부
+
+- export 직후 `verifyExportedProject`:
+  1. 복사된 project 파일을 read.
+  2. 모든 경로 field에 대해 `exist` 확인.
+  3. 원본/사본 `dir().bytes` 비교.
+  4. SHA256 옵션이 켜져 있으면 `Simulink.getFileChecksum` 또는 `mlreportgen.utils.hash` 또는 직접 streaming MD/SHA 비교.
+- 실패 시 `uiconfirm`으로 "부분 폴더 유지 / 삭제 / 재시도".
+- "재시도"는 실패한 파일만 다시 복사 시도. 3회 누적 실패 시 폴더 유지로 강제.
+
+### D7 세부
+
+- `loadProjectFile` 진입부에서 `state.Version`을 읽고 `migrateProjectState(state)` 호출.
+- `migrateProjectState`는 switch 구조:
+  - v1 → v1: 그대로 반환.
+  - 미래 v2: v1 fields를 v2 schema로 변환.
+- 알 수 없는 version: `uialert`로 오류 표시 후 로드 중단.
+- 모든 migration은 in-memory에서만 수행, 원본 파일은 사용자가 `저장`을 명시할 때만 갱신.
+
