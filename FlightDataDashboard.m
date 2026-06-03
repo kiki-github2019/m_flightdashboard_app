@@ -221,6 +221,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UIFigure.Resize = 'on';
                 end
             catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            try
+                if isprop(app.UIFigure, 'AutoResizeChildren')
+                    app.UIFigure.AutoResizeChildren = 'off';
+                end
+            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
 
             app.createLayout();
             try
@@ -360,9 +365,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
     end
 
     % =========================================================================
-    % 프라이빗 메서드: 파일 로드 및 메인 로직
+    % Callback-accessible methods: 파일 로드 및 메인 로직
     % =========================================================================
-    methods (Access = private)
+    methods (Access = public)
         function handleFlightFile(app, fIdx)
             [filename, pathname] = uigetfile('*.csv', sprintf('비행경로 %d 파일 선택', fIdx));
             if isequal(filename, 0), return; end
@@ -3869,7 +3874,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
     % [Audit fix #1/#2/#8] Modeless Settings/Edit dialog
     % Tabs: Project / Files / Sync / Options / Plot Manager / Export
     % =========================================================================
-    methods (Access = private)
+    methods (Access = public)
         function openEditDialog(app)
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
@@ -5219,7 +5224,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
     % =========================================================================
     % UI 레이아웃 생성 팩토리 (Create Layout)
     % =========================================================================
-    methods (Access = private)
+    methods (Access = public)
         function pos = getInitialWindowPosition(app)
             screen = app.getActiveScreenArea();
             screenW = max(640, screen(3));
