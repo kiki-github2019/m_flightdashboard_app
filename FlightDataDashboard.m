@@ -4044,7 +4044,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             gl.ColumnWidth = {130, 100, 100, 100, 100};
             gl.RowSpacing = 5; gl.Padding = [10 10 10 10];
 
-            uilabel(gl, 'Text', '== Flight 1 ↔ Flight 2 비행시간 sync ==', 'FontWeight', 'bold').Layout.Column = [1 5];
+            lbl = uilabel(gl, 'Text', '== Flight 1 ↔ Flight 2 비행시간 sync ==', 'FontWeight', 'bold');
+            lbl.Layout.Column = [1 5];
             lbl = uilabel(gl, 'Text', 'Flight 1 기준 시간(s):');
             lbl.Tooltip = lbl.Text;
             app.EDSyncF1Time = uieditfield(gl, 'numeric', 'Value', 0);
@@ -4056,7 +4057,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             uibutton(gl, 'Text', '동기 해제', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(false));
             for fIdx = 1:2
-                uilabel(gl, 'Text', sprintf('== Flight %d AVI sync ==', fIdx), 'FontWeight', 'bold').Layout.Column = [1 5];
+                lbl = uilabel(gl, 'Text', sprintf('== Flight %d AVI sync ==', fIdx), 'FontWeight', 'bold');
+                lbl.Layout.Column = [1 5];
                 lbl = uilabel(gl, 'Text', 'Anchor Frame:');
                 lbl.Tooltip = lbl.Text;
                 ef = uieditfield(gl, 'numeric', 'Value', 0, 'Limits', [0 Inf]);
