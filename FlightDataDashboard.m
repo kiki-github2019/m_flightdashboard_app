@@ -489,8 +489,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function UIFigureCloseRequest(app, ~, ~)
             % [Stabilization P2] do not run the close path twice
             if app.IsDeleting, return; end
-            % [Audit fix #6] If we have pending dialog edits or a dirty project,
-            % offer Save+Apply / Discard / Cancel before tearing down resources.
+
+            % [P3] Strict canClose flag. Only delete(app) when ALL save paths succeed
+            % (or the user explicitly chose to discard).
+            canClose = true;
             try
                 pendingTimer = ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
                                && strcmpi(app.EditApplyTimer.Running, 'on');
@@ -512,39 +514,76 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         case '적용 후 저장하고 닫기'
                             if pendingTimer
                                 try, stop(app.EditApplyTimer); catch, end
-                                try, app.applyPendingDialogChanges(); catch, end
-                            end
-                            % Save project file (creates one if none chosen yet)
-                            try
-                                if isempty(app.ProjectFilePath)
-                                    [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, ...
-                                        '저장할 project 파일');
-                                    if ~isequal(fn, 0)
-                                        app.ProjectFilePath = fullfile(pn, fn);
-                                    end
-                                end
-                                if ~isempty(app.ProjectFilePath)
-                                    if app.saveProjectFile(app.ProjectFilePath)
-                                        app.clearProjectAutosave();
-                                    end
-                                end
-                            catch ME, app.logCaught(ME, 'close-save-project'); end
-                            % Persist any option drafts to disk.
-                            for fIdx = 1:2
                                 try
-                                    draft = app.OptionDrafts{fIdx};
-                                    if ~isempty(draft) && isfield(draft, 'sourcePath') ...
-                                            && ~isempty(draft.sourcePath)
-                                        app.writeOptionFileAtomic(draft.sourcePath, draft);
+                                    app.applyPendingDialogChanges();
+                                catch ME
+                                    app.logCaught(ME, 'close-apply');
+                                    cont = '';
+                                    try
+                                        cont = uiconfirm(app.UIFigure, ...
+                                            sprintf('대기 중 편집 적용 실패:\n%s\n계속 닫을까요?', ME.message), ...
+                                            'Apply 실패', ...
+                                            'Options', {'그래도 닫기', '취소'}, ...
+                                            'DefaultOption', 2, 'CancelOption', 2);
+                                    catch
                                     end
-                                catch ME, app.logCaught(ME, 'close-save-option'); end
+                                    if ~strcmp(cont, '그래도 닫기'), canClose = false; return; end
+                                end
+                            end
+                            % --- Project save (must succeed or user aborts) ---
+                            if isempty(app.ProjectFilePath)
+                                [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
+                                if isequal(fn, 0)
+                                    canClose = false; return;     % user cancelled save destination
+                                end
+                                app.ProjectFilePath = fullfile(pn, fn);
+                            end
+                            okSave = false;
+                            try, okSave = app.saveProjectFile(app.ProjectFilePath); catch ME, app.logCaught(ME, 'close-save-project'); end
+                            if ~okSave
+                                try, uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project'); catch, end
+                                canClose = false; return;
+                            end
+                            try, app.clearProjectAutosave(); catch, end
+                            % --- Option drafts (warn on failure, ask whether to proceed) ---
+                            optionFailures = {};
+                            for fIdx = 1:2
+                                draft = app.OptionDrafts{fIdx};
+                                if isempty(draft) || ~isfield(draft, 'sourcePath') ...
+                                        || isempty(draft.sourcePath)
+                                    continue;
+                                end
+                                try
+                                    okOpt = app.writeOptionFileAtomic(draft.sourcePath, draft);
+                                catch ME
+                                    app.logCaught(ME, 'close-save-option');
+                                    okOpt = false;
+                                end
+                                if ~okOpt
+                                    optionFailures{end+1} = draft.sourcePath; %#ok<AGROW>
+                                end
+                            end
+                            if ~isempty(optionFailures)
+                                cont = '';
+                                try
+                                    cont = uiconfirm(app.UIFigure, ...
+                                        sprintf(['다음 option 파일 저장 실패:\n%s\n', ...
+                                                 '그래도 창을 닫을까요?'], strjoin(optionFailures, sprintf('\n'))), ...
+                                        'Option 저장 실패', ...
+                                        'Options', {'그래도 닫기', '취소'}, ...
+                                        'DefaultOption', 2, 'CancelOption', 2);
+                                catch
+                                end
+                                if ~strcmp(cont, '그래도 닫기'), canClose = false; return; end
                             end
                         case '버리고 닫기'
-                            % Stop the autosave timer cleanly without writing.
+                            % Discard path: stop the autosave timer cleanly, do not write.
                             if pendingTimer, try, stop(app.EditApplyTimer); catch, end, end
                     end
                 end
             catch ME, app.logCaught(ME, 'silent'); end
+
+            if ~canClose, return; end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
@@ -663,15 +702,24 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function ok = loadAviFileFromPath(app, fIdx, fullPath, opts)
             % [Audit fix #3 + #4] Path-based AVI load with no file picker.
             % opts.promptOnSync (default false): ask before clearing existing video sync.
+            % opts.preserveSync (default false): keep VideoSyncState across the reload.
+            %                                    Use for project auto-load and export reopen
+            %                                    so restored sync values are not wiped.
             ok = false;
             if nargin < 4 || isempty(opts), opts = struct(); end
             if ~isfield(opts, 'promptOnSync'), opts.promptOnSync = false; end
+            if ~isfield(opts, 'preserveSync'), opts.preserveSync = false; end
             if isempty(fullPath) || ~isfile(fullPath)
                 try, uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video'); catch, end
                 return;
             end
 
-            if opts.promptOnSync
+            % [P1] snapshot sync state before any reset/invalidate so we can restore it.
+            syncSnapshot = app.VideoSyncState(fIdx);
+
+            if opts.preserveSync
+                % Do NOT prompt and do NOT reset; we will restore the snapshot post-load.
+            elseif opts.promptOnSync
                 if ~app.confirmVideoReplace(fIdx), return; end
             elseif app.VideoSyncState(fIdx).IsSynced
                 % Programmatic load: silently reset video sync without prompting.
@@ -697,6 +745,20 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             app.applyVideoLoadedUI(fIdx, vr);
             app.loadFirstFrame(fIdx);
+
+            % [P1] restore the snapshot so AVI sync survives project auto-load / export reopen.
+            % applyVideoLoadedUI sets TotalFrames from the freshly opened reader; keep that one
+            % and only restore the user-defined fields plus IsSynced state.
+            if opts.preserveSync && syncSnapshot.IsSynced
+                newTotal = app.VideoSyncState(fIdx).TotalFrames;
+                app.VideoSyncState(fIdx).IsSynced    = true;
+                app.VideoSyncState(fIdx).AnchorFrame = syncSnapshot.AnchorFrame;
+                app.VideoSyncState(fIdx).AnchorTime  = syncSnapshot.AnchorTime;
+                app.VideoSyncState(fIdx).VideoFps    = syncSnapshot.VideoFps;
+                app.VideoSyncState(fIdx).DataFps     = syncSnapshot.DataFps;
+                if newTotal <= 0, app.VideoSyncState(fIdx).TotalFrames = syncSnapshot.TotalFrames; end
+                try, app.refreshSyncUi(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+            end
             ok = true;
         end
 
@@ -2936,35 +2998,67 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function cfg = capturePlotConfigFromUi(app)
+            % [P4] Capture live UI state WITHOUT destroying identity fields
+            % (YColumn in particular). We match live axes to existing PlotConfigState
+            % entries by (flight, tab, order) and only update display fields
+            % (XLim, YLim, YLimMode, Height, Order, LinkXWithinTab, YLabel).
             cfg = app.ensurePlotConfigShape(app.PlotConfigState);
             for fIdx = 1:2
                 try
                     if ~isfield(app.UI(fIdx), 'plotAxes') || isempty(app.UI(fIdx).plotAxes)
                         continue;
                     end
+                    % Pull existing per-flight tabs so we can preserve identity fields.
+                    if numel(cfg.Flights) >= fIdx && isfield(cfg.Flights(fIdx), 'PlotTabs')
+                        existingTabs = cfg.Flights(fIdx).PlotTabs;
+                    else
+                        existingTabs = [];
+                    end
                     numTabs = numel(app.UI(fIdx).plotAxes);
+                    newTabs = struct('Title', {}, 'LinkXWithinTab', {}, 'Plots', {});
                     for tabIdx = 1:numTabs
                         axesCell = app.UI(fIdx).plotAxes{tabIdx};
                         plots = struct('YColumn', {}, 'YLabel', {}, 'XLim', {}, ...
                                        'YLimMode', {}, 'YLim', {}, 'Height', {}, 'Order', {});
+                        % Existing per-tab plot list for identity lookup.
+                        existingPlots = [];
+                        if ~isempty(existingTabs) && numel(existingTabs) >= tabIdx ...
+                                && isfield(existingTabs(tabIdx), 'Plots')
+                            existingPlots = existingTabs(tabIdx).Plots;
+                        end
                         if iscell(axesCell)
                             for p = 1:numel(axesCell)
                                 ax = axesCell{p};
                                 if isempty(ax) || ~isvalid(ax), continue; end
                                 ylabStr = '';
                                 try, ylabStr = char(ax.YLabel.String); catch, end
-                                plots(end+1) = struct('YColumn', '', 'YLabel', ylabStr, ...
+                                % [P4] preserve YColumn if a corresponding existing entry has one.
+                                yColumn = '';
+                                if ~isempty(existingPlots) && numel(existingPlots) >= p ...
+                                        && isfield(existingPlots(p), 'YColumn') ...
+                                        && ~isempty(existingPlots(p).YColumn)
+                                    yColumn = char(existingPlots(p).YColumn);
+                                end
+                                % Inherit Height from existing entry when possible.
+                                heightVal = app.PLOT_ROW_HEIGHT;
+                                if ~isempty(existingPlots) && numel(existingPlots) >= p ...
+                                        && isfield(existingPlots(p), 'Height') ...
+                                        && ~isempty(existingPlots(p).Height)
+                                    heightVal = existingPlots(p).Height;
+                                end
+                                plots(end+1) = struct('YColumn', yColumn, 'YLabel', ylabStr, ...
                                     'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
-                                    'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT, ...
+                                    'YLim', ax.YLim, 'Height', heightVal, ...
                                     'Order', p); %#ok<AGROW>
                             end
                         end
                         titleStr = sprintf('Tab %d', tabIdx);
                         try, titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title); catch, end
                         link = app.getLinkXWithinTab(fIdx, tabIdx);
-                        cfg.Flights(fIdx).PlotTabs(tabIdx) = struct( ...
-                            'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots);
+                        newTabs(tabIdx) = struct( ...
+                            'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots); %#ok<AGROW>
                     end
+                    cfg.Flights(fIdx).PlotTabs = newTabs;
                 catch ME, app.logCaught(ME, 'silent'); end
             end
             app.PlotConfigState = cfg;
@@ -3080,6 +3174,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
             mkdir(target);
 
+            % [P4] capture live plot UI state so exported project carries current XLim/YLim.
+            try, app.capturePlotConfigFromUi(); catch ME_pc, app.logCaught(ME_pc, 'silent'); end
             st = app.collectCurrentProjectState();
             [fileList, missingList] = app.buildExportFileList(st);
 
@@ -3288,6 +3384,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function reopenReleasedAvis(app, flights)
+            % [P2] preserveSync=true so export reopen does not disturb dashboard sync state.
             for k = 1:numel(flights)
                 fIdx = flights(k);
                 p = app.Models(fIdx).aviFilePath;
@@ -3296,7 +3393,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
                 if isempty(p) || ~isfile(p), continue; end
                 try
-                    app.loadAviFileFromPath(fIdx, p, struct('promptOnSync', false));
+                    app.loadAviFileFromPath(fIdx, p, ...
+                        struct('promptOnSync', false, 'preserveSync', true));
                 catch ME, app.logCaught(ME, 'silent'); end
             end
         end
@@ -3600,7 +3698,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     advance(stepBase(fIdx, 3), sprintf('Flight %d AVI 메타데이터 로드 중', fIdx));
                     if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
                         try
-                            app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false));
+                            % [P1] preserveSync=true so restored AVI sync survives auto-load.
+                            app.loadAviFileFromPath(fIdx, m.aviFilePath, ...
+                                struct('promptOnSync', false, 'preserveSync', true));
                         catch ME, app.logCaught(ME, 'auto-load-avi'); end
                     elseif ~isempty(m.aviFilePath)
                         app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
@@ -3990,8 +4090,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 'CellEditCallback', @(src, evt) app.onOptionDraftEdit('req', src, evt));
             app.EDOptReqTable.Position = [10 10 900 280];
 
+            % [P5] Visible column removed (was not enforced anywhere). 5 editable columns now.
             app.EDOptDspTable = uitable(tabDsp, 'Data', table(), ...
-                'ColumnEditable', [true true true true true true], ...
+                'ColumnEditable', [true true true true true], ...
                 'CellEditCallback', @(src, evt) app.onOptionDraftEdit('dsp', src, evt));
             app.EDOptDspTable.Position = [10 10 900 280];
 
@@ -4167,7 +4268,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isvalid(app.EDOptDspTable)
                     n = numel(draft.displayMeta);
                     headers = cell(n,1); units = cell(n,1); fmts = cell(n,1);
-                    orders = zeros(n,1); scales = ones(n,1); visible = true(n,1);
+                    orders = zeros(n,1); scales = ones(n,1);
                     for r = 1:n
                         headers{r} = char(draft.displayMeta(r).header);
                         units{r}   = char(draft.displayMeta(r).unit);
@@ -4175,8 +4276,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         orders(r)  = draft.displayMeta(r).order;
                         scales(r)  = draft.displayMeta(r).scale;
                     end
-                    app.EDOptDspTable.Data = table(visible, headers, units, fmts, orders, scales, ...
-                        'VariableNames', {'Visible', 'Header', 'Unit', 'Format', 'Order', 'Scale'});
+                    % [P5] Visible column removed.
+                    app.EDOptDspTable.Data = table(headers, units, fmts, orders, scales, ...
+                        'VariableNames', {'Header', 'Unit', 'Format', 'Order', 'Scale'});
                 end
             catch ME, app.logCaught(ME, 'silent'); end
         end
@@ -6135,6 +6237,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
             if isempty(filePath), return; end
             try
+                % [P4] capture live plot UI state right before persistence so the saved
+                % project reflects current XLim/YLim/YLimMode without losing YColumn.
+                try, app.capturePlotConfigFromUi(); catch ME, app.logCaught(ME, 'silent'); end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
                 tmp = [filePath '.tmp'];
@@ -6168,6 +6273,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     base = app.ProjectFilePath;
                 end
                 autoPath = [base '.autosave.json'];
+                % [P4] autosave the live plot UI state too.
+                try, app.capturePlotConfigFromUi(); catch ME_pc, app.logCaught(ME_pc, 'silent'); end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
                 fid = fopen(autoPath, 'w');
