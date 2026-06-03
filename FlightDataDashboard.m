@@ -5807,7 +5807,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if fIdx == 1, tblBgColor = [0.23 0.51 0.96]; else, tblBgColor = [0.31 0.27 0.90]; end
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
                                              'RowStriping', 'off', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
-                                             'ColumnWidth', {'1.45x', '1x'}, 'FontSize', 11, 'FontName', 'Consolas');
+                                             'ColumnWidth', {'29x', '20x'}, 'FontSize', 11, 'FontName', 'Consolas');
                 cm = uicontextmenu(app.UIFigure);
                 uimenu(cm, 'Text', 'H 영역에 Plot 추가 (현재 탭)', 'MenuSelectedFcn', @(~,~) app.plotSelectedVariable(fIdx));
                 UI_temp(fIdx).dataTable.ContextMenu = cm;
