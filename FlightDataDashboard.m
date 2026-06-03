@@ -5352,6 +5352,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         if ~app.UI(fIdx).PanelVisible.map, widths{2} = 0; end
                         if ~app.UI(fIdx).PanelVisible.video, widths{6} = 0; end
                     end
+                    activeOff = find(app.BoardOffState, 1);
+                    if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
+                        widths{3} = 0;
+                        widths{4} = 0;
+                        widths{5} = 0;
+                    end
 
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
                     app.UI(fIdx).dataGrid.Scrollable = 'on';
@@ -5692,14 +5698,18 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
                     return;
                 end
+                sourceIdx = app.getBoardOffSourceIdx(fIdx);
 
                 if app.BoardOffState(fIdx)
                     app.BoardOffState(fIdx) = false;
-                    app.restoreBoardPanelState(fIdx);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, false);
                     end
-                    app.applyResponsiveLayout();
+                    app.restoreBoardPanelState(fIdx);
+                    app.restoreBoardPanelState(sourceIdx);
+                    if isfield(app.UI(fIdx), 'boardOffSignature')
+                        app.UI(fIdx).boardOffSignature = '';
+                    end
                 else
                     otherIdx = 3 - fIdx;
                     if otherIdx >= 1 && otherIdx <= numel(app.BoardOffState) && app.BoardOffState(otherIdx)
@@ -5707,11 +5717,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         return;
                     end
                     app.captureBoardPanelState(fIdx);
+                    app.captureBoardPanelState(sourceIdx);
                     app.BoardOffState(fIdx) = true;
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
                     end
+                    app.hideBoardInfoPlotColumns(sourceIdx);
                     app.refreshBoardOffSummaryPanel(fIdx, true);
                 end
 
@@ -5720,6 +5732,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             catch ME
                 app.logCaught(ME, 'boardToggle');
             end
+        end
+
+        function sourceIdx = getBoardOffSourceIdx(~, offIdx)
+            sourceIdx = 3 - offIdx;
         end
 
         function captureBoardPanelState(app, fIdx)
@@ -5764,6 +5780,25 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
+        function hideBoardInfoPlotColumns(app, fIdx)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ...
+                        ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ...
+                        ~isvalid(app.UI(fIdx).dataGrid)
+                    return;
+                end
+                widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                if numel(widths) >= 5
+                    widths{3} = 0;  % current flight info
+                    widths{4} = 0;  % H data-view panel
+                    widths{5} = 0;  % H/I splitter
+                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                end
+            catch ME
+                app.logCaught(ME, 'boardHideMovedColumns');
+            end
+        end
+
         function updateBoardToggleButtons(app)
             labelsOff = {'상단 보드 off', '하단 보드 off'};
             labelsOn  = {'상단 보드 on', '하단 보드 on'};
@@ -5797,26 +5832,41 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
             if nargin < 3, forceRebuild = false; end
             try
-                if isempty(app.UI) || fIdx > numel(app.UI) || ~app.BoardOffState(fIdx)
+                if isempty(app.UI) || fIdx > numel(app.UI)
                     return;
                 end
+                if ~app.BoardOffState(fIdx)
+                    otherIdx = app.getBoardOffSourceIdx(fIdx);
+                    if otherIdx >= 1 && otherIdx <= numel(app.BoardOffState) && app.BoardOffState(otherIdx)
+                        app.refreshBoardOffSummaryPanel(otherIdx, forceRebuild);
+                    end
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(fIdx);
+                if sourceIdx < 1 || sourceIdx > numel(app.UI), return; end
                 if ~isfield(app.UI(fIdx), 'boardOffPanel') || isempty(app.UI(fIdx).boardOffPanel) || ...
                         ~isvalid(app.UI(fIdx).boardOffPanel)
                     return;
                 end
+                try
+                    app.UI(fIdx).boardOffPanel.Title = sprintf( ...
+                        'Flight Data %d - Board Off Summary (Flight Data %d info)', fIdx, sourceIdx);
+                catch
+                end
+                app.hideBoardInfoPlotColumns(sourceIdx);
 
-                if isfield(app.UI(fIdx), 'dataTable') && ~isempty(app.UI(fIdx).dataTable) && ...
-                        isvalid(app.UI(fIdx).dataTable) && isfield(app.UI(fIdx), 'boardOffTable') && ...
+                if isfield(app.UI(sourceIdx), 'dataTable') && ~isempty(app.UI(sourceIdx).dataTable) && ...
+                        isvalid(app.UI(sourceIdx).dataTable) && isfield(app.UI(fIdx), 'boardOffTable') && ...
                         ~isempty(app.UI(fIdx).boardOffTable) && isvalid(app.UI(fIdx).boardOffTable)
-                    app.UI(fIdx).boardOffTable.Data = app.UI(fIdx).dataTable.Data;
+                    app.UI(fIdx).boardOffTable.Data = app.UI(sourceIdx).dataTable.Data;
                 end
 
-                sig = app.getBoardOffPlotSignature(fIdx);
+                sig = app.getBoardOffPlotSignature(sourceIdx);
                 if forceRebuild || ~strcmp(sig, app.UI(fIdx).boardOffSignature)
-                    app.rebuildBoardOffPlots(fIdx);
+                    app.rebuildBoardOffPlots(fIdx, sourceIdx);
                     app.UI(fIdx).boardOffSignature = sig;
                 else
-                    app.syncBoardOffPlotMarkers(fIdx);
+                    app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
                 end
             catch ME
                 app.logCaught(ME, 'boardSummary');
@@ -5865,7 +5915,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
-        function rebuildBoardOffPlots(app, fIdx)
+        function rebuildBoardOffPlots(app, fIdx, sourceIdx)
+            if nargin < 3, sourceIdx = app.getBoardOffSourceIdx(fIdx); end
             try
                 tg = app.UI(fIdx).boardOffTabGroup;
                 if isempty(tg) || ~isvalid(tg), return; end
@@ -5878,7 +5929,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.UI(fIdx).boardOffTimeMarkers = cell(1, app.MAX_TABS);
                 app.UI(fIdx).boardOffPlotData = cell(1, app.MAX_TABS);
 
-                sourceTabs = app.UI(fIdx).plotTabs;
+                sourceTabs = app.UI(sourceIdx).plotTabs;
                 if isempty(sourceTabs)
                     app.createEmptyBoardOffTab(fIdx, tg, 'Tab 1');
                     return;
@@ -5887,16 +5938,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 timeData = [];
                 currIdx = 1;
                 currTime = 0;
-                if ~isempty(app.Models(fIdx).rawData)
-                    currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
-                    timeCol = app.Models(fIdx).mappedCols.Time;
-                    timeData = app.Models(fIdx).rawData.(timeCol);
+                if ~isempty(app.Models(sourceIdx).rawData)
+                    currIdx = max(1, min(app.Models(sourceIdx).currentIndex, height(app.Models(sourceIdx).rawData)));
+                    timeCol = app.Models(sourceIdx).mappedCols.Time;
+                    timeData = app.Models(sourceIdx).rawData.(timeCol);
                     currTime = timeData(currIdx);
                 end
 
                 selectedIdx = 1;
                 try
-                    tmpIdx = find(sourceTabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
+                    tmpIdx = find(sourceTabs == app.UI(sourceIdx).tabGroup.SelectedTab, 1);
                     if ~isempty(tmpIdx), selectedIdx = tmpIdx; end
                 catch
                 end
@@ -5915,8 +5966,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UI(fIdx).boardOffPlotData{tIdx} = {};
 
                     plotCount = 0;
-                    if tIdx <= numel(app.UI(fIdx).plotData) && ~isempty(app.UI(fIdx).plotData{tIdx})
-                        plotCount = numel(app.UI(fIdx).plotData{tIdx});
+                    if tIdx <= numel(app.UI(sourceIdx).plotData) && ~isempty(app.UI(sourceIdx).plotData{tIdx})
+                        plotCount = numel(app.UI(sourceIdx).plotData{tIdx});
                     end
                     if plotCount == 0
                         plotLayout.RowHeight = {'1x'};
@@ -5926,7 +5977,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
 
                     for pIdx = 1:plotCount
-                        yData = app.UI(fIdx).plotData{tIdx}{pIdx};
+                        yData = app.UI(sourceIdx).plotData{tIdx}{pIdx};
                         if isempty(timeData)
                             xData = 1:numel(yData);
                             currX = min(currIdx, numel(xData));
@@ -5951,7 +6002,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
                         yLabelStr = '';
                         try
-                            srcAx = app.UI(fIdx).plotAxes{tIdx}{pIdx};
+                            srcAx = app.UI(sourceIdx).plotAxes{tIdx}{pIdx};
                             if ~isempty(srcAx) && isvalid(srcAx)
                                 yLabelStr = char(srcAx.YLabel.String);
                                 ax.XLim = srcAx.XLim;
@@ -5984,7 +6035,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if selectedIdx <= numel(app.UI(fIdx).boardOffPlotTabs)
                     try, tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx); catch, end
                 end
-                app.syncBoardOffPlotMarkers(fIdx);
+                app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
             catch ME
                 app.logCaught(ME, 'boardRebuild');
             end
@@ -5998,12 +6049,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
         end
 
-        function syncBoardOffPlotMarkers(app, fIdx)
+        function syncBoardOffPlotMarkers(app, fIdx, sourceIdx)
+            if nargin < 3, sourceIdx = app.getBoardOffSourceIdx(fIdx); end
             try
-                if isempty(app.Models(fIdx).rawData), return; end
-                currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
-                timeCol = app.Models(fIdx).mappedCols.Time;
-                times = app.Models(fIdx).rawData.(timeCol);
+                if isempty(app.Models(sourceIdx).rawData), return; end
+                currIdx = max(1, min(app.Models(sourceIdx).currentIndex, height(app.Models(sourceIdx).rawData)));
+                timeCol = app.Models(sourceIdx).mappedCols.Time;
+                times = app.Models(sourceIdx).rawData.(timeCol);
                 currTime = times(currIdx);
                 for tIdx = 1:min(numel(app.UI(fIdx).boardOffTimeLines), numel(app.UI(fIdx).boardOffPlotData))
                     if isempty(app.UI(fIdx).boardOffTimeLines{tIdx}), continue; end
@@ -6017,9 +6069,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 markerIdx = max(1, min(currIdx, numel(yData)));
                                 set(mk, 'XData', currTime, 'YData', yData(markerIdx));
                             end
-                            if tIdx <= numel(app.UI(fIdx).plotAxes) && pIdx <= numel(app.UI(fIdx).plotAxes{tIdx}) && ...
+                            if tIdx <= numel(app.UI(sourceIdx).plotAxes) && pIdx <= numel(app.UI(sourceIdx).plotAxes{tIdx}) && ...
                                     pIdx <= numel(app.UI(fIdx).boardOffPlotAxes{tIdx})
-                                srcAx = app.UI(fIdx).plotAxes{tIdx}{pIdx};
+                                srcAx = app.UI(sourceIdx).plotAxes{tIdx}{pIdx};
                                 dstAx = app.UI(fIdx).boardOffPlotAxes{tIdx}{pIdx};
                                 if ~isempty(srcAx) && isvalid(srcAx) && ~isempty(dstAx) && isvalid(dstAx)
                                     dstAx.XLim = srcAx.XLim;
