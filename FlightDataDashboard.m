@@ -4365,10 +4365,159 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     try
                         if ~isempty(app.Models(fIdx).rawData) && height(app.Models(fIdx).rawData) > 0
                             app.setupDataUI(fIdx);
+                            app.refreshSyncUi(fIdx);
                         end
                     catch ME, app.logCaught(ME, 'silent'); end
                 end
                 app.LastEditApplyTime = datetime('now');
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        % =================================================================
+        % [Phase 3] Programmatic sync setters (consumed by future Sync tab).
+        % These reuse the existing UI refresh paths so the main window stays
+        % consistent regardless of who initiated the change.
+        % =================================================================
+        function setFlightDataSync(app, syncT1, syncT2, enabled)
+            if nargin < 4, enabled = true; end
+            if ~enabled
+                app.SyncState.IsSynced = false;
+                try
+                    if ~isempty(app.SyncBtn) && isvalid(app.SyncBtn)
+                        app.SyncBtn.Text = '비행시간 동기';
+                        app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
+                    end
+                    if ~isempty(app.SyncInput) && isvalid(app.SyncInput)
+                        app.SyncInput.Enable = 'on';
+                    end
+                    if numel(app.UI) >= 2 && isfield(app.UI(2), 'spinner') ...
+                            && ~isempty(app.UI(2).spinner) && isvalid(app.UI(2).spinner) ...
+                            && ~isempty(app.Models(2).rawData)
+                        app.UI(2).spinner.Enable = 'on';
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+                app.markProjectDirtyAndScheduleRefresh('flight-sync-off');
+                return;
+            end
+            if isempty(app.Models(1).rawData) || isempty(app.Models(2).rawData)
+                try, uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync'); catch, end
+                return;
+            end
+            app.SyncState.SyncT1   = double(syncT1);
+            app.SyncState.SyncT2   = double(syncT2);
+            app.SyncState.IsSynced = true;
+            try
+                if ~isempty(app.SyncBtn) && isvalid(app.SyncBtn)
+                    app.SyncBtn.Text = '비행시간 동기 해제';
+                    app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
+                end
+                if ~isempty(app.SyncInput) && isvalid(app.SyncInput)
+                    app.SyncInput.Value  = sprintf('%g, %g', syncT1, syncT2);
+                    app.SyncInput.Enable = 'off';
+                end
+                if numel(app.UI) >= 2 && isfield(app.UI(2), 'spinner') ...
+                        && ~isempty(app.UI(2).spinner) && isvalid(app.UI(2).spinner)
+                    app.UI(2).spinner.Enable = 'off';
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            try
+                timeCol1 = app.Models(1).mappedCols.Time;
+                idx1 = app.findClosestIndexByTime(app.Models(1).rawData.(timeCol1), syncT1);
+                app.applyTimeChange(1, idx1);
+            catch ME, app.logCaught(ME, 'silent'); end
+            app.markProjectDirtyAndScheduleRefresh('flight-sync-on');
+        end
+
+        function setVideoSync(app, fIdx, anchorFrame, anchorTime, videoFps, dataFps, enabled)
+            if nargin < 7, enabled = true; end
+            if ~enabled
+                app.resetVideoSync(fIdx);
+                app.markProjectDirtyAndScheduleRefresh('video-sync-off');
+                return;
+            end
+            if isempty(app.VideoState(fIdx).videoReader)
+                try, uialert(app.UIFigure, '먼저 AVI 파일을 로드하세요.', 'Sync'); catch, end
+                return;
+            end
+            if isempty(app.Models(fIdx).rawData)
+                try, uialert(app.UIFigure, '먼저 비행데이터를 로드하세요.', 'Sync'); catch, end
+                return;
+            end
+            if ~isnumeric(videoFps) || videoFps < 1 || ~isnumeric(dataFps) || dataFps < 1
+                try, uialert(app.UIFigure, 'Hz 값은 1 이상이어야 합니다.', 'Sync'); catch, end
+                return;
+            end
+            totalFrames = app.VideoSyncState(fIdx).TotalFrames;
+            if anchorFrame < 1 || (totalFrames > 0 && anchorFrame > totalFrames)
+                try, uialert(app.UIFigure, sprintf('Frame은 1~%d 범위여야 합니다.', totalFrames), 'Sync'); catch, end
+                return;
+            end
+            app.VideoSyncState(fIdx).AnchorFrame = double(anchorFrame);
+            app.VideoSyncState(fIdx).AnchorTime  = double(anchorTime);
+            app.VideoSyncState(fIdx).VideoFps    = double(videoFps);
+            app.VideoSyncState(fIdx).DataFps     = double(dataFps);
+            app.VideoSyncState(fIdx).IsSynced    = true;
+            % Push the same Hz/anchor values into the live spinners if present.
+            try
+                if isfield(app.UI(fIdx), 'vidSyncFrameInput') && ~isempty(app.UI(fIdx).vidSyncFrameInput) ...
+                        && isvalid(app.UI(fIdx).vidSyncFrameInput)
+                    app.UI(fIdx).vidSyncFrameInput.Value = double(anchorFrame);
+                end
+                if isfield(app.UI(fIdx), 'vidSyncTimeInput') && ~isempty(app.UI(fIdx).vidSyncTimeInput) ...
+                        && isvalid(app.UI(fIdx).vidSyncTimeInput)
+                    app.UI(fIdx).vidSyncTimeInput.Value = double(anchorTime);
+                end
+                if isfield(app.UI(fIdx), 'vidVideoFpsInput') && ~isempty(app.UI(fIdx).vidVideoFpsInput) ...
+                        && isvalid(app.UI(fIdx).vidVideoFpsInput)
+                    app.UI(fIdx).vidVideoFpsInput.Value = double(videoFps);
+                end
+                if isfield(app.UI(fIdx), 'vidDataFpsInput') && ~isempty(app.UI(fIdx).vidDataFpsInput) ...
+                        && isvalid(app.UI(fIdx).vidDataFpsInput)
+                    app.UI(fIdx).vidDataFpsInput.Value = double(dataFps);
+                end
+                if isfield(app.UI(fIdx), 'vidSyncBtn') && ~isempty(app.UI(fIdx).vidSyncBtn) ...
+                        && isvalid(app.UI(fIdx).vidSyncBtn)
+                    app.UI(fIdx).vidSyncBtn.Text = '동기 해제';
+                    app.UI(fIdx).vidSyncBtn.BackgroundColor = [0.8 0.2 0.2];
+                end
+                if isfield(app.UI(fIdx), 'vidSyncStatus') && ~isempty(app.UI(fIdx).vidSyncStatus) ...
+                        && isvalid(app.UI(fIdx).vidSyncStatus)
+                    app.UI(fIdx).vidSyncStatus.Text = sprintf('동기 완료 (frame %d ↔ %.3fs)', ...
+                        double(anchorFrame), double(anchorTime));
+                    app.UI(fIdx).vidSyncStatus.FontColor = [0.0 0.5 0.0];
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+            app.refreshSyncUi(fIdx);
+            app.markProjectDirtyAndScheduleRefresh('video-sync-on');
+        end
+
+        function refreshSyncUi(app, fIdx)
+            % Push current VideoSyncState into spinners/labels without firing callbacks.
+            try
+                vss = app.VideoSyncState(fIdx);
+                if isfield(app.UI(fIdx), 'vidVideoFpsInput') && ~isempty(app.UI(fIdx).vidVideoFpsInput) ...
+                        && isvalid(app.UI(fIdx).vidVideoFpsInput) && vss.VideoFps > 0
+                    if app.UI(fIdx).vidVideoFpsInput.Value ~= vss.VideoFps
+                        app.UI(fIdx).vidVideoFpsInput.Value = vss.VideoFps;
+                    end
+                end
+                if isfield(app.UI(fIdx), 'vidDataFpsInput') && ~isempty(app.UI(fIdx).vidDataFpsInput) ...
+                        && isvalid(app.UI(fIdx).vidDataFpsInput) && vss.DataFps > 0
+                    if app.UI(fIdx).vidDataFpsInput.Value ~= vss.DataFps
+                        app.UI(fIdx).vidDataFpsInput.Value = vss.DataFps;
+                    end
+                end
+                if isfield(app.UI(fIdx), 'vidSyncStatus') && ~isempty(app.UI(fIdx).vidSyncStatus) ...
+                        && isvalid(app.UI(fIdx).vidSyncStatus)
+                    if vss.IsSynced
+                        app.UI(fIdx).vidSyncStatus.Text = sprintf('동기 완료 (frame %d ↔ %.3fs)', ...
+                            double(vss.AnchorFrame), double(vss.AnchorTime));
+                        app.UI(fIdx).vidSyncStatus.FontColor = [0.0 0.5 0.0];
+                    else
+                        app.UI(fIdx).vidSyncStatus.Text = '동기 미설정';
+                        app.UI(fIdx).vidSyncStatus.FontColor = [0.5 0.5 0.5];
+                    end
+                end
             catch ME, app.logCaught(ME, 'silent'); end
         end
     end
