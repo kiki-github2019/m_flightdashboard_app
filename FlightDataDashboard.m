@@ -1,4 +1,4 @@
-classdef FlightDataDashboard < matlab.apps.AppBase
+﻿classdef FlightDataDashboard < matlab.apps.AppBase
     % =========================================================================
     % 비행 데이터 리뷰 대시보드 - V3.22 (리팩토링: 모듈 분해 + 캐시 자료구조 개선)
     % 설명:
@@ -220,17 +220,23 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isprop(app.UIFigure, 'Resize')
                     app.UIFigure.Resize = 'on';
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
             try
                 if isprop(app.UIFigure, 'AutoResizeChildren')
                     app.UIFigure.AutoResizeChildren = 'off';
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
 
             app.createLayout();
             try
                 app.UIFigure.SizeChangedFcn = @(~,~) app.onFigureSizeChanged();
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
             app.applyResponsiveLayout();
 
             for i = 1:2
@@ -252,20 +258,26 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                            ~isempty(app.UI(fIdx).vidControlDialog) && isvalid(app.UI(fIdx).vidControlDialog)
                             delete(app.UI(fIdx).vidControlDialog);
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                     % VideoReader 정리
                     try
                         if ~isempty(app.VideoState(fIdx).videoReader) && ...
                            isvalid(app.VideoState(fIdx).videoReader)
                             delete(app.VideoState(fIdx).videoReader);
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                     % 진행 중 비동기 future 취소
                     try
                         if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
                             cancel(app.AsyncFutures{fIdx});
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                 end
                 % 캐시 비우기 (메모리 즉시 해제)
                 app.FrameCache = {{}, {}};
@@ -276,42 +288,60 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.CacheBytesUsed = [0, 0];
                 app.AsyncGen = [0, 0];   % [V3.21 #1-A] generation reset
                 app.LastDisplayedFrame = [0, 0];   % [PATCH] 조기반환 키 리셋
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % [PATCH / V3.22 #6] 워커 persistent VR 명시 해제 → 파일락 즉시 반환
             try
                 if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
                     parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % [Phase 1 D2] stop debounce + autosave timers before tearing down UI
             try
                 if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer)
-                    try, stop(app.EditApplyTimer); catch, end %#ok<NOCOM>
+                    try
+                        stop(app.EditApplyTimer)
+                    catch
+                    end
                     delete(app.EditApplyTimer);
                     app.EditApplyTimer = [];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
-                    try, stop(app.AutosaveTimer); catch, end %#ok<NOCOM>
+                    try
+                        stop(app.AutosaveTimer)
+                    catch
+                    end
                     delete(app.AutosaveTimer);
                     app.AutosaveTimer = [];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     delete(app.EditDialog);
                     app.EditDialog = [];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     delete(app.UIFigure);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function model = createEmptyModel(~)
@@ -415,7 +445,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             end
                         end
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
                 app.setupDataUI(fIdx);
 
                 % [수정 2] 비행 데이터 파싱 후, 이미 영상이 열려있다면 Video FPS 강제 재계산
@@ -439,7 +471,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             catch e
                 try
                     if ~isempty(d) && isvalid(d), close(d); end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
                 % [V3.20 (3)] 상세 에러 로그
                 if app.DebugMode
                     fprintf('[Flight] parse failed: %s\n  %s\n  stack: %s\n', ...
@@ -506,7 +540,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if app.ProjectDirty || pendingTimer
                     try
                         sel = uiconfirm(app.UIFigure, ...
-                            ['저장되지 않은 편집 사항이 있습니다.', sprintf('\n'), ...
+                            ['저장되지 않은 편집 사항이 있습니다.', newline, ...
                              'project / option 파일을 저장하고 닫을까요?'], ...
                             '저장되지 않은 변경사항', ...
                             'Options', {'적용 후 저장하고 닫기', '버리고 닫기', '취소'}, ...
@@ -519,7 +553,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             return;
                         case '적용 후 저장하고 닫기'
                             if pendingTimer
-                                try, stop(app.EditApplyTimer); catch, end
+                                try
+                                    stop(app.EditApplyTimer)
+                                catch
+                                end
                                 try
                                     app.applyPendingDialogChanges();
                                 catch ME
@@ -545,12 +582,22 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 app.ProjectFilePath = fullfile(pn, fn);
                             end
                             okSave = false;
-                            try, okSave = app.saveProjectFile(app.ProjectFilePath); catch ME, app.logCaught(ME, 'close-save-project'); end
+                            try
+                                okSave = app.saveProjectFile(app.ProjectFilePath)
+                            catch ME
+                                app.logCaught(ME, 'close-save-project')
+                            end
                             if ~okSave
-                                try, uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project'); catch, end
+                                try
+                                    uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project')
+                                catch
+                                end
                                 return;
                             end
-                            try, app.clearProjectAutosave(); catch, end
+                            try
+                                app.clearProjectAutosave()
+                            catch
+                            end
                             % --- Option drafts (warn on failure, ask whether to proceed) ---
                             optionFailures = {};
                             for fIdx = 1:2
@@ -573,7 +620,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 try
                                     cont = uiconfirm(app.UIFigure, ...
                                         sprintf(['다음 option 파일 저장 실패:\n%s\n', ...
-                                                 '그래도 창을 닫을까요?'], strjoin(optionFailures, sprintf('\n'))), ...
+                                                 '그래도 창을 닫을까요?'], strjoin(optionFailures, newline)), ...
                                         'Option 저장 실패', ...
                                         'Options', {'그래도 닫기', '취소'}, ...
                                         'DefaultOption', 2, 'CancelOption', 2);
@@ -584,17 +631,26 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             end
                         case '버리고 닫기'
                             % Discard path: stop the autosave timer cleanly, do not write.
-                            if pendingTimer, try, stop(app.EditApplyTimer); catch, end, end
+                            if pendingTimer
+                                try
+                                    stop(app.EditApplyTimer);
+                                catch
+                                end
+                            end
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     app.UIFigure.WindowButtonMotionFcn = '';
                     app.UIFigure.WindowButtonUpFcn = '';
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
             delete(app);
         end
 
@@ -716,7 +772,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             if ~isfield(opts, 'promptOnSync'), opts.promptOnSync = false; end
             if ~isfield(opts, 'preserveSync'), opts.preserveSync = false; end
             if isempty(fullPath) || ~isfile(fullPath)
-                try, uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video')
+                catch
+                end
                 return;
             end
 
@@ -763,7 +822,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.VideoSyncState(fIdx).VideoFps    = syncSnapshot.VideoFps;
                 app.VideoSyncState(fIdx).DataFps     = syncSnapshot.DataFps;
                 if newTotal <= 0, app.VideoSyncState(fIdx).TotalFrames = syncSnapshot.TotalFrames; end
-                try, app.refreshSyncUi(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+                try
+                    app.refreshSyncUi(fIdx)
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             ok = true;
         end
@@ -819,13 +882,17 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                    isvalid(app.VideoState(fIdx).videoReader)
                     delete(app.VideoState(fIdx).videoReader);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
                     cancel(app.AsyncFutures{fIdx});
                     app.AsyncFutures{fIdx} = [];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         % [V3.22 #3-5] VideoReader 생성 (실패 시 errordlg + [] 반환)
@@ -843,7 +910,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     fprintf('[Video] loaded: %s (fIdx=%d)\n', fname, fIdx);
                 end
             catch e
-                vr = [];
                 if app.DebugMode
                     fprintf('[Video] load failed: %s\n  %s\n', fullPath, e.message);
                 end
@@ -933,7 +999,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         end
                     end
                 end
-            catch ME, app.logCaught(ME, 'Video:vfrCheck'); end
+            catch ME
+                app.logCaught(ME, 'Video:vfrCheck')
+            end
         end
 
         % [V3.22 #3-8] 첫 프레임을 정확히 디코딩하여 표시 + 캐시 저장
@@ -947,7 +1015,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if hasFrame(app.VideoState(fIdx).videoReader)
                         firstFrame = readFrame(app.VideoState(fIdx).videoReader);
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
             end
 
             if ~isempty(firstFrame)
@@ -967,7 +1037,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 end
                 app.setVideoDisplaySize(fIdx);
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.14 항목 3] 동적 캐시 크기 계산: 해상도 + 사용자 예산 기반
@@ -1035,7 +1107,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if app.DebugMode
                     fprintf('[Cache] Budget changed to %d MB\n', budgetMB);
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.15 항목 5-3] DebugMode GUI 체크박스 콜백
@@ -1043,7 +1117,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             try
                 app.DebugMode = logical(val);
                 fprintf('[Debug] DebugMode = %s\n', mat2str(app.DebugMode));
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.14 항목 5] VideoReader 유효성 검사 헬퍼 (일관성 있는 가드)
@@ -1073,7 +1149,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     sld.MajorTickLabels = arrayfun(@num2str, ticks, 'UniformOutput', false); % 지수 표기 방지
                     sld.MinorTicks = [];
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.14 VirtualDub UI] Frame N / Total (HH:MM:SS.mmm) 라벨 갱신
@@ -1103,7 +1181,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 app.UI(fIdx).vidVdubLabel.Text = sprintf('Frame %d / %d  (%02d:%02d:%02d.%03d)', ...
                     frameNo, total, hh, mm, ss, ms);
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.15 항목 2 / V3.16 / V3.17 (1)(9)] goToFrame() - 단일 공식 진입점
@@ -1124,7 +1204,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             app.InGoToFrame(fIdx) = true;
             app.State = 'UPDATING';
-            cleanupObj = onCleanup(@() app.clearGoToFrameFlag(fIdx)); %#ok<NASGU>
+            cleanupObj = onCleanup(@() app.clearGoToFrameFlag(fIdx));
 
             % 핵심 처리 루프 (coalescing 지원)
             app.processFrameInternal(fIdx, frameNo, mode);
@@ -1211,7 +1291,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         end
                         app.DraggedFromVideo = false;
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
             end
             app.refreshBoardOffSummaryPanel(fIdx);
         end
@@ -1240,7 +1322,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     % final 모드 1회 강제 호출로 전체 동기화 보장
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
                         app.IsUpdating(fIdx) = true;
-                        try, app.updateDashboard(fIdx, app.Models(fIdx).currentIndex); catch, end
+                        try
+                            app.updateDashboard(fIdx, app.Models(fIdx).currentIndex)
+                        catch
+                        end
                         app.IsUpdating(fIdx) = false;
                     end
                     return;
@@ -1248,7 +1333,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.goToFrame(fIdx, src.Value, 'final');
                 % [V3.19 (2)] 슬라이더 드래그 종료 시 adaptive prefetch
                 app.prefetchAdjacentFrames(fIdx);
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.16 / V3.17 (8)] goToFrame 재진입 플래그 해제 (onCleanup 콜백)
@@ -1261,7 +1348,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function clearDecodingFlag(app, fIdx)
             app.IsDecoding(fIdx) = false;
             % [Stabilization P1] Drain the latest queued user request, if any.
-            try, app.drainPendingVideoRequest(fIdx); catch, end
+            try
+                app.drainPendingVideoRequest(fIdx)
+            catch
+            end
         end
 
         % [V3.17 (2)] 캐시 존재 여부만 확인 (LRU 갱신 안 함)
@@ -1324,7 +1414,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             try
                 % stack은 길이가 다른 struct array일 수 있어 cell로 wrap → 차원 불일치 회피
                 stackCell = {[]};
-                try, stackCell = {ME.stack}; catch, end
+                try
+                    stackCell = {ME.stack}
+                catch
+                end
                 entry = struct( ...
                     'time',       datetime('now'), ...
                     'tag',        char(tag), ...
@@ -1370,7 +1463,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 try
                     tstr = char(datetime(log(k).time, 'Format', 'HH:mm:ss.SSS'));
                 catch
-                    try, tstr = datestr(log(k).time, 'HH:MM:SS.FFF'); catch, tstr = ''; end %#ok<DATST>
+                    try
+                        tstr = datestr(log(k).time, 'HH:MM:SS.FFF')
+                    catch
+                        tstr = ''
+                    end
                 end
                 fprintf('  [%s] [%s] %s: %s\n', tstr, ...
                     log(k).tag, log(k).identifier, log(k).message);
@@ -1401,7 +1498,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 poolOk = true;
                             end
                         end
-                    catch ME, app.logCaught(ME, 'Async:gcp'); end
+                    catch ME
+                        app.logCaught(ME, 'Async:gcp')
+                    end
 
                     % process pool 신규 생성
                     if ~poolOk
@@ -1437,7 +1536,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
                         cancel(app.AsyncFutures{fIdx});
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
                 app.AsyncTargetFrame(fIdx) = frameNo;
                 fps = app.VideoSyncState(fIdx).VideoFps;
                 filePath = app.VideoFilePath{fIdx};
@@ -1501,8 +1602,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.displayFrame(fIdx, frameNo, img, false);
                 app.AsyncTargetFrame(fIdx) = NaN;
                 % [Stabilization P1] consume any newer request that arrived during async work
-                try, app.drainPendingVideoRequest(fIdx); catch, end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                try
+                    app.drainPendingVideoRequest(fIdx)
+                catch
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.18 (4) / V3.19 (2)] adaptive prefetch: 드래그 속도/방향 기반 prefetch 범위
@@ -1547,7 +1653,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     % [Stabilization P0] cache-only path; never touches displayed frame state
                     app.prefetchFrameToCacheOnly(fIdx, target);
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [Stabilization P0] Decode-and-cache a single frame WITHOUT touching display state.
@@ -1587,7 +1695,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.cacheStoreFrame(fIdx, clamped, img);
                 % LastDecodedFrame is OK to update so seq-read heuristic can still benefit.
                 app.LastDecodedFrame(fIdx) = clamped;
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.14 VirtualDub UI] ◄◄ ◄ ► ►► 네비게이션 버튼 콜백
@@ -1610,7 +1720,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 if newFrame == cur, return; end
                 app.goToFrame(fIdx, newFrame, 'final');
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.14 VirtualDub UI] Frame 마커/슬라이더/라벨 일괄 동기화 헬퍼
@@ -1647,7 +1759,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UI(fIdx).vidSyncStatus.Text = '동기 미설정';
                     app.UI(fIdx).vidSyncStatus.FontColor = [0.5 0.5 0.5];
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.12 2.2.3] 동기 버튼 콜백 - 입력값 검증 및 동기 설정
@@ -1743,7 +1857,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 else
                     app.VideoSyncState(fIdx).DataFps = newVal;
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.12 2.2.3.1] Hz 직접 입력 시 콜백 (스피너 ValueChangedFcn)
@@ -1756,7 +1872,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 else
                     app.VideoSyncState(fIdx).DataFps = newVal;
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.12 2.2.3] Frame No → Time 매핑 (앵커 기반 선형)
@@ -1974,7 +2092,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
             % Layer 2: 동기 디코딩
             app.IsDecoding(fIdx) = true;
-            cleanup2 = onCleanup(@() app.clearDecodingFlag(fIdx)); %#ok<NASGU>
+            cleanup2 = onCleanup(@() app.clearDecodingFlag(fIdx));
 
             img = app.decodeFrameSync(fIdx, clampedFrame);
             if ~isempty(img)
@@ -1994,7 +2112,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 % Skip stale intermediate if the newest user request differs and is also pending.
                 if app.LastDisplayedFrame(fIdx) == target, return; end
                 app.requestFrame(fIdx, target, mode);
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         % [V3.21 #3-A Layer 2] 동기 디코딩 (read or 폴백)
@@ -2018,7 +2138,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         return;
                     end
                 end
-            catch ME, app.logCaught(ME, 'decodeSync:seq'); end
+            catch ME
+                app.logCaught(ME, 'decodeSync:seq')
+            end
 
             try
                 img = read(vr, clampedFrame);
@@ -2095,7 +2217,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     frame = readFrame(app.VideoState(fIdx).videoReader);
                     app.setVideoImageFrame(fIdx, frame);
                 end
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % ---------------------------------------------------------------------
@@ -2124,7 +2248,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.DraggedMarker.UserData = ax.Interactions; % 기존 설정 백업
                     ax.Interactions = []; % 드래그 중 내장 Pan 비활성화
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % [V3.11 B] 드래그 중 XLim 리스너 일시 중단
             app.setXLimListenersEnabled(fIdx, false);
@@ -2142,7 +2268,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isfield(app.UI(fIdx), 'timeLine') && ~isempty(app.UI(fIdx).timeLine) && isvalid(app.UI(fIdx).timeLine)
                     app.UI(fIdx).timeLine.Alpha = 1.0;
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             app.UIFigure.WindowButtonMotionFcn = @(~,~) app.plotMarkerDragMotion(fIdx);
             app.UIFigure.WindowButtonUpFcn = @(~,~) app.stopPlotMarkerDrag();
@@ -2168,7 +2296,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.DraggedMarker.UserData = ax.Interactions;
                     ax.Interactions = [];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % XLim 리스너 중단 (비행데이터와 동일 정책)
             app.setXLimListenersEnabled(fIdx, false);
@@ -2203,7 +2333,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 if isequal(app.Models(fIdx).currentIndex, idx), return; end
                 app.updateMarkersOnly(fIdx, idx);
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.12 2.2.2] 비디오 Frame 마커 드래그 모션 핸들러
@@ -2232,7 +2364,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 % [V3.15 항목 2] 단일 진입점 통과 - 'drag' 모드로 경량 갱신
                 app.goToFrame(fIdx, targetFrame, 'drag');
                 drawnow limitrate;
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [V3.12 영상 동적 throttle 계산]
@@ -2262,7 +2396,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 % 부드러운 전이 (지수 가중 이동평균)
                 app.VideoThrottleDyn = 0.7 * app.VideoThrottleDyn + 0.3 * target;
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
         end
 
         % [PATCH UX-3] H↔I 패널 경계 splitter 드래그 핸들러
@@ -2273,7 +2409,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.UIFigure.WindowButtonMotionFcn = @(~,~) app.hiSplitterMotion();
                 app.UIFigure.WindowButtonUpFcn    = @(~,~) app.stopHISplitterDrag();
                 if isprop(app.UIFigure, 'Pointer'), app.UIFigure.Pointer = 'left-right'; end
-            catch ME, app.logCaught(ME, 'HISplitter:start'); end
+            catch ME
+                app.logCaught(ME, 'HISplitter:start')
+            end
         end
 
         function hiSplitterMotion(app)
@@ -2304,7 +2442,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isequal(cw{6}, newVideoW), return; end
                 cw{6} = newVideoW;
                 dg.ColumnWidth = cw;
-            catch ME, app.logCaught(ME, 'HISplitter:motion'); end
+            catch ME
+                app.logCaught(ME, 'HISplitter:motion')
+            end
         end
 
         function stopHISplitterDrag(app)
@@ -2315,7 +2455,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.IsDraggingSplitter = false;
                 app.HISplitterFIdx = 0;
                 drawnow limitrate;
-            catch ME, app.logCaught(ME, 'HISplitter:stop'); end
+            catch ME
+                app.logCaught(ME, 'HISplitter:stop')
+            end
         end
 
         function stopPlotMarkerDrag(app)
@@ -2329,7 +2471,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.UIFigure.WindowButtonMotionFcn = '';
                     app.UIFigure.WindowButtonUpFcn = '';
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             try
                 if ~isempty(app.DraggedMarker) && isvalid(app.DraggedMarker)
@@ -2340,7 +2484,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         ax.Interactions = app.DraggedMarker.UserData;
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             app.DraggedMarker = [];
             app.DraggedFIdx = 0;
@@ -2361,7 +2507,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if isfield(app.UI(fIdx), 'timeLine') && ~isempty(app.UI(fIdx).timeLine) && isvalid(app.UI(fIdx).timeLine)
                         app.UI(fIdx).timeLine.Alpha = 0.5;
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
 
             % [V3.11 B] XLim 리스너 복원 (드래그 시작 시 중단했던 리스너 복구)
@@ -2402,7 +2550,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         end
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % Altitude 패널 XLim 리스너 제어
             try
@@ -2412,7 +2562,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         L.Enabled = enabled;
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         % ---------------------------------------------------------------------
@@ -2500,7 +2652,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
                 end
                 app.updateNumericPanelsOnly(fIdx, idx);
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % [V3.12 1.1] Map 비행경로 + 빨간 삼각형 실시간 갱신 (가벼움)
             try
@@ -2520,7 +2674,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     T_map = makehgtform('translate', [currLon(lastValid), currLat(lastValid), 0]) * makehgtform('zrotate', -hdg * pi / 180);
                     set(app.UI(fIdx).hgMapPlane, 'Matrix', T_map);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % H 패널 책장 넘기기 + 마커 갱신 (개선안 A의 IsProgrammaticXLim 가드 작동)
             app.updatePlotTimeLines(fIdx, idx, currTime);
@@ -2539,7 +2695,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                     % [V3.13 절충] 비행데이터 드래그 시 영상 갱신은 throttle 유지
                     app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'autoplay');
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
 
             % 동기화 모드: 경로 1 드래그 시 경로 2도 경량 업데이트
@@ -2660,7 +2818,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         yData = dataArr{i};
                         set(mkArr{i}, 'XData', currTime, 'YData', yData(currIdx));
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
             end
         end
 
@@ -2710,7 +2870,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     delete(targetLayout.Children);
                     targetLayout.RowHeight = {};
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             app.UI(fIdx).plotAxes{tabIdx} = {};
             app.UI(fIdx).timeLines{tabIdx} = {};
@@ -2729,7 +2891,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if ~isempty(app.UI(fIdx).plotTabs(i)) && isvalid(app.UI(fIdx).plotTabs(i))
                         delete(app.UI(fIdx).plotTabs(i));
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             app.UI(fIdx).plotTabs = [];
             app.UI(fIdx).plotLayouts = {};
@@ -2751,7 +2915,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if ~isempty(h) && isvalid(h)
                         delete(h);
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
             end
         end
 
@@ -2763,7 +2929,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if ~isempty(L) && isvalid(L)
                         delete(L);
                     end
-                catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
             end
         end
 
@@ -2785,7 +2953,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         fprintf('[XLim] zoom/pan off forced (fIdx=%d)\n', fIdx);
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
 
             % [버그 완벽 수정] 줌/팬 등에 의해 X축 범위가 변경되었을 때
             % 혹시 남아있을지 모르는 드래그 상태를 안전하게 강제 초기화
@@ -2910,10 +3080,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
 
             % [Phase 4] capture the freshly added plot into PlotConfigState for project save.
-            try, app.recordPlotInConfig(fIdx, tabIdx, struct( ...
+            try
+                app.recordPlotInConfig(fIdx, tabIdx, struct( ...
                     'YColumn', yCol, 'YLabel', yLabelStr, ...
                     'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
-                    'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT)); catch, end
+                    'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT));
+            catch
+            end
 
             drawnow;
             app.refreshBoardOffSummaryPanel(fIdx, true);
@@ -2951,7 +3124,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         && isfield(cfg.Flights(fIdx).PlotTabs(tabIdx), 'LinkXWithinTab')
                     tf = logical(cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function setLinkXWithinTab(app, fIdx, tabIdx, enabled)
@@ -2963,14 +3138,18 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
                 cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab = logical(enabled);
                 app.PlotConfigState = cfg;
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 axesCell = app.UI(fIdx).plotAxes{tabIdx};
                 if iscell(axesCell), allAxes = [axesCell{:}]; else, allAxes = axesCell; end
                 if numel(allAxes) > 1
                     if enabled, linkaxes(allAxes, 'x'); else, linkaxes(allAxes, 'off'); end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function disableLinkXOnIndividualEdit(app, fIdx, tabIdx)
@@ -2984,7 +3163,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         app.UI(fIdx).plotTabs(tabIdx).Title = [baseTitle ' [Link off]'];
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.markProjectDirtyAndScheduleRefresh('linkx-off');
         end
 
@@ -3000,11 +3181,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(plots)
                     plots = entry;
                 else
-                    plots(end+1) = entry; %#ok<AGROW>
+                    plots(end+1) = entry;
                 end
                 cfg.Flights(fIdx).PlotTabs(tabIdx).Plots = plots;
                 app.PlotConfigState = cfg;
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function cfg = capturePlotConfigFromUi(app)
@@ -3041,7 +3224,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                 ax = axesCell{p};
                                 if isempty(ax) || ~isvalid(ax), continue; end
                                 ylabStr = '';
-                                try, ylabStr = char(ax.YLabel.String); catch, end
+                                try
+                                    ylabStr = char(ax.YLabel.String)
+                                catch
+                                end
                                 % [P4] preserve YColumn if a corresponding existing entry has one.
                                 yColumn = '';
                                 if ~isempty(existingPlots) && numel(existingPlots) >= p ...
@@ -3063,13 +3249,18 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             end
                         end
                         titleStr = sprintf('Tab %d', tabIdx);
-                        try, titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title); catch, end
+                        try
+                            titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title)
+                        catch
+                        end
                         link = app.getLinkXWithinTab(fIdx, tabIdx);
                         newTabs(tabIdx) = struct( ...
-                            'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots); %#ok<AGROW>
+                            'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots);
                     end
                     cfg.Flights(fIdx).PlotTabs = newTabs;
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             app.PlotConfigState = cfg;
         end
@@ -3089,7 +3280,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isfield(axisCfg, 'XLim'),     ax.XLim     = axisCfg.XLim; end
                 if isfield(axisCfg, 'YLim'),     ax.YLim     = axisCfg.YLim; end
                 if isfield(axisCfg, 'YLimMode'), ax.YLimMode = axisCfg.YLimMode; end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function syncSelectedPlotXLimToAll(app, fIdx, tabIdx, plotIdx)
@@ -3100,7 +3293,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 srcAx = axesCell{plotIdx};
                 if isempty(srcAx) || ~isvalid(srcAx), return; end
                 xlim = srcAx.XLim;
-            catch ME, app.logCaught(ME, 'silent'); return; end
+            catch ME
+                app.logCaught(ME, 'silent'); return
+            end
             for f = 1:2
                 try
                     if ~isfield(app.UI(f), 'plotAxes'), continue; end
@@ -3112,7 +3307,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
                         end
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             app.markProjectDirtyAndScheduleRefresh('xlim-sync-all');
         end
@@ -3131,7 +3328,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.markProjectDirtyAndScheduleRefresh('xlim-tab');
         end
 
@@ -3142,7 +3341,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 srcAx = srcAxesCell{1};
                 if isempty(srcAx) || ~isvalid(srcAx), return; end
                 xlim = srcAx.XLim;
-            catch ME, app.logCaught(ME, 'silent'); return; end
+            catch ME
+                app.logCaught(ME, 'silent'); return
+            end
             for f = 1:2
                 try
                     if ~isfield(app.UI(f), 'plotAxes'), continue; end
@@ -3154,7 +3355,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             if ~isempty(ax) && isvalid(ax), ax.XLim = xlim; end
                         end
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             app.markProjectDirtyAndScheduleRefresh('xlim-all-tabs');
         end
@@ -3173,7 +3376,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isequal(parentFolder, 0), return; end
             end
             if ~isfolder(parentFolder)
-                try, uialert(app.UIFigure, 'parent 폴더가 존재하지 않습니다.', 'Export'); catch, end
+                try
+                    uialert(app.UIFigure, 'parent 폴더가 존재하지 않습니다.', 'Export')
+                catch
+                end
                 return;
             end
 
@@ -3185,7 +3391,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             mkdir(target);
 
             % [P4] capture live plot UI state so exported project carries current XLim/YLim.
-            try, app.capturePlotConfigFromUi(); catch ME_pc, app.logCaught(ME_pc, 'silent'); end
+            try
+                app.capturePlotConfigFromUi()
+            catch ME_pc
+                app.logCaught(ME_pc, 'silent')
+            end
             st = app.collectCurrentProjectState();
             [fileList, missingList] = app.buildExportFileList(st);
 
@@ -3193,7 +3403,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             if ~isempty(missingList)
                 names = arrayfun(@(e) sprintf('  - %s: %s', e.role, e.src), missingList, 'UniformOutput', false);
                 msg = sprintf(['project에 기록된 다음 파일을 찾을 수 없습니다:\n%s\n\n', ...
-                               '어떻게 처리할까요?'], strjoin(names, sprintf('\n')));
+                               '어떻게 처리할까요?'], strjoin(names, newline));
                 sel = '';
                 try
                     sel = uiconfirm(app.UIFigure, msg, '누락 파일', ...
@@ -3213,7 +3423,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         app.exportEverythingToFolder(parentFolder, opts);
                         return;
                     case '중단'
-                        try, uialert(app.UIFigure, 'export 가 취소되었습니다.', 'Export'); catch, end
+                        try
+                            uialert(app.UIFigure, 'export 가 취소되었습니다.', 'Export')
+                        catch
+                        end
                         return;
                     case '누락 제외하고 진행'
                         % proceed with current fileList; verification will explicitly fail on missing.
@@ -3223,7 +3436,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
 
             if isempty(fileList)
-                try, uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export'); catch, end
+                try
+                    uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export')
+                catch
+                end
                 return;
             end
 
@@ -3288,7 +3504,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 fwrite(fid, txt, 'char');
                 clear cleanupFid;
             catch ME
-                failures{end+1} = sprintf('project write: %s', ME.message); %#ok<AGROW>
+                failures{end+1} = sprintf('project write: %s', ME.message);
             end
 
             d.Value   = 0.96;
@@ -3315,9 +3531,15 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
                 switch sel
                     case '폴더 삭제'
-                        try, rmdir(target, 's'); catch, end
+                        try
+                            rmdir(target, 's')
+                        catch
+                        end
                     case '재시도'
-                        try, rmdir(target, 's'); catch, end
+                        try
+                            rmdir(target, 's')
+                        catch
+                        end
                         app.exportEverythingToFolder(parentFolder, opts);
                 end
             end
@@ -3382,7 +3604,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         if strcmpi(app.normalizeAbsPath(fileList(i).src), aviPath)
                             if ~isempty(app.VideoState(fIdx).videoReader) ...
                                     && isvalid(app.VideoState(fIdx).videoReader)
-                                try, delete(app.VideoState(fIdx).videoReader); catch, end
+                                try
+                                    delete(app.VideoState(fIdx).videoReader)
+                                catch
+                                end
                             end
                             app.VideoState(fIdx).videoReader = [];
                             flights(end+1) = fIdx; %#ok<AGROW>
@@ -3390,7 +3615,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         end
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function reopenReleasedAvis(app, flights)
@@ -3405,7 +3632,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 try
                     app.loadAviFileFromPath(fIdx, p, ...
                         struct('promptOnSync', false, 'preserveSync', true));
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
         end
 
@@ -3460,7 +3689,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     pAbs = app.normalizeAbsPath(p);
                     if ~startsWith(pAbs, exportRoot)
                         report.allWithinFolder = false;
-                        report.errors{end+1} = sprintf('project가 외부 경로를 참조함: %s', pAbs); %#ok<AGROW>
+                        report.errors{end+1} = sprintf('project가 외부 경로를 참조함: %s', pAbs);
                     end
                 end
 
@@ -3481,7 +3710,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             report.sizeMatchCount = report.sizeMatchCount + 1;
                         else
                             sizeOK = false;
-                            report.errors{end+1} = sprintf('size mismatch: %s', dst); %#ok<AGROW>
+                            report.errors{end+1} = sprintf('size mismatch: %s', dst);
                         end
                         if verifyHash
                             try
@@ -3491,13 +3720,15 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                     report.hashMatchCount = report.hashMatchCount + 1;
                                 else
                                     hashOK = false;
-                                    report.errors{end+1} = sprintf('hash mismatch: %s', dst); %#ok<AGROW>
+                                    report.errors{end+1} = sprintf('hash mismatch: %s', dst);
                                 end
-                            catch ME, app.logCaught(ME, 'export-hash'); hashOK = false; end
+                            catch ME
+                                app.logCaught(ME, 'export-hash'); hashOK = false
+                            end
                         end
                     else
                         presentOK = false;
-                        report.errors{end+1} = sprintf('missing: %s', dst); %#ok<AGROW>
+                        report.errors{end+1} = sprintf('missing: %s', dst);
                     end
                 end
                 report.allPresent   = presentOK;
@@ -3557,7 +3788,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function safeClose(~, d)
-            try, if ~isempty(d) && isvalid(d), close(d); end, catch, end
+            try
+                if ~isempty(d) && isvalid(d)
+                    close(d);
+                end
+            catch
+            end
         end
 
         function info = validateMappedColsAgainstData(app, fIdx)
@@ -3577,10 +3813,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 for i = 1:numel(reqKeys)
                     if ~isfield(mc, reqKeys{i}) || isempty(mc.(reqKeys{i})) ...
                             || ~ismember(mc.(reqKeys{i}), headers)
-                        info.brokenMappings{end+1} = reqKeys{i}; %#ok<AGROW>
+                        info.brokenMappings{end+1} = reqKeys{i};
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function info = validatePlotConfigAgainstData(app, fIdx)
@@ -3601,11 +3839,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     for p = 1:numel(tabs(t).Plots)
                         y = tabs(t).Plots(p).YColumn;
                         if ~isempty(y) && ~ismember(y, headers)
-                            info.brokenPlots{end+1} = sprintf('Tab%d/Plot%d:%s', t, p, y); %#ok<AGROW>
+                            info.brokenPlots{end+1} = sprintf('Tab%d/Plot%d:%s', t, p, y);
                         end
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function requestFileChange(app, fIdx, kind)
@@ -3621,7 +3861,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         app.afterFileReplaceValidation(fIdx, 'data');
                     catch ME
                         app.logCaught(ME, 'file-change-data');
-                        try, uialert(app.UIFigure, sprintf('비행데이터 로드 실패:\n%s', ME.message), 'Files'); catch, end
+                        try
+                            uialert(app.UIFigure, sprintf('비행데이터 로드 실패:\n%s', ME.message), 'Files')
+                        catch
+                        end
                     end
                 case 'avi'
                     [fn, pn] = uigetfile({'*.avi;*.mp4;*.mov', 'Video'}, ...
@@ -3631,7 +3874,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     try
                         % [Fix #3] path-based loader keeps VideoFilePath{}/aviFilePath in sync.
                         app.loadAviFileFromPath(fIdx, fullpath, struct('promptOnSync', true));
-                    catch ME, app.logCaught(ME, 'file-change-avi'); end
+                    catch ME
+                        app.logCaught(ME, 'file-change-avi')
+                    end
                 case 'option'
                     [fn, pn] = uigetfile({'*.dat;*.txt', 'Option file'}, ...
                         sprintf('Flight %d option 선택', fIdx));
@@ -3640,7 +3885,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.Models(fIdx).optionFilePath = app.normalizeAbsPath(fullpath);
                     src = app.Models(fIdx).rawDataUnscaled;
                     if isempty(src) || width(src) == 0
-                        try, uialert(app.UIFigure, '비행데이터를 먼저 로드하세요.', 'Files'); catch, end
+                        try
+                            uialert(app.UIFigure, '비행데이터를 먼저 로드하세요.', 'Files')
+                        catch
+                        end
                         return;
                     end
                     draft = app.parseOptionFileToDraft(fullpath, src.Properties.VariableNames);
@@ -3663,7 +3911,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                '  Broken plots: %s\n', ...
                                'dialog에서 해소할 때까지 Apply가 차단됩니다.'], ...
                     fIdx, kind, strjoin(m.brokenMappings, ', '), strjoin(p.brokenPlots, ', '));
-                try, uialert(app.UIFigure, msg, 'D5: 호환성 검증'); catch, end
+                try
+                    uialert(app.UIFigure, msg, 'D5: 호환성 검증')
+                catch
+                end
                 app.ProjectDirty = true;
             end
         end
@@ -3671,7 +3922,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function autoLoadProjectFromFile(app, filePath)
             % [Phase 5] 12-step uiprogressdlg auto-load matching design §5.
             if nargin < 2 || isempty(filePath) || ~isfile(filePath)
-                try, uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project'); catch, end
+                try
+                    uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project')
+                catch
+                end
                 return;
             end
             d = [];
@@ -3700,7 +3954,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                     advance(stepBase(fIdx, 2), sprintf('Flight %d 비행데이터 로드 중', fIdx));
                     if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
-                        try, app.parseFlightData(fIdx, m.dataFilePath); catch ME, app.logCaught(ME, 'auto-load-data'); end
+                        try
+                            app.parseFlightData(fIdx, m.dataFilePath)
+                        catch ME
+                            app.logCaught(ME, 'auto-load-data')
+                        end
                     elseif ~isempty(m.dataFilePath)
                         app.warnMissingFile(fIdx, 'data', m.dataFilePath);
                     end
@@ -3711,7 +3969,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             % [P1] preserveSync=true so restored AVI sync survives auto-load.
                             app.loadAviFileFromPath(fIdx, m.aviFilePath, ...
                                 struct('promptOnSync', false, 'preserveSync', true));
-                        catch ME, app.logCaught(ME, 'auto-load-avi'); end
+                        catch ME
+                            app.logCaught(ME, 'auto-load-avi')
+                        end
                     elseif ~isempty(m.aviFilePath)
                         app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
                     end
@@ -3732,7 +3992,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 advance(0.86, 'plot tab 복원 중');
                 if ~isempty(app.PlotConfigState)
                     for fIdx = 1:2
-                        try, app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState); catch ME, app.logCaught(ME, 'auto-load-plots'); end
+                        try
+                            app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState)
+                        catch ME
+                            app.logCaught(ME, 'auto-load-plots')
+                        end
                     end
                 end
 
@@ -3743,16 +4007,26 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             app.setupDataUI(fIdx);
                             app.afterFileReplaceValidation(fIdx, 'project-load');
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                 end
 
                 advance(1.00, '완료');
                 app.ProjectDirty = false;
             catch ME
                 app.logCaught(ME, 'auto-load');
-                try, uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project')
+                catch
+                end
             end
-            try, if ~isempty(d) && isvalid(d), close(d); end, catch, end
+            try
+                if ~isempty(d) && isvalid(d)
+                    close(d);
+                end
+            catch
+            end
         end
 
         function setProgress(~, d, val, msg)
@@ -3802,12 +4076,18 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             tabs = cfg.Flights(fIdx).PlotTabs;
             if isempty(tabs), return; end
 
-            try, app.clearAllTabs(fIdx); catch, end
+            try
+                app.clearAllTabs(fIdx)
+            catch
+            end
 
             % After clearAllTabs there is exactly one fresh tab.
             existingTabCount = numel(app.UI(fIdx).plotTabs);
             for t = (existingTabCount + 1):numel(tabs)
-                try, app.addPlotTab(fIdx); catch, end
+                try
+                    app.addPlotTab(fIdx)
+                catch
+                end
             end
 
             % Clear the in-memory PlotConfig for this flight; recordPlotInConfig will refill it.
@@ -3820,7 +4100,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isfield(tabSpec, 'Title') && ~isempty(tabSpec.Title) ...
                         && numel(app.UI(fIdx).plotTabs) >= t ...
                         && isvalid(app.UI(fIdx).plotTabs(t))
-                    try, app.UI(fIdx).plotTabs(t).Title = char(tabSpec.Title); catch, end
+                    try
+                        app.UI(fIdx).plotTabs(t).Title = char(tabSpec.Title)
+                    catch
+                    end
                 end
                 if isfield(tabSpec, 'Plots') && ~isempty(tabSpec.Plots)
                     plotsSpec = tabSpec.Plots;
@@ -3837,8 +4120,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             if numel(app.UI(fIdx).plotTabs) >= t && isvalid(app.UI(fIdx).plotTabs(t))
                                 app.UI(fIdx).tabGroup.SelectedTab = app.UI(fIdx).plotTabs(t);
                             end
-                        catch, end
-                        try, app.plotSelectedVariable(fIdx); catch, end
+                        catch
+                        end
+                        try
+                            app.plotSelectedVariable(fIdx)
+                        catch
+                        end
                         % Apply axis spec to the freshly added plot.
                         try
                             axesCell = app.UI(fIdx).plotAxes{t};
@@ -3854,7 +4141,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                                             && numel(spec.YLim) == 2, ax.YLim = spec.YLim; end
                                 end
                             end
-                        catch ME, app.logCaught(ME, 'silent'); end
+                        catch ME
+                            app.logCaught(ME, 'silent')
+                        end
                     end
                 end
                 if isfield(tabSpec, 'LinkXWithinTab')
@@ -3950,7 +4239,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
                     delete(app.EditDialog);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.EditDialog = [];
         end
 
@@ -3978,7 +4269,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.refreshOptionsTab();
                 app.refreshPlotTab();
                 app.refreshExportTab();
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function buildEditTabProject(app, parent)
@@ -4246,7 +4539,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             if isprop(app, handles{r,1}) && ~isempty(app.(handles{r,1})) && isvalid(app.(handles{r,1}))
                                 app.(handles{r,1}).Value = double(handles{r,2});
                             end
-                        catch, end
+                        catch
+                        end
                     end
                 end
             catch
@@ -4298,7 +4592,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.EDOptDspTable.Data = table(headers, units, fmts, orders, scales, ...
                         'VariableNames', {'Header', 'Unit', 'Format', 'Order', 'Scale'});
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function refreshPlotTab(app)
@@ -4325,7 +4621,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     end
                     expand(app.EDPlotTree);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function refreshExportTab(app)
@@ -4344,7 +4642,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
             ok = app.saveProjectFile(app.ProjectFilePath);
             if ok
-                try, uialert(app.EditDialog, 'project 저장 완료', 'Project'); catch, end
+                try
+                    uialert(app.EditDialog, 'project 저장 완료', 'Project')
+                catch
+                end
                 app.refreshEditDialog();
             end
         end
@@ -4354,7 +4655,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             if isequal(fn, 0), return; end
             ok = app.saveProjectFile(fullfile(pn, fn));
             if ok
-                try, uialert(app.EditDialog, 'project 저장 완료', 'Project'); catch, end
+                try
+                    uialert(app.EditDialog, 'project 저장 완료', 'Project')
+                catch
+                end
                 app.refreshEditDialog();
             end
         end
@@ -4381,7 +4685,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         stop(app.AutosaveTimer); delete(app.AutosaveTimer); app.AutosaveTimer = [];
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function requestFileChangeAndRefresh(app, fIdx, kind)
@@ -4394,11 +4700,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             switch kind
                 case 'data'
                     if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
-                        try, app.parseFlightData(fIdx, m.dataFilePath); catch ME, app.logCaught(ME, 'reload-data'); end
+                        try
+                            app.parseFlightData(fIdx, m.dataFilePath)
+                        catch ME
+                            app.logCaught(ME, 'reload-data')
+                        end
                     end
                 case 'avi'
                     if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
-                        try, app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false)); catch ME, app.logCaught(ME, 'reload-avi'); end
+                        try
+                            app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false))
+                        catch ME
+                            app.logCaught(ME, 'reload-avi')
+                        end
                     end
                 case 'option'
                     if ~isempty(m.optionFilePath) && isfile(m.optionFilePath) ...
@@ -4417,7 +4731,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isvalid(app.EDSyncF2Time), t2 = app.EDSyncF2Time.Value; end
                 app.setFlightDataSync(t1, t2, enabled);
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'sync-apply'); end
+            catch ME
+                app.logCaught(ME, 'sync-apply')
+            end
         end
 
         function editDialogApplyVideoSync(app, fIdx, enabled)
@@ -4428,7 +4744,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 df = app.(sprintf('EDVSync%dDFPS',  fIdx)).Value;
                 app.setVideoSync(fIdx, af, at, vf, df, enabled);
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'video-sync-apply'); end
+            catch ME
+                app.logCaught(ME, 'video-sync-apply')
+            end
         end
 
         function onOptionDraftEdit(app, kind, ~, evt)
@@ -4457,7 +4775,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.OptionDrafts{fIdx} = draft;
                 app.ProjectDirty = true;
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'option-edit'); end
+            catch ME
+                app.logCaught(ME, 'option-edit')
+            end
         end
 
         function editDialogValidateOptionDraft(app)
@@ -4465,19 +4785,30 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
                 src = app.Models(fIdx).rawDataUnscaled;
                 if isempty(src) || width(src) == 0
-                    try, uialert(app.EditDialog, '비행데이터를 먼저 로드하세요.', 'Options'); catch, end
+                    try
+                        uialert(app.EditDialog, '비행데이터를 먼저 로드하세요.', 'Options')
+                    catch
+                    end
                     return;
                 end
                 [ok, info] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
                 if ok
-                    try, uialert(app.EditDialog, '검증 통과', 'Options'); catch, end
+                    try
+                        uialert(app.EditDialog, '검증 통과', 'Options')
+                    catch
+                    end
                 else
                     msg = sprintf('검증 실패\n  Broken mappings: %s\n  Broken columns: %s\n  Reasons: %s', ...
                         strjoin(info.brokenMappings, ', '), strjoin(info.brokenColumns, ', '), ...
                         strjoin(info.reasons, ', '));
-                    try, uialert(app.EditDialog, msg, 'Options'); catch, end
+                    try
+                        uialert(app.EditDialog, msg, 'Options')
+                    catch
+                    end
                 end
-            catch ME, app.logCaught(ME, 'option-validate'); end
+            catch ME
+                app.logCaught(ME, 'option-validate')
+            end
         end
 
         function editDialogApplyOptionDraft(app)
@@ -4487,15 +4818,26 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(src) || width(src) == 0, return; end
                 [ok, ~] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
                 if ~ok
-                    try, uialert(app.EditDialog, '검증 실패: Apply 차단', 'Options'); catch, end
+                    try
+                        uialert(app.EditDialog, '검증 실패: Apply 차단', 'Options')
+                    catch
+                    end
                     return;
                 end
                 app.applyOptionDraftToModel(fIdx, app.OptionDrafts{fIdx}, false);
-                try, app.setupDataUI(fIdx); catch, end
-                try, app.updateDashboard(fIdx, app.Models(fIdx).currentIndex); catch, end
+                try
+                    app.setupDataUI(fIdx)
+                catch
+                end
+                try
+                    app.updateDashboard(fIdx, app.Models(fIdx).currentIndex)
+                catch
+                end
                 app.markProjectDirtyAndScheduleRefresh('option-apply');
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'option-apply'); end
+            catch ME
+                app.logCaught(ME, 'option-apply')
+            end
         end
 
         function editDialogWriteOptionDraft(app)
@@ -4505,9 +4847,15 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(draft), return; end
                 p = app.resolveOptionFilePath(fIdx);
                 ok = app.writeOptionFileAtomic(p, draft);
-                if ok, try, uialert(app.EditDialog, ['option 파일 저장 완료: ' p], 'Options'); catch, end
+                if ok
+                    try
+                        uialert(app.EditDialog, ['option 파일 저장 완료: ' p], 'Options');
+                    catch
+                    end
                 end
-            catch ME, app.logCaught(ME, 'option-write'); end
+            catch ME
+                app.logCaught(ME, 'option-write')
+            end
         end
 
         function editDialogRevertOptionDraft(app)
@@ -4517,7 +4865,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(src) || width(src) == 0, return; end
                 app.OptionDrafts{fIdx} = app.parseOptionFileToDraft(app.resolveOptionFilePath(fIdx), src.Properties.VariableNames);
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'option-revert'); end
+            catch ME
+                app.logCaught(ME, 'option-revert')
+            end
         end
 
         function capturePlotConfigAndRefresh(app)
@@ -4530,7 +4880,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
                 app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'plot-rebuild'); end
+            catch ME
+                app.logCaught(ME, 'plot-rebuild')
+            end
         end
 
         function editDialogToggleSelectedTabLink(app, on)
@@ -4541,7 +4893,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 nd = sel(1).NodeData;
                 if ~isfield(nd, 'tab'), return; end
                 app.setLinkXWithinTab(fIdx, nd.tab, on);
-            catch ME, app.logCaught(ME, 'plot-link'); end
+            catch ME
+                app.logCaught(ME, 'plot-link')
+            end
         end
 
         function editDialogSyncTabXLimAll(app)
@@ -4551,7 +4905,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(sel), return; end
                 nd = sel(1).NodeData;
                 if isfield(nd, 'tab'), app.applyTabXLimToAllTabs(fIdx, nd.tab); end
-            catch ME, app.logCaught(ME, 'plot-sync-tab'); end
+            catch ME
+                app.logCaught(ME, 'plot-sync-tab')
+            end
         end
 
         function editDialogSyncSelectedPlotXLimAll(app)
@@ -4563,7 +4919,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if strcmp(nd.kind, 'plot')
                     app.syncSelectedPlotXLimToAll(fIdx, nd.tab, nd.plot);
                 end
-            catch ME, app.logCaught(ME, 'plot-sync-plot'); end
+            catch ME
+                app.logCaught(ME, 'plot-sync-plot')
+            end
         end
 
         function editDialogDeleteSelectedTab(app)
@@ -4577,11 +4935,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if numel(cfg.Flights(fIdx).PlotTabs) >= nd.tab
                     cfg.Flights(fIdx).PlotTabs(nd.tab) = [];
                     app.PlotConfigState = cfg;
-                    try, delete(app.UI(fIdx).plotTabs(nd.tab)); catch, end
+                    try
+                        delete(app.UI(fIdx).plotTabs(nd.tab))
+                    catch
+                    end
                     app.markProjectDirtyAndScheduleRefresh('tab-delete');
                 end
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'tab-delete'); end
+            catch ME
+                app.logCaught(ME, 'tab-delete')
+            end
         end
 
         function editDialogPickExportFolder(app)
@@ -4603,7 +4966,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     lines{end+1} = sprintf('[%s] export FAIL — 자세한 내용은 console/dialog 참고', char(datetime('now', 'Format', 'HH:mm:ss')));
                 end
                 app.EDExpLogArea.Value = lines;
-            catch ME, app.logCaught(ME, 'export-btn'); end
+            catch ME
+                app.logCaught(ME, 'export-btn')
+            end
         end
     end
 
@@ -4632,7 +4997,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             % can fall back to model-recorded option path if set later.
             try
                 app.Models(fIdx).dataFilePath = app.normalizeAbsPath(filepath);
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.applyOptionFile(fIdx, dataTbl, false);
 
             if any(ismissing(app.Models(fIdx).rawData), 'all')
@@ -4640,7 +5007,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 % Keep unscaled mirror in sync when imputation runs.
                 try
                     app.Models(fIdx).rawDataUnscaled = fillmissing(app.Models(fIdx).rawDataUnscaled, 'linear', 'DataVariables', @isnumeric);
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
         end
 
@@ -4715,14 +5084,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             end
                         end
                     end
-                catch ME, app.logCaught(ME, 'option-parse'); end
+                catch ME
+                    app.logCaught(ME, 'option-parse')
+                end
             end
             draft = struct('sourcePath', char(optPath), ...
                            'mappedCols', mappedCols, ...
                            'displayMeta', displayMeta);
         end
 
-        function [ok, info] = validateOptionDraft(app, draft, csvHeaders) %#ok<INUSL>
+        function [ok, info] = validateOptionDraft(app, draft, csvHeaders)
             % [D5] basic validation; Phase 5 extends with brokenPlots etc.
             info = struct('brokenMappings', {{}}, 'brokenColumns', {{}}, 'reasons', {{}});
             if isempty(draft) || ~isstruct(draft)
@@ -4733,18 +5104,20 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 for i = 1:numel(reqKeys)
                     v = draft.mappedCols.(reqKeys{i});
                     if ~isempty(v) && ~ismember(v, csvHeaders)
-                        info.brokenMappings{end+1} = sprintf('%s -> %s', reqKeys{i}, v); %#ok<AGROW>
+                        info.brokenMappings{end+1} = sprintf('%s -> %s', reqKeys{i}, v);
                     end
                 end
                 for i = 1:numel(draft.displayMeta)
                     if ~ismember(draft.displayMeta(i).header, csvHeaders)
-                        info.brokenColumns{end+1} = draft.displayMeta(i).header; %#ok<AGROW>
+                        info.brokenColumns{end+1} = draft.displayMeta(i).header;
                     end
                     if isnan(draft.displayMeta(i).scale) || draft.displayMeta(i).scale == 0
-                        info.reasons{end+1} = sprintf('scale 비정상: %s', draft.displayMeta(i).header); %#ok<AGROW>
+                        info.reasons{end+1} = sprintf('scale 비정상: %s', draft.displayMeta(i).header);
                     end
                 end
-            catch ME, app.logCaught(ME, 'option-validate'); end
+            catch ME
+                app.logCaught(ME, 'option-validate')
+            end
             ok = isempty(info.brokenMappings) && isempty(info.brokenColumns) && isempty(info.reasons);
         end
 
@@ -4806,7 +5179,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isnumeric(s) && ~isnan(s) && s ~= 1.0 && ismember(col, scaled.Properties.VariableNames)
                     try
                         scaled.(col) = scaled.(col) * s;
-                    catch ME, app.logCaught(ME, 'option-scale'); end
+                    catch ME
+                        app.logCaught(ME, 'option-scale')
+                    end
                 end
             end
 
@@ -4847,13 +5222,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 fprintf(fid, '%s\n', lines{:});
                 clear cleanup;
                 if isfile(optPath)
-                    try, copyfile(optPath, [optPath '.bak'], 'f'); catch, end
+                    try
+                        copyfile(optPath, [optPath '.bak'], 'f')
+                    catch
+                    end
                 end
                 movefile(tmp, optPath, 'f');
                 ok = true;
             catch ME
                 app.logCaught(ME, 'option-write');
-                try, uialert(app.UIFigure, sprintf('option 파일 저장 실패:\n%s', ME.message), 'Options'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('option 파일 저장 실패:\n%s', ME.message), 'Options')
+                catch
+                end
             end
         end
 
@@ -5078,7 +5459,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     if ~isempty(app.UI(fIdx).altXLimListener) && isvalid(app.UI(fIdx).altXLimListener)
                         delete(app.UI(fIdx).altXLimListener);
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
 
             % X축을 데이터 전체로 잡고, Y축은 auto 모드로 설정하여 GUI 리사이즈 시 동적으로 적응하도록 보장
@@ -5964,17 +6347,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     return;
                 end
                 tabs = app.UI(fIdx).plotTabs;
-                selectedIdx = 0;
                 try
                     selectedIdx = find(tabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
                     if isempty(selectedIdx), selectedIdx = 0; end
                 catch
                     selectedIdx = 0;
                 end
-                sigParts{end+1} = sprintf('sel=%d;tabs=%d', selectedIdx, numel(tabs)); %#ok<AGROW>
+                sigParts{end+1} = sprintf('sel=%d;tabs=%d', selectedIdx, numel(tabs));
                 for tIdx = 1:numel(tabs)
                     tabTitle = '';
-                    try, tabTitle = char(tabs(tIdx).Title); catch, end
+                    try
+                        tabTitle = char(tabs(tIdx).Title)
+                    catch
+                    end
                     plotCount = 0;
                     if tIdx <= numel(app.UI(fIdx).plotAxes) && ~isempty(app.UI(fIdx).plotAxes{tIdx})
                         plotCount = numel(app.UI(fIdx).plotAxes{tIdx});
@@ -5988,7 +6373,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         catch
                         end
                         yLen = 0;
-                        try, yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx}); catch, end
+                        try
+                            yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx})
+                        catch
+                        end
                         sigParts{end+1} = sprintf('P%d:%d:%s', pIdx, yLen, yLabel); %#ok<AGROW>
                     end
                 end
@@ -6003,7 +6391,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             try
                 tg = app.UI(fIdx).boardOffTabGroup;
                 if isempty(tg) || ~isvalid(tg), return; end
-                try, delete(tg.Children); catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+                try
+                    delete(tg.Children)
+                catch ME_silent
+                    app.logCaught(ME_silent, 'silent')
+                end
 
                 app.UI(fIdx).boardOffPlotTabs = [];
                 app.UI(fIdx).boardOffPlotLayouts = {};
@@ -6037,7 +6429,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
                 for tIdx = 1:numel(sourceTabs)
                     tabTitle = sprintf('Tab %d', tIdx);
-                    try, tabTitle = char(sourceTabs(tIdx).Title); catch, end
+                    try
+                        tabTitle = char(sourceTabs(tIdx).Title)
+                    catch
+                    end
                     newTab = uitab(tg, 'Title', tabTitle);
                     app.UI(fIdx).boardOffPlotTabs(end+1) = newTab;
                     plotLayout = uigridlayout(newTab, 'ColumnWidth', {'1x'}, 'RowHeight', {}, ...
@@ -6123,7 +6518,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
 
                 if selectedIdx <= numel(app.UI(fIdx).boardOffPlotTabs)
-                    try, tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx); catch, end
+                    try
+                        tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx)
+                    catch
+                    end
                 end
                 app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
             catch ME
@@ -6686,7 +7084,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(UIGroup_temp)
                     UIGroup_temp = grp;
                 else
-                    UIGroup_temp(fIdx) = grp; %#ok<AGROW>
+                    UIGroup_temp(fIdx) = grp;
                 end
             end
             app.UIGroup = UIGroup_temp;
@@ -6740,7 +7138,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     'FontSize', 12, 'FontWeight', 'bold', ...
                     'Tooltip', 'Project/Files/Sync/Options/Plot Manager/Export 편집기 열기', ...
                     'ButtonPushedFcn', @(~,~) app.openEditDialog());
-            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+            catch ME_silent
+                app.logCaught(ME_silent, 'silent')
+            end
             app.updateBoardToggleButtons();
         end
 
@@ -6823,24 +7223,32 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             && ~isempty(app.UI(fIdx).videoResLabel) && isvalid(app.UI(fIdx).videoResLabel)
                         st.Flights(fIdx).VideoResolution = char(app.UI(fIdx).videoResLabel.Text);
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             try
                 st.FlightSync = struct( ...
                     'IsSynced', logical(app.SyncState.IsSynced), ...
                     'SyncT1',   double(app.SyncState.SyncT1), ...
                     'SyncT2',   double(app.SyncState.SyncT2));
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     st.UiState.WindowPosition = app.UIFigure.Position;
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     st.UiState.EditDialogPosition = app.EditDialog.Position;
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             % Phase 4 will populate PlotConfig; preserve any cached structure for now.
             if ~isempty(app.PlotConfigState)
                 st.PlotConfig = app.PlotConfigState;
@@ -6857,7 +7265,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.SyncState.SyncT1   = double(st.FlightSync.SyncT1);
                     app.SyncState.SyncT2   = double(st.FlightSync.SyncT2);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             if isfield(st, 'Flights')
                 for fIdx = 1:min(numel(st.Flights), 2)
                     try
@@ -6873,7 +7283,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             app.VideoSyncState(fIdx).VideoFps    = double(vs.VideoFps);
                             app.VideoSyncState(fIdx).DataFps     = double(vs.DataFps);
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                 end
             end
             if isfield(st, 'UiState')
@@ -6882,7 +7294,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             && ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                         app.UIFigure.Position = st.UiState.WindowPosition;
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
             if isfield(st, 'PlotConfig')
                 app.PlotConfigState = st.PlotConfig;
@@ -6905,9 +7319,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     try
                         uialert(app.UIFigure, msg, 'Project version');
                     catch
-                        warning(msg);
+                        warning('%s', msg);
                     end
-                    error('FlightDataDashboard:UnsupportedProjectVersion', msg);
+                    error('FlightDataDashboard:UnsupportedProjectVersion', '%s', msg);
             end
         end
 
@@ -6922,7 +7336,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
             catch ME
                 app.logCaught(ME, 'project-load');
-                try, uialert(app.UIFigure, sprintf('project 파일 로드 실패:\n%s', ME.message), 'Project'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('project 파일 로드 실패:\n%s', ME.message), 'Project')
+                catch
+                end
                 st = [];
             end
         end
@@ -6937,7 +7354,11 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             try
                 % [P4] capture live plot UI state right before persistence so the saved
                 % project reflects current XLim/YLim/YLimMode without losing YColumn.
-                try, app.capturePlotConfigFromUi(); catch ME, app.logCaught(ME, 'silent'); end
+                try
+                    app.capturePlotConfigFromUi()
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
                 tmp = [filePath '.tmp'];
@@ -6947,7 +7368,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 fwrite(fid, txt, 'char');
                 clear cleanup;
                 if isfile(filePath)
-                    try, copyfile(filePath, [filePath '.bak'], 'f'); catch, end
+                    try
+                        copyfile(filePath, [filePath '.bak'], 'f')
+                    catch
+                    end
                 end
                 movefile(tmp, filePath, 'f');
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
@@ -6957,7 +7381,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 ok = true;
             catch ME
                 app.logCaught(ME, 'project-save');
-                try, uialert(app.UIFigure, sprintf('project 저장 실패:\n%s', ME.message), 'Project'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('project 저장 실패:\n%s', ME.message), 'Project')
+                catch
+                end
             end
         end
 
@@ -6972,14 +7399,20 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
                 autoPath = [base '.autosave.json'];
                 % [P4] autosave the live plot UI state too.
-                try, app.capturePlotConfigFromUi(); catch ME_pc, app.logCaught(ME_pc, 'silent'); end
+                try
+                    app.capturePlotConfigFromUi()
+                catch ME_pc
+                    app.logCaught(ME_pc, 'silent')
+                end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
                 fid = fopen(autoPath, 'w');
                 if fid < 0, return; end
                 cleanup = onCleanup(@() fclose(fid));
                 fwrite(fid, txt, 'char');
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function clearProjectAutosave(app)
@@ -6987,7 +7420,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 if isempty(app.ProjectFilePath), return; end
                 autoPath = [app.ProjectFilePath '.autosave.json'];
                 if isfile(autoPath), delete(autoPath); end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function out = normalizeAbsPath(~, p)
@@ -7044,7 +7479,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.EditApplyTimer.StartDelay = app.EditApplyDelaySec;
                 end
                 start(app.EditApplyTimer);
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 if isempty(app.AutosaveTimer) || ~isvalid(app.AutosaveTimer)
                     app.AutosaveTimer = timer( ...
@@ -7054,7 +7491,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         'TimerFcn', @(~,~) app.saveProjectAutosave());
                     start(app.AutosaveTimer);
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         function applyPendingDialogChanges(app)
@@ -7067,12 +7506,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             app.setupDataUI(fIdx);
                             app.refreshSyncUi(fIdx);
                         end
-                    catch ME, app.logCaught(ME, 'silent'); end
+                    catch ME
+                        app.logCaught(ME, 'silent')
+                    end
                 end
                 app.LastEditApplyTime = datetime('now');
                 % [Audit fix #1] keep dialog status/values in sync after debounce fires
-                try, app.refreshEditDialog(); catch, end
-            catch ME, app.logCaught(ME, 'silent'); end
+                try
+                    app.refreshEditDialog()
+                catch
+                end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
 
         % =================================================================
@@ -7097,12 +7543,17 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                             && ~isempty(app.Models(2).rawData)
                         app.UI(2).spinner.Enable = 'on';
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
                 app.markProjectDirtyAndScheduleRefresh('flight-sync-off');
                 return;
             end
             if isempty(app.Models(1).rawData) || isempty(app.Models(2).rawData)
-                try, uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync'); catch, end
+                try
+                    uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync')
+                catch
+                end
                 return;
             end
             app.SyncState.SyncT1   = double(syncT1);
@@ -7121,12 +7572,16 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         && ~isempty(app.UI(2).spinner) && isvalid(app.UI(2).spinner)
                     app.UI(2).spinner.Enable = 'off';
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             try
                 timeCol1 = app.Models(1).mappedCols.Time;
                 idx1 = app.findClosestIndexByTime(app.Models(1).rawData.(timeCol1), syncT1);
                 app.applyTimeChange(1, idx1);
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.markProjectDirtyAndScheduleRefresh('flight-sync-on');
         end
 
@@ -7138,20 +7593,32 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 return;
             end
             if isempty(app.VideoState(fIdx).videoReader)
-                try, uialert(app.UIFigure, '먼저 AVI 파일을 로드하세요.', 'Sync'); catch, end
+                try
+                    uialert(app.UIFigure, '먼저 AVI 파일을 로드하세요.', 'Sync')
+                catch
+                end
                 return;
             end
             if isempty(app.Models(fIdx).rawData)
-                try, uialert(app.UIFigure, '먼저 비행데이터를 로드하세요.', 'Sync'); catch, end
+                try
+                    uialert(app.UIFigure, '먼저 비행데이터를 로드하세요.', 'Sync')
+                catch
+                end
                 return;
             end
             if ~isnumeric(videoFps) || videoFps < 1 || ~isnumeric(dataFps) || dataFps < 1
-                try, uialert(app.UIFigure, 'Hz 값은 1 이상이어야 합니다.', 'Sync'); catch, end
+                try
+                    uialert(app.UIFigure, 'Hz 값은 1 이상이어야 합니다.', 'Sync')
+                catch
+                end
                 return;
             end
             totalFrames = app.VideoSyncState(fIdx).TotalFrames;
             if anchorFrame < 1 || (totalFrames > 0 && anchorFrame > totalFrames)
-                try, uialert(app.UIFigure, sprintf('Frame은 1~%d 범위여야 합니다.', totalFrames), 'Sync'); catch, end
+                try
+                    uialert(app.UIFigure, sprintf('Frame은 1~%d 범위여야 합니다.', totalFrames), 'Sync')
+                catch
+                end
                 return;
             end
             app.VideoSyncState(fIdx).AnchorFrame = double(anchorFrame);
@@ -7188,7 +7655,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         double(anchorFrame), double(anchorTime));
                     app.UI(fIdx).vidSyncStatus.FontColor = [0.0 0.5 0.0];
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
             app.refreshSyncUi(fIdx);
             app.markProjectDirtyAndScheduleRefresh('video-sync-on');
         end
@@ -7220,7 +7689,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         app.UI(fIdx).vidSyncStatus.FontColor = [0.5 0.5 0.5];
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
         end
     end
 
@@ -7305,7 +7776,10 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
                     end
                 end
                 [~, victim] = max(ages);
-                try, delete(cache(victim).vr); catch, end
+                try
+                    delete(cache(victim).vr)
+                catch
+                end
                 cache(victim) = [];
             end
             newSlot = struct('path', filePath, 'vr', VideoReader(filePath), 'lastUse', uint64(0));
