@@ -2816,6 +2816,227 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.markProjectDirtyAndScheduleRefresh('xlim-all-tabs');
         end
 
+        function info = validateMappedColsAgainstData(app, fIdx)
+            % [D5] return struct with missing required keys vs current rawData/Unscaled headers.
+            info = struct('brokenMappings', {{}}, 'reasons', {{}});
+            try
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0
+                    src = app.Models(fIdx).rawData;
+                end
+                if isempty(src) || width(src) == 0
+                    info.reasons{end+1} = 'no data loaded'; return;
+                end
+                headers = src.Properties.VariableNames;
+                mc = app.Models(fIdx).mappedCols;
+                reqKeys = app.REQ_KEYS;
+                for i = 1:numel(reqKeys)
+                    if ~isfield(mc, reqKeys{i}) || isempty(mc.(reqKeys{i})) ...
+                            || ~ismember(mc.(reqKeys{i}), headers)
+                        info.brokenMappings{end+1} = reqKeys{i}; %#ok<AGROW>
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function info = validatePlotConfigAgainstData(app, fIdx)
+            % [D5] return list of plot YColumn entries that no longer exist in the data table.
+            info = struct('brokenPlots', {{}});
+            try
+                cfg = app.PlotConfigState;
+                if isempty(cfg) || ~isfield(cfg, 'Flights') || numel(cfg.Flights) < fIdx
+                    return;
+                end
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0, src = app.Models(fIdx).rawData; end
+                if isempty(src) || width(src) == 0, return; end
+                headers = src.Properties.VariableNames;
+                tabs = cfg.Flights(fIdx).PlotTabs;
+                for t = 1:numel(tabs)
+                    if ~isfield(tabs(t), 'Plots'), continue; end
+                    for p = 1:numel(tabs(t).Plots)
+                        y = tabs(t).Plots(p).YColumn;
+                        if ~isempty(y) && ~ismember(y, headers)
+                            info.brokenPlots{end+1} = sprintf('Tab%d/Plot%d:%s', t, p, y); %#ok<AGROW>
+                        end
+                    end
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function requestFileChange(app, fIdx, kind)
+            % [Phase 5] Files-tab entry. kind = 'data' | 'avi' | 'option'.
+            switch lower(kind)
+                case 'data'
+                    [fn, pn] = uigetfile({'*.csv;*.dat;*.txt', 'Flight data'}, ...
+                        sprintf('Flight %d 비행데이터 선택', fIdx));
+                    if isequal(fn, 0), return; end
+                    fullpath = fullfile(pn, fn);
+                    try
+                        app.parseFlightData(fIdx, fullpath);
+                        app.afterFileReplaceValidation(fIdx, 'data');
+                    catch ME
+                        app.logCaught(ME, 'file-change-data');
+                        try, uialert(app.UIFigure, sprintf('비행데이터 로드 실패:\n%s', ME.message), 'Files'); catch, end
+                    end
+                case 'avi'
+                    [fn, pn] = uigetfile({'*.avi;*.mp4;*.mov', 'Video'}, ...
+                        sprintf('Flight %d AVI 선택', fIdx));
+                    if isequal(fn, 0), return; end
+                    fullpath = fullfile(pn, fn);
+                    app.Models(fIdx).aviFilePath = app.normalizeAbsPath(fullpath);
+                    try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'file-change-avi'); end
+                case 'option'
+                    [fn, pn] = uigetfile({'*.dat;*.txt', 'Option file'}, ...
+                        sprintf('Flight %d option 선택', fIdx));
+                    if isequal(fn, 0), return; end
+                    fullpath = fullfile(pn, fn);
+                    app.Models(fIdx).optionFilePath = app.normalizeAbsPath(fullpath);
+                    src = app.Models(fIdx).rawDataUnscaled;
+                    if isempty(src) || width(src) == 0
+                        try, uialert(app.UIFigure, '비행데이터를 먼저 로드하세요.', 'Files'); catch, end
+                        return;
+                    end
+                    draft = app.parseOptionFileToDraft(fullpath, src.Properties.VariableNames);
+                    app.applyOptionDraftToModel(fIdx, draft, false);
+                    app.afterFileReplaceValidation(fIdx, 'option');
+                otherwise
+                    return;
+            end
+            app.markProjectDirtyAndScheduleRefresh('file-change');
+        end
+
+        function afterFileReplaceValidation(app, fIdx, kind)
+            % [D5] surface broken mappings/plots after a file replace. Apply stays blocked
+            % at the dialog level until user resolves them (dialog UI lives in Phase 6+).
+            m = app.validateMappedColsAgainstData(fIdx);
+            p = app.validatePlotConfigAgainstData(fIdx);
+            if ~isempty(m.brokenMappings) || ~isempty(p.brokenPlots)
+                msg = sprintf(['Flight %d %s 교체 후 호환성 경고:\n', ...
+                               '  Broken mappings: %s\n', ...
+                               '  Broken plots: %s\n', ...
+                               'dialog에서 해소할 때까지 Apply가 차단됩니다.'], ...
+                    fIdx, kind, strjoin(m.brokenMappings, ', '), strjoin(p.brokenPlots, ', '));
+                try, uialert(app.UIFigure, msg, 'D5: 호환성 검증'); catch, end
+                app.ProjectDirty = true;
+            end
+        end
+
+        function autoLoadProjectFromFile(app, filePath)
+            % [Phase 5] 12-step uiprogressdlg auto-load matching design §5.
+            if nargin < 2 || isempty(filePath) || ~isfile(filePath)
+                try, uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project'); catch, end
+                return;
+            end
+            d = [];
+            try
+                d = uiprogressdlg(app.UIFigure, 'Title', 'Project 자동 로드', ...
+                    'Message', 'project 파일 읽는 중', 'Cancelable', 'on');
+                advance = @(val, msg) app.setProgress(d, val, msg);
+
+                advance(0.02, 'project 파일 읽는 중');
+                st = app.loadProjectFile(filePath);
+                if isempty(st), return; end
+
+                advance(0.08, '파일 경로 검증 중');
+                app.applyProjectState(st, struct('skipFiles', true));
+                if ~isempty(d) && d.CancelRequested, return; end
+
+                stepBase = [0.10 0.18 0.30; 0.42 0.50 0.62]; % rows: flights, cols: option/data/avi
+                for fIdx = 1:2
+                    m = app.Models(fIdx);
+                    if ~isempty(d) && d.CancelRequested, return; end
+                    advance(stepBase(fIdx, 1), sprintf('Flight %d option 파일 읽는 중', fIdx));
+                    % option load happens together with data load (parseFlightData), so just touch path
+                    if ~isempty(m.optionFilePath) && ~isfile(m.optionFilePath)
+                        app.warnMissingFile(fIdx, 'option', m.optionFilePath);
+                    end
+
+                    advance(stepBase(fIdx, 2), sprintf('Flight %d 비행데이터 로드 중', fIdx));
+                    if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
+                        try, app.parseFlightData(fIdx, m.dataFilePath); catch ME, app.logCaught(ME, 'auto-load-data'); end
+                    elseif ~isempty(m.dataFilePath)
+                        app.warnMissingFile(fIdx, 'data', m.dataFilePath);
+                    end
+
+                    advance(stepBase(fIdx, 3), sprintf('Flight %d AVI 메타데이터 로드 중', fIdx));
+                    if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
+                        try, app.loadAviFile(fIdx); catch ME, app.logCaught(ME, 'auto-load-avi'); end
+                    elseif ~isempty(m.aviFilePath)
+                        app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
+                    end
+                end
+
+                if ~isempty(d) && d.CancelRequested, return; end
+                advance(0.78, '비행데이터 동기화 상태 복원 중');
+                if app.SyncState.IsSynced
+                    app.setFlightDataSync(app.SyncState.SyncT1, app.SyncState.SyncT2, true);
+                end
+                for fIdx = 1:2
+                    vss = app.VideoSyncState(fIdx);
+                    if vss.IsSynced && ~isempty(app.VideoState(fIdx).videoReader)
+                        app.setVideoSync(fIdx, vss.AnchorFrame, vss.AnchorTime, vss.VideoFps, vss.DataFps, true);
+                    end
+                end
+
+                advance(0.86, 'plot tab 복원 중');
+                if ~isempty(app.PlotConfigState)
+                    for fIdx = 1:2
+                        try, app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState); catch ME, app.logCaught(ME, 'auto-load-plots'); end
+                    end
+                end
+
+                advance(0.94, '화면 갱신 중');
+                for fIdx = 1:2
+                    try
+                        if ~isempty(app.Models(fIdx).rawData) && height(app.Models(fIdx).rawData) > 0
+                            app.setupDataUI(fIdx);
+                            app.afterFileReplaceValidation(fIdx, 'project-load');
+                        end
+                    catch ME, app.logCaught(ME, 'silent'); end
+                end
+
+                advance(1.00, '완료');
+                app.ProjectDirty = false;
+            catch ME
+                app.logCaught(ME, 'auto-load');
+                try, uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project'); catch, end
+            end
+            try, if ~isempty(d) && isvalid(d), close(d); end, catch, end
+        end
+
+        function setProgress(~, d, val, msg)
+            try
+                if isempty(d) || ~isvalid(d), return; end
+                d.Value   = max(0, min(1, val));
+                d.Message = msg;
+            catch
+            end
+        end
+
+        function warnMissingFile(app, fIdx, kind, p)
+            % Lightweight non-blocking warn; design §5 calls for skip/reselect/abort dialog.
+            try
+                sel = uiconfirm(app.UIFigure, ...
+                    sprintf('Flight %d %s 파일을 찾을 수 없습니다:\n%s', fIdx, kind, p), ...
+                    '누락 파일', 'Options', {'건너뛰기', '파일 다시 선택', '중단'}, ...
+                    'DefaultOption', 1, 'CancelOption', 3);
+                switch sel
+                    case '파일 다시 선택'
+                        app.requestFileChange(fIdx, kind);
+                    case '중단'
+                        error('FlightDataDashboard:AutoLoadAborted', '사용자가 자동 로드를 중단했습니다.');
+                end
+                app.ProjectDirty = true;   % stays dirty until resolved
+            catch ME
+                if ~strcmp(ME.identifier, 'FlightDataDashboard:AutoLoadAborted')
+                    app.logCaught(ME, 'missing-file');
+                else
+                    rethrow(ME);
+                end
+            end
+        end
+
         function rebuildPlotsFromConfig(app, fIdx, cfg)
             % Lightweight rebuild stub: clears tabs then re-adds plots by YColumn order.
             % Full UI rebuild matches setupDataUI semantics; left for follow-up.
