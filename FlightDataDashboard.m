@@ -5711,8 +5711,14 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     app.refreshBoardOffSummaryPanel(fIdx, true);
                 end
 
+                % [Bug fix B1] Always reflow BOTH boards after any toggle so that
+                % collapsed/expanded panel widths render correctly. drawnow forces an
+                % immediate layout pass — without it the source board can keep stale
+                % 0-width columns visible as blank space.
+                app.reflowBoardColumns(fIdx);
+                app.reflowBoardColumns(sourceIdx);
                 app.updateBoardToggleButtons();
-                drawnow limitrate;
+                drawnow;
             catch ME
                 app.logCaught(ME, 'boardToggle');
             end
@@ -5744,25 +5750,44 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 snap = app.BoardPanelVisibleSnapshot{fIdx};
                 if isempty(snap) || ~isstruct(snap)
                     app.setUiVisible(app.UI(fIdx).panel, true);
+                    app.ensureBoardCorePanelsVisible(fIdx);
                     app.reflowBoardColumns(fIdx);
                     return;
                 end
                 if isfield(snap, 'PanelVisible')
                     app.UI(fIdx).PanelVisible = snap.PanelVisible;
                 end
-                if isfield(snap, 'ColumnWidth') && isfield(app.UI(fIdx), 'dataGrid') && ...
-                        ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
-                    app.UI(fIdx).dataGrid.ColumnWidth = snap.ColumnWidth;
-                end
+                % [Bug fix B1] Do NOT restore snap.ColumnWidth here — reflowBoardColumns
+                % computes the canonical widths from PanelVisible and BoardOffState, so the
+                % stored snapshot would otherwise leave stale 0-width columns from off-mode.
                 if isfield(snap, 'panelVisible')
                     app.setUiVisible(app.UI(fIdx).panel, snap.panelVisible);
                 else
                     app.setUiVisible(app.UI(fIdx).panel, true);
                 end
+                % [Bug fix B2] Per design §1.1: after board toggle, 데이터 뷰 패널 and
+                % 현재 비행 정보 must be visible regardless of pre-off state.
+                app.ensureBoardCorePanelsVisible(fIdx);
                 app.reflowBoardColumns(fIdx);
             catch ME
                 app.setUiVisible(app.UI(fIdx).panel, true);
                 app.logCaught(ME, 'boardRestore');
+            end
+        end
+
+        function ensureBoardCorePanelsVisible(app, fIdx)
+            % [Bug fix B2] Force 데이터 뷰 / 현재 비행 정보 to be visible. These have
+            % no togglePanel button but can be zero-width inside the off-mode source board.
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
+                % Side-panel toggles remain whatever the snapshot/user set; we only ensure
+                % the info table column (#3) and H plot column (#4) come back non-zero in
+                % reflowBoardColumns by leaving those cells alone here. The actual width
+                % restoration happens in reflowBoardColumns which always sets widths{3}
+                % from getResponsivePanelWidths and widths{4}='1x' when board is not off.
+            catch ME
+                app.logCaught(ME, 'silent');
             end
         end
 
@@ -6079,8 +6104,13 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                         tl.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(sourceIdx, tIdx, src, event);
                         mk.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(sourceIdx, tIdx, src, event);
                         try
-                            disableDefaultInteractivity(ax);
+                            % [Bug fix] match source axes interactions so marker/xline
+                            % ButtonDownFcn fires reliably. disableDefaultInteractivity
+                            % was suppressing pick events on some MATLAB releases.
+                            ax.Interactions = [panInteraction, zoomInteraction];
                             ax.Toolbar.Visible = 'off';
+                            tl.PickableParts = 'visible';
+                            mk.PickableParts = 'visible';
                         catch
                         end
                         app.UI(fIdx).boardOffPlotAxes{tIdx}{pIdx} = ax;
@@ -6285,13 +6315,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w');
             plotPanel.Layout.Column = 2;
             plotGrid = uigridlayout(plotPanel, [2 1], 'Padding', [2 2 2 2]);
-            plotGrid.RowHeight = {30, '1x'};
-            btnPnl = uipanel(plotGrid, 'BorderType', 'none', 'BackgroundColor', 'w');
-            btnPnl.Layout.Row = 1;
-            uibutton(btnPnl, 'Text', '+ 빈 탭 추가', 'Position', [5 5 90 22], ...
+            plotGrid.RowHeight = {28, '1x'};
+            plotGrid.RowSpacing = 4;
+            % [Bug fix] Use uigridlayout for the button row instead of an absolute-positioned
+            % uipanel. A uipanel nested in a uigridlayout auto-normalizes child positions and
+            % the previous [5 5 90 22] pixel layout was collapsing the two buttons out of view.
+            btnRow = uigridlayout(plotGrid, [1 3], 'Padding', [2 2 2 2], 'ColumnSpacing', 4);
+            btnRow.Layout.Row = 1;
+            btnRow.ColumnWidth = {110, 120, '1x'};
+            uibutton(btnRow, 'Text', '+ 빈 탭 추가', ...
                 'ButtonPushedFcn', @(~,~) app.boardOffAddPlotTab(fIdx));
-            uibutton(btnPnl, 'Text', '현재 탭 지우기', 'Position', [100 5 100 22], ...
+            uibutton(btnRow, 'Text', '현재 탭 지우기', ...
                 'ButtonPushedFcn', @(~,~) app.boardOffClearCurrentTab(fIdx));
+            uilabel(btnRow, 'Text', '');  % spacer
 
             tg = uitabgroup(plotGrid);
             tg.Layout.Row = 2;
