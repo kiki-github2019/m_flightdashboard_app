@@ -112,6 +112,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         AsyncTargetFrame    = [NaN, NaN]      % [V3.19 (1)] 비동기 디코딩 중인 frame No
         AsyncGen            = [0, 0]          % [V3.21 #1-A] generation counter (race 차단)
         VideoFilePath       = {'', ''}        % [V3.19 (1)] worker가 자체 VideoReader 생성용
+        CurrentVideoFrame   = {[], []}        % 표시 해상도 변경 시 재렌더링할 원본 최신 프레임
         NormalWindowPosition = []             % 마지막 일반 창 위치(최대화 복원용)
         IsRestoringWindow   = false           % 복원 중 SizeChanged 저장 방지
         IsWindowManuallyMaximized = false     % WindowState 미지원 버전 fallback
@@ -710,18 +711,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
 
             if ~isempty(firstFrame)
-                set(app.VideoState(fIdx).vidImageHandle, 'CData', firstFrame);
-
-                % [수정] 첫 프레임 로드 시 정사각형 고정 비율을 해제하고 원본 해상도로 맞춤
-                if isfield(app.UI(fIdx), 'vidAxes') && any(isvalid(app.UI(fIdx).vidAxes))
-                    app.UI(fIdx).vidAxes.XLim = [0.5, size(firstFrame, 2) + 0.5];
-                    app.UI(fIdx).vidAxes.YLim = [0.5, size(firstFrame, 1) + 0.5];
-
-                    % 비율 고정을 풀고 영상의 실제 픽셀 비율(1:1:1)로 복구
-                    app.UI(fIdx).vidAxes.DataAspectRatio = [1 1 1];
-                    app.UI(fIdx).vidAxes.PlotBoxAspectRatioMode = 'auto';
-                end
-
+                app.setVideoImageFrame(fIdx, firstFrame);
                 app.cacheStoreFrame(fIdx, 1, firstFrame);
             end
         end
@@ -1707,7 +1697,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function displayFrame(app, fIdx, frameNo, img, isCacheHit)
             try
                 if ~app.isVideoReady(fIdx) || isempty(img), return; end
-                set(app.VideoState(fIdx).vidImageHandle, 'CData', img);
+                app.setVideoImageFrame(fIdx, img);
                 app.LastDisplayedFrame(fIdx) = frameNo;   % [PATCH] 조기반환 키
 
                 % 캐시 store (히트 아닐 때만 - cache-first write-through)
@@ -1752,7 +1742,7 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 app.VideoState(fIdx).videoReader.CurrentTime = relTime;
                 if hasFrame(app.VideoState(fIdx).videoReader)
                     frame = readFrame(app.VideoState(fIdx).videoReader);
-                    set(app.VideoState(fIdx).vidImageHandle, 'CData', frame);
+                    app.setVideoImageFrame(fIdx, frame);
                 end
             catch ME_silent, app.logCaught(ME_silent, 'silent'); end
         end
@@ -3121,17 +3111,6 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         function targetWidth = getVideoPanelTargetWidth(app, fIdx)
             panelWidths = app.getResponsivePanelWidths();
             targetWidth = panelWidths(4);
-            try
-                if ~isempty(app.UI) && fIdx <= numel(app.UI) && ...
-                   isfield(app.UI(fIdx), 'vidResolutionDropdown') && ...
-                   ~isempty(app.UI(fIdx).vidResolutionDropdown) && ...
-                   isvalid(app.UI(fIdx).vidResolutionDropdown)
-                    sizePx = app.getSelectedVideoDisplaySize(fIdx);
-                    targetWidth = sizePx(1) + 36;
-                end
-            catch ME_silent
-                app.logCaught(ME_silent, 'silent');
-            end
             targetWidth = round(max(app.getMinVideoPanelWidth(), min(targetWidth, 900)));
         end
 
@@ -3270,9 +3249,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
         function onVideoResolutionChanged(app, fIdx)
             try
+                app.setVideoImageFrame(fIdx, app.CurrentVideoFrame{fIdx});
                 app.setVideoDisplaySize(fIdx);
-                app.adjustVideoPanelWidth(fIdx);
-                app.applyResponsiveLayout();
             catch ME_silent
                 app.logCaught(ME_silent, 'videoResolution');
             end
@@ -3287,21 +3265,63 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
                 sizePx = app.getSelectedVideoDisplaySize(fIdx);
                 pad = 8;
-                x = pad; y = pad;
-                if isfield(app.UI(fIdx), 'vidContainer') && ~isempty(app.UI(fIdx).vidContainer) && ...
-                   isvalid(app.UI(fIdx).vidContainer)
-                    try
-                        containerPos = getpixelposition(app.UI(fIdx).vidContainer);
-                        x = max(pad, round((containerPos(3) - sizePx(1)) / 2));
-                        y = max(pad, round((containerPos(4) - sizePx(2)) / 2));
-                    catch ME_inner
-                        app.logCaught(ME_inner, 'silent');
-                    end
-                end
                 app.UI(fIdx).vidAxes.Units = 'pixels';
-                app.UI(fIdx).vidAxes.Position = [x, y, sizePx(1), sizePx(2)];
+                app.UI(fIdx).vidAxes.Position = [pad, pad, sizePx(1), sizePx(2)];
             catch ME_silent
                 app.logCaught(ME_silent, 'videoDisplaySize');
+            end
+        end
+
+        function out = resizeFrameForDisplay(app, img, sizePx)
+            out = img;
+            try
+                if isempty(img) || numel(sizePx) ~= 2, return; end
+                targetW = max(1, round(sizePx(1)));
+                targetH = max(1, round(sizePx(2)));
+                if size(img, 2) == targetW && size(img, 1) == targetH
+                    return;
+                end
+                try
+                    out = imresize(img, [targetH, targetW]);
+                catch ME_resize
+                    app.logCaught(ME_resize, 'silent');
+                    rowIdx = round(linspace(1, size(img, 1), targetH));
+                    colIdx = round(linspace(1, size(img, 2), targetW));
+                    rowIdx = max(1, min(size(img, 1), rowIdx));
+                    colIdx = max(1, min(size(img, 2), colIdx));
+                    out = img(rowIdx, colIdx, :);
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoResize');
+                out = img;
+            end
+        end
+
+        function setVideoImageFrame(app, fIdx, img)
+            try
+                if isempty(img), return; end
+                app.CurrentVideoFrame{fIdx} = img;
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                if ~isfield(app.UI(fIdx), 'vidImageHandle') || ...
+                   isempty(app.UI(fIdx).vidImageHandle) || ~isvalid(app.UI(fIdx).vidImageHandle)
+                    return;
+                end
+                sizePx = app.getSelectedVideoDisplaySize(fIdx);
+                dispFrame = app.resizeFrameForDisplay(img, sizePx);
+                hImg = app.UI(fIdx).vidImageHandle;
+                set(hImg, 'CData', dispFrame, 'XData', [1 sizePx(1)], 'YData', [1 sizePx(2)]);
+                if isfield(app.UI(fIdx), 'vidAxes') && ~isempty(app.UI(fIdx).vidAxes) && ...
+                   isvalid(app.UI(fIdx).vidAxes)
+                    ax = app.UI(fIdx).vidAxes;
+                    ax.XLim = [0.5, sizePx(1) + 0.5];
+                    ax.YLim = [0.5, sizePx(2) + 0.5];
+                    ax.DataAspectRatio = [1 1 1];
+                    ax.PlotBoxAspectRatioMode = 'auto';
+                    axis(ax, 'off');
+                end
+                app.setVideoDisplaySize(fIdx);
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoDisplayFrame');
             end
         end
 
@@ -3662,7 +3682,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 axis(UI_temp(fIdx).vidAxes, 'off');
                 disableDefaultInteractivity(UI_temp(fIdx).vidAxes);
                 UI_temp(fIdx).vidAxes.Toolbar.Visible = 'off';
-                UI_temp(fIdx).vidImageHandle = image(UI_temp(fIdx).vidAxes, zeros(100,100,3,'uint8'));
+                UI_temp(fIdx).vidImageHandle = image(UI_temp(fIdx).vidAxes, zeros(240,320,3,'uint8'), ...
+                    'XData', [1 320], 'YData', [1 240]);
                 ctrl = app.createVideoControlDialog(fIdx);
                 UI_temp(fIdx).vidControlDialog = ctrl.vidControlDialog;
                 UI_temp(fIdx).vidSyncFrameInput = ctrl.vidSyncFrameInput;
