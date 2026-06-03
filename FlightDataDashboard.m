@@ -6131,27 +6131,13 @@
         end
 
         function restoreBoardPanelState(app, fIdx)
+            % [Bug #2 fix] Do NOT overwrite PanelVisible from the pre-off snapshot.
+            % The user may have toggled side panels (attitude/map/video) on the source
+            % board WHILE in off mode; reflowBoardColumns must use the CURRENT PanelVisible
+            % so those mid-off changes survive after board-on press.
             try
-                snap = app.BoardPanelVisibleSnapshot{fIdx};
-                if isempty(snap) || ~isstruct(snap)
-                    app.setUiVisible(app.UI(fIdx).panel, true);
-                    app.ensureBoardCorePanelsVisible(fIdx);
-                    app.reflowBoardColumns(fIdx);
-                    return;
-                end
-                if isfield(snap, 'PanelVisible')
-                    app.UI(fIdx).PanelVisible = snap.PanelVisible;
-                end
-                % [Bug fix B1] Do NOT restore snap.ColumnWidth here — reflowBoardColumns
-                % computes the canonical widths from PanelVisible and BoardOffState, so the
-                % stored snapshot would otherwise leave stale 0-width columns from off-mode.
-                if isfield(snap, 'panelVisible')
-                    app.setUiVisible(app.UI(fIdx).panel, snap.panelVisible);
-                else
-                    app.setUiVisible(app.UI(fIdx).panel, true);
-                end
-                % [Bug fix B2] Per design §1.1: after board toggle, 데이터 뷰 패널 and
-                % 현재 비행 정보 must be visible regardless of pre-off state.
+                % Make sure the board panel itself is visible again (off-board case).
+                app.setUiVisible(app.UI(fIdx).panel, true);
                 app.ensureBoardCorePanelsVisible(fIdx);
                 app.reflowBoardColumns(fIdx);
             catch ME
@@ -6483,11 +6469,21 @@
                             srcAx = app.UI(sourceIdx).plotAxes{tIdx}{pIdx};
                             if ~isempty(srcAx) && isvalid(srcAx)
                                 yLabelStr = char(srcAx.YLabel.String);
-                                ax.XLim = srcAx.XLim;
+                                % [Bug #1 fix] Mirror source XLim only when user pinned it
+                                % (XLimMode='manual'). Otherwise use the data span so a fresh
+                                % source plot (whose auto XLim has not committed) cannot leak
+                                % its default [0 1] into the off summary.
+                                if strcmpi(char(srcAx.XLimMode), 'manual')
+                                    ax.XLim = srcAx.XLim;
+                                elseif numel(xData) >= 2 && xData(end) > xData(1)
+                                    ax.XLim = [xData(1) xData(end)];
+                                end
                                 ax.YLimMode = srcAx.YLimMode;
                                 if strcmpi(char(srcAx.YLimMode), 'manual')
                                     ax.YLim = srcAx.YLim;
                                 end
+                            elseif numel(xData) >= 2 && xData(end) > xData(1)
+                                ax.XLim = [xData(1) xData(end)];
                             end
                         catch
                         end
