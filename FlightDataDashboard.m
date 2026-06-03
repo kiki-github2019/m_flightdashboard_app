@@ -90,7 +90,12 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         DraggedFromVideo    = false         % [V3.12] 비디오 Frame 마커에서 드래그 시작 여부
         VideoThrottleDyn    = 0.05          % [V3.12] (V3.13에서 미사용, 보존)
         LastDragTime        = {uint64(0), uint64(0)}  % [PATCH] 채널별 tic 핸들
-        LastDisplayedFrame  = [0, 0]        % [PATCH] 동일 프레임 조기 반환용
+        LastDisplayedFrame  = [0, 0]        % [PATCH] 실제로 화면에 표시된 frame (display path 만)
+        LastDecodedFrame    = [0, 0]        % [Stabilization P1] 마지막 decode/read 결과 frame (seq readFrame 휴리스틱 전용)
+        LastRequestedFrame  = [NaN, NaN]    % [Stabilization P1] 가장 최근에 요청된 frame (사용자 기준)
+        PendingVideoFrame   = [NaN, NaN]    % [Stabilization P1] 디코딩 중 들어온 latest video frame request
+        PendingVideoMode    = {'', ''}      % [Stabilization P1] 위 frame 요청의 source mode
+        IsDeleting          = false         % [Stabilization P2] delete/close 재진입 가드
         HISplitterFIdx      = 0             % [PATCH UX-3] H/I 경계 드래그 중인 채널
         IsDraggingSplitter  = false         % [PATCH UX-3b] splitter 드래그 상태 플래그
         FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
@@ -199,7 +204,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 end
             end
 
-            close(findobj('Type', 'figure', 'Name', '비행 데이터 리뷰 대시보드 (Dual)'));
+            % [Stabilization P1] Do NOT close other instances by name.
+            % Multi-instance is supported; single-instance behaviour must be opt-in at the launcher level.
+            % (was: close(findobj('Type', 'figure', 'Name', '비행 데이터 리뷰 대시보드 (Dual)')); )
             app.NormalWindowPosition = app.getInitialWindowPosition();
             app.UIFigure = uifigure('Name', '비행 데이터 리뷰 대시보드 (Dual)', ...
                                     'Units', 'pixels', ...
@@ -226,6 +233,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
 
         function delete(app)
             % [V3.20 (5)] 명시적 리소스 정리: VideoReader, AsyncPool, futures
+            % [Stabilization P2] re-entry guard so partial cleanup cannot run twice
+            if app.IsDeleting, return; end
+            app.IsDeleting = true;
             try
                 for fIdx = 1:2
                     try
@@ -477,6 +487,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         end
 
         function UIFigureCloseRequest(app, ~, ~)
+            % [Stabilization P2] do not run the close path twice
+            if app.IsDeleting, return; end
             % [Audit fix #6] If we have pending dialog edits or a dirty project,
             % offer Save+Apply / Discard / Cancel before tearing down resources.
             try
@@ -711,6 +723,14 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             app.FrameCacheLastUse{fIdx} = [];
             app.CacheBytesUsed(fIdx)    = 0;
             app.LastDisplayedFrame(fIdx) = 0;
+            % [Stabilization P1] reset decode + pending state on AVI replace
+            app.LastDecodedFrame(fIdx)   = 0;
+            app.LastRequestedFrame(fIdx) = NaN;
+            app.PendingVideoFrame(fIdx)  = NaN;
+            app.PendingVideoMode{fIdx}   = '';
+            % invalidate any in-flight async result
+            app.AsyncGen(fIdx)           = app.AsyncGen(fIdx) + 1;
+            app.AsyncTargetFrame(fIdx)   = NaN;
         end
 
         % [V3.22 #3-3] 비행데이터 첫 시간 추출 (시작 오프셋용)
@@ -1171,6 +1191,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % [V3.17 (7)] 디코딩 진행 중 플래그 해제 (onCleanup 콜백)
         function clearDecodingFlag(app, fIdx)
             app.IsDecoding(fIdx) = false;
+            % [Stabilization P1] Drain the latest queued user request, if any.
+            try, app.drainPendingVideoRequest(fIdx); catch, end
         end
 
         % [V3.17 (2)] 캐시 존재 여부만 확인 (LRU 갱신 안 함)
@@ -1372,18 +1394,46 @@ classdef FlightDataDashboard < matlab.apps.AppBase
         % - generation 비교로 stale 결과 차단
         % - displayFrame 단일 출구 통과 (write-through)
         function onAsyncDecodeComplete(app, fIdx, frameNo, gen, img)
+            % [Stabilization P0] Strong stale-frame rejection.
+            % Display ONLY if every condition still holds at completion time.
             try
                 if isempty(img), return; end
+
+                % 1) app + figure still valid
+                if isempty(app) || ~isvalid(app) ...
+                        || isempty(app.UIFigure) || ~isvalid(app.UIFigure)
+                    return;
+                end
+                % 2) generation must match the live generation
                 if gen ~= app.AsyncGen(fIdx)
                     if app.DebugMode
-                        fprintf('[Async] stale result discarded (gen=%d, current=%d)\n', ...
-                            gen, app.AsyncGen(fIdx));
+                        fprintf('[Async] stale: gen mismatch (%d vs %d)\n', gen, app.AsyncGen(fIdx));
                     end
                     return;
                 end
-                % [V3.21 #3-A] Layer 3 단일 출구 통과
+                % 3) the frame we were asked to decode must still be the live async target
+                if isnan(app.AsyncTargetFrame(fIdx)) || frameNo ~= app.AsyncTargetFrame(fIdx)
+                    if app.DebugMode
+                        fprintf('[Async] stale: target moved (frame=%d, target=%g)\n', ...
+                            frameNo, app.AsyncTargetFrame(fIdx));
+                    end
+                    return;
+                end
+                % 4) and must still be the currently selected frame in the video state
+                if frameNo ~= app.VideoSyncState(fIdx).CurrentFrame
+                    if app.DebugMode
+                        fprintf('[Async] stale: CurrentFrame moved (frame=%d, cur=%d)\n', ...
+                            frameNo, app.VideoSyncState(fIdx).CurrentFrame);
+                    end
+                    return;
+                end
+                % 5) video still ready
+                if ~app.isVideoReady(fIdx), return; end
+
                 app.displayFrame(fIdx, frameNo, img, false);
                 app.AsyncTargetFrame(fIdx) = NaN;
+                % [Stabilization P1] consume any newer request that arrived during async work
+                try, app.drainPendingVideoRequest(fIdx); catch, end
             catch ME_silent, app.logCaught(ME_silent, 'silent'); end
         end
 
@@ -1426,8 +1476,49 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     target = cur + offset;
                     if target < 1 || target > total, continue; end
                     if app.hasCachedFrame(fIdx, target), continue; end
-                    app.updateVideoFrameByFrameNo(fIdx, target, 'autoplay');
+                    % [Stabilization P0] cache-only path; never touches displayed frame state
+                    app.prefetchFrameToCacheOnly(fIdx, target);
                 end
+            catch ME_silent, app.logCaught(ME_silent, 'silent'); end
+        end
+
+        % [Stabilization P0] Decode-and-cache a single frame WITHOUT touching display state.
+        % Guarantees:
+        %  - clamps frameNo to [1, TotalFrames]
+        %  - skips when video not ready
+        %  - skips when frame already cached
+        %  - never calls setVideoImageFrame / displayFrame
+        %  - never updates LastDisplayedFrame / VideoSyncState.CurrentFrame / slider / label
+        function prefetchFrameToCacheOnly(app, fIdx, frameNo)
+            try
+                if ~app.isVideoReady(fIdx), return; end
+                total = app.VideoSyncState(fIdx).TotalFrames;
+                if total < 1, return; end
+                clamped = max(1, min(round(frameNo), total));
+                if app.hasCachedFrame(fIdx, clamped), return; end
+
+                vr = app.VideoState(fIdx).videoReader;
+                img = [];
+                try
+                    img = read(vr, clamped);
+                catch
+                    try
+                        fps = app.VideoSyncState(fIdx).VideoFps;
+                        if fps <= 0, fps = 70; end
+                        relTime = max(0, (clamped - 1) / fps);
+                        if relTime >= vr.Duration
+                            relTime = max(0, vr.Duration - 0.05);
+                        end
+                        vr.CurrentTime = relTime;
+                        if hasFrame(vr), img = readFrame(vr); end
+                    catch ME, app.logCaught(ME, 'prefetch:fallback');
+                    end
+                end
+                if isempty(img), return; end
+                % Only mutates cache state; explicitly DOES NOT update LastDisplayedFrame.
+                app.cacheStoreFrame(fIdx, clamped, img);
+                % LastDecodedFrame is OK to update so seq-read heuristic can still benefit.
+                app.LastDecodedFrame(fIdx) = clamped;
             catch ME_silent, app.logCaught(ME_silent, 'silent'); end
         end
 
@@ -1780,7 +1871,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             totalF = app.VideoSyncState(fIdx).TotalFrames;
             clampedFrame = max(1, min(round(frameNo), max(1, totalF)));
 
-            % [PATCH] 동일 프레임 조기 반환 - GUI/디코딩 부하 동시 절감
+            % [Stabilization P1] Track the latest user-requested frame.
+            app.LastRequestedFrame(fIdx) = clampedFrame;
+
+            % 동일 프레임 조기 반환 - 실제 표시된 frame 기준
             if app.LastDisplayedFrame(fIdx) == clampedFrame, return; end
 
             % Layer 1: 캐시 lookup
@@ -1790,8 +1884,19 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                 return;
             end
 
-            % 디코딩 진행 중이면 skip (coalescing으로 후처리)
-            if app.IsDecoding(fIdx), return; end
+            % [Stabilization P1] 디코딩 진행 중이면 latest pending 만 보관 후 return.
+            % 디코드 완료 시 clearDecodingFlag/onAsyncDecodeComplete 가 drainPendingVideoRequest 를 호출.
+            if app.IsDecoding(fIdx)
+                app.PendingVideoFrame(fIdx) = clampedFrame;
+                app.PendingVideoMode{fIdx}  = source;
+                return;
+            end
+
+            % [Stabilization P0] 'final' 진입은 진행 중 async 결과를 무효화한다
+            if strcmp(source, 'final')
+                app.AsyncGen(fIdx) = app.AsyncGen(fIdx) + 1;
+                app.AsyncTargetFrame(fIdx) = NaN;
+            end
 
             % 전략 선택: async vs sync
             if app.UseAsyncDecode && strcmp(source, 'drag')
@@ -1809,6 +1914,21 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             end
         end
 
+        % [Stabilization P1] Process the latest pending video request (if any).
+        % Called once after a decode completes. Only the newest request matters.
+        function drainPendingVideoRequest(app, fIdx)
+            try
+                if isnan(app.PendingVideoFrame(fIdx)), return; end
+                target = app.PendingVideoFrame(fIdx);
+                mode   = app.PendingVideoMode{fIdx};
+                app.PendingVideoFrame(fIdx) = NaN;
+                app.PendingVideoMode{fIdx}  = '';
+                % Skip stale intermediate if the newest user request differs and is also pending.
+                if app.LastDisplayedFrame(fIdx) == target, return; end
+                app.requestFrame(fIdx, target, mode);
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
         % [V3.21 #3-A Layer 2] 동기 디코딩 (read or 폴백)
         function img = decodeFrameSync(app, fIdx, clampedFrame)
             img = [];
@@ -1817,7 +1937,9 @@ classdef FlightDataDashboard < matlab.apps.AppBase
             % [PATCH Async 1.2 / V3.22 #4] 작은 step 휴리스틱 - 직전 표시 프레임 근처면 readFrame 순차
             % MP4 역방향 seek는 매우 비싸므로 전진 방향 작은 step만 readFrame 사용
             try
-                lastF = app.LastDisplayedFrame(fIdx);
+                % [Stabilization P1] seq-read heuristic uses last DECODED frame (read position
+                % of the VideoReader), not last DISPLAYED frame.
+                lastF = app.LastDecodedFrame(fIdx);
                 fps = app.VideoSyncState(fIdx).VideoFps;
                 if fps <= 0, fps = 70; end
                 step = clampedFrame - lastF;
@@ -1825,7 +1947,10 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     for k = 1:step
                         if hasFrame(vr), img = readFrame(vr); else, img = []; break; end
                     end
-                    if ~isempty(img), return; end
+                    if ~isempty(img)
+                        app.LastDecodedFrame(fIdx) = clampedFrame;
+                        return;
+                    end
                 end
             catch ME, app.logCaught(ME, 'decodeSync:seq'); end
 
@@ -1849,6 +1974,8 @@ classdef FlightDataDashboard < matlab.apps.AppBase
                     img = [];
                 end
             end
+            % [Stabilization P1] Track read position for seq heuristic.
+            if ~isempty(img), app.LastDecodedFrame(fIdx) = clampedFrame; end
         end
 
         % [V3.21 #3-A Layer 3] 단일 표시 출구 - 모든 디코딩 결과는 여기 통과
