@@ -133,6 +133,9 @@
         ProjectState         = []              % cached struct mirroring .fdproj
         ProjectFilePath      = ''              % absolute path of currently loaded project
         ProjectDirty         = false           % true when in-memory state diverges from saved file
+        ProjectConfirmOnClose = true           % ask before closing with dirty project/options
+        ProjectAutosaveEnabled = true          % enable .autosave snapshot timer
+        ProjectLastSaveText  = ''              % last successful project save timestamp for Project tab
         OptionDrafts         = {[], []}        % per-flight option editor draft buffers (Phase 2 fills)
         PlotConfigState      = []              % captured PlotConfig (Phase 4 fills)
         EditDialog           = []              % handle to edit uifigure (modeless)
@@ -153,6 +156,8 @@
         EDProjectPathLbl     = []
         EDProjectStatusLbl   = []
         EDProjectAutosaveCB  = []
+        EDProjectConfirmCloseCB = []
+        EDProjectLastSaveLbl = []
         EDFilesPathLbl       = struct()
         EDSyncF1Time         = []
         EDSyncF2Time         = []
@@ -174,6 +179,7 @@
         % [F-01] Plot Manager 속성 패널 핸들
         EDPlotNameEdit       = []
         EDPlotYColDD         = []
+        EDPlotYLabelEdit     = []
         EDPlotXMin           = []
         EDPlotXMax           = []
         EDPlotYMin           = []
@@ -183,6 +189,8 @@
         EDExpParentEdit      = []
         EDExpPreviewLbl      = []
         EDExpHashCB          = []
+        EDExpFileTable       = []
+        EDExpMissingLbl      = []
         EDExpLogArea         = []
     end
 
@@ -853,7 +861,7 @@
             try
                 pendingTimer = ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
                                && strcmpi(app.EditApplyTimer.Running, 'on');
-                if app.ProjectDirty || pendingTimer
+                if (app.ProjectDirty || pendingTimer) && app.ProjectConfirmOnClose
                     try
                         sel = uiconfirm(app.UIFigure, ...
                             ['저장되지 않은 편집 사항이 있습니다.', newline, ...
@@ -953,6 +961,16 @@
                                 catch
                                 end
                             end
+                    end
+                elseif pendingTimer
+                    try
+                        stop(app.EditApplyTimer)
+                    catch
+                    end
+                    try
+                        app.applyPendingDialogChanges();
+                    catch ME
+                        app.logCaught(ME, 'close-apply-no-confirm')
                     end
                 end
             catch ME
@@ -3607,6 +3625,35 @@
             end
         end
 
+        function applyPlotYLabelInPlace(app, fIdx, tabIdx, plotIdx, yLabelText)
+            try
+                if tabIdx > numel(app.UI(fIdx).plotAxes) || ~iscell(app.UI(fIdx).plotAxes{tabIdx}) ...
+                        || plotIdx > numel(app.UI(fIdx).plotAxes{tabIdx})
+                    return;
+                end
+                ax = app.UI(fIdx).plotAxes{tabIdx}{plotIdx};
+                if isempty(ax) || ~isvalid(ax), return; end
+                ylabel(ax, yLabelText, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
+        function applyPlotHeightInPlace(app, fIdx, tabIdx, plotIdx, heightValue)
+            try
+                if tabIdx > numel(app.UI(fIdx).plotLayouts), return; end
+                layout = app.UI(fIdx).plotLayouts{tabIdx};
+                if isempty(layout) || ~isvalid(layout), return; end
+                rowHeight = layout.RowHeight;
+                if numel(rowHeight) < plotIdx, return; end
+                heightValue = max(60, min(600, double(heightValue)));
+                rowHeight{plotIdx} = heightValue;
+                layout.RowHeight = rowHeight;
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
         function ok = replacePlotYColumnInPlace(app, fIdx, tabIdx, plotIdx, yCol)
             % Replace one Plot Manager plot's Y source without rebuilding the tab.
             % Rebuilding from PlotConfig can drop plots when config and live UI are out of sync.
@@ -3940,6 +3987,11 @@
             d.Value   = 0.96;
             d.Message = '검증 중';
             verifyReport = app.verifyExportedProject(projDst, copyMap, opts.verifyHash);
+            try
+                app.writeExportVerificationReport(target, verifyReport, failures, opts.verifyHash);
+            catch ME
+                app.logCaught(ME, 'export-report')
+            end
 
             ok = isempty(failures) && verifyReport.allPresent && verifyReport.allSizeMatch ...
                  && verifyReport.allWithinFolder ...
@@ -4020,6 +4072,20 @@
                         missing(end+1) = addMissing(sprintf('aux%d', i), p, 'aux_', 0); %#ok<AGROW>
                     end
                 end
+            end
+        end
+
+        function previewPath = getExportProjectPreviewPath(app)
+            previewPath = 'project.fdproj';
+            try
+                if ~isempty(app.ProjectFilePath)
+                    [~, b, ~] = fileparts(app.ProjectFilePath);
+                    if ~isempty(b)
+                        previewPath = [b '.fdproj'];
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'silent')
             end
         end
 
@@ -4167,6 +4233,40 @@
             catch ME
                 app.logCaught(ME, 'export-verify');
                 report.errors{end+1} = ME.message;
+            end
+        end
+
+        function writeExportVerificationReport(~, targetFolder, report, failures, verifyHash)
+            if nargin < 5, verifyHash = false; end
+            reportPath = fullfile(targetFolder, 'export_verification_report.md');
+            fid = fopen(reportPath, 'w');
+            if fid < 0
+                error('FlightDataDashboard:ExportReportWrite', 'cannot write %s', reportPath);
+            end
+            cleanup = onCleanup(@() fclose(fid));
+            fprintf(fid, '# Export Verification Report\n\n');
+            fprintf(fid, '- Generated: %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+            fprintf(fid, '- SHA256: %s\n', mat2str(logical(verifyHash)));
+            fprintf(fid, '- Present: %d / %d\n', report.presentCount, report.totalCount);
+            fprintf(fid, '- Size match: %d / %d\n', report.sizeMatchCount, report.totalCount);
+            fprintf(fid, '- Hash match: %d / %d\n', report.hashMatchCount, report.totalCount);
+            fprintf(fid, '- All within folder: %s\n\n', mat2str(logical(report.allWithinFolder)));
+            if isempty(failures)
+                fprintf(fid, '## Copy Failures\n\nNone\n\n');
+            else
+                fprintf(fid, '## Copy Failures\n\n');
+                for i = 1:numel(failures)
+                    fprintf(fid, '- %s\n', failures{i});
+                end
+                fprintf(fid, '\n');
+            end
+            if isempty(report.errors)
+                fprintf(fid, '## Verification Errors\n\nNone\n');
+            else
+                fprintf(fid, '## Verification Errors\n\n');
+                for i = 1:numel(report.errors)
+                    fprintf(fid, '- %s\n', report.errors{i});
+                end
             end
         end
 
@@ -4569,6 +4669,26 @@
                                     end
                                     if isfield(spec, 'YLim') && ~isempty(spec.YLim) ...
                                             && numel(spec.YLim) == 2, ax.YLim = spec.YLim; end
+                                    if isfield(spec, 'YLabel') && ~isempty(spec.YLabel)
+                                        ylabel(ax, char(spec.YLabel), 'FontWeight', 'bold', ...
+                                            'FontSize', 10, 'Interpreter', 'none');
+                                    end
+                                    if isfield(spec, 'Height') && ~isempty(spec.Height)
+                                        app.applyPlotHeightInPlace(fIdx, t, numel(axesCell), spec.Height);
+                                    end
+                                    cfgLive = app.ensurePlotConfigShape(app.PlotConfigState);
+                                    livePlotIdx = numel(axesCell);
+                                    if numel(cfgLive.Flights(fIdx).PlotTabs) >= t ...
+                                            && numel(cfgLive.Flights(fIdx).PlotTabs(t).Plots) >= livePlotIdx
+                                        if isfield(spec, 'YLabel') && ~isempty(spec.YLabel)
+                                            cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).YLabel = char(spec.YLabel);
+                                        end
+                                        if isfield(spec, 'Height') && ~isempty(spec.Height)
+                                            cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).Height = spec.Height;
+                                        end
+                                        cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).Order = livePlotIdx;
+                                        app.PlotConfigState = cfgLive;
+                                    end
                                 end
                             end
                         catch ME
@@ -4705,8 +4825,8 @@
         end
 
         function buildEditTabProject(app, parent)
-            gl = uigridlayout(parent, [6 4]);
-            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl = uigridlayout(parent, [7 4]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
             gl.ColumnWidth = {120, '1x', 100, 100};
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
@@ -4728,9 +4848,19 @@
 
             uilabel(gl, 'Text', '자동 저장:', 'FontWeight', 'bold');
             app.EDProjectAutosaveCB = uicheckbox(gl, 'Text', sprintf('%d초 간격 snapshot', app.AutosaveIntervalSec), ...
-                'Value', true, ...
+                'Value', app.ProjectAutosaveEnabled, ...
                 'ValueChangedFcn', @(src,~) app.editDialogToggleAutosave(src.Value));
             app.EDProjectAutosaveCB.Layout.Column = [2 4];
+
+            uilabel(gl, 'Text', '종료 확인:', 'FontWeight', 'bold');
+            app.EDProjectConfirmCloseCB = uicheckbox(gl, 'Text', '종료 전 저장 확인', ...
+                'Value', app.ProjectConfirmOnClose, ...
+                'ValueChangedFcn', @(src,~) app.editDialogToggleCloseConfirm(src.Value));
+            app.EDProjectConfirmCloseCB.Layout.Column = [2 4];
+
+            uilabel(gl, 'Text', '마지막 저장:', 'FontWeight', 'bold');
+            app.EDProjectLastSaveLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectLastSaveLbl.Layout.Column = [2 4];
         end
 
         function buildEditTabFiles(app, parent)
@@ -4899,8 +5029,8 @@
                 'SelectionChangedFcn', @(~,~) app.onPlotTreeSelectionChanged());
 
             propPanel = uipanel(mid, 'Title', '선택 항목 속성', 'FontWeight', 'bold');
-            pg = uigridlayout(propPanel, [10 2]);
-            pg.RowHeight = repmat({'fit'}, 1, 10);
+            pg = uigridlayout(propPanel, [11 2]);
+            pg.RowHeight = repmat({'fit'}, 1, 11);
             pg.ColumnWidth = {110, '1x'};
             pg.RowSpacing = 4; pg.Padding = [6 6 6 6];
 
@@ -4909,6 +5039,9 @@
                 'Editable', 'off', 'Tooltip', 'YColumn 기반 자동 생성');
             uilabel(pg, 'Text', 'Y 데이터 항목:');
             app.EDPlotYColDD = uidropdown(pg, 'Items', {'(선택)'}, 'Value', '(선택)');
+            uilabel(pg, 'Text', 'Y 라벨:');
+            app.EDPlotYLabelEdit = uieditfield(pg, 'text', 'Value', '', ...
+                'Tooltip', 'plot y축에 표시할 라벨');
             uilabel(pg, 'Text', 'X min:');
             app.EDPlotXMin = uieditfield(pg, 'numeric', 'Value', 0);
             uilabel(pg, 'Text', 'X max:');
@@ -4923,11 +5056,17 @@
             uilabel(pg, 'Text', 'Plot height:');
             app.EDPlotHeight = uieditfield(pg, 'numeric', 'Value', 150, 'Limits', [60 600]);
             uilabel(pg, 'Text', '액션:');
-            actRow = uigridlayout(pg, [1 3], 'Padding', [0 0 0 0], 'ColumnSpacing', 4);
-            actRow.ColumnWidth = {'1x', '1x', '1x'};
+            actRow = uigridlayout(pg, [1 5], 'Padding', [0 0 0 0], 'ColumnSpacing', 4);
+            actRow.ColumnWidth = {52, 34, 34, 52, 64};
             uibutton(actRow, 'Text', '적용', ...
                 'BackgroundColor', [0.15 0.38 0.82], 'FontColor', 'w', 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyPlotProps());
+            uibutton(actRow, 'Text', '↑', ...
+                'Tooltip', '선택 plot 순서를 위로 이동', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogMoveSelectedPlot(-1));
+            uibutton(actRow, 'Text', '↓', ...
+                'Tooltip', '선택 plot 순서를 아래로 이동', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogMoveSelectedPlot(1));
             uibutton(actRow, 'Text', '복제', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogDuplicatePlot());
             uibutton(actRow, 'Text', '삭제(plot)', ...
@@ -4946,8 +5085,8 @@
         end
 
         function buildEditTabExport(app, parent)
-            gl = uigridlayout(parent, [6 3]);
-            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl = uigridlayout(parent, [8 3]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', '1x', 'fit', 'fit', 90};
             gl.ColumnWidth = {180, '1x', 140};
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
@@ -4964,15 +5103,26 @@
             app.EDExpHashCB = uicheckbox(gl, 'Text', '느림. 기본 off', 'Value', false);
             uilabel(gl, 'Text', '');
 
-            uilabel(gl, 'Text', '');
+            uibutton(gl, 'Text', '목록 새로고침', ...
+                'ButtonPushedFcn', @(~,~) app.refreshExportTab());
             uibutton(gl, 'Text', 'Export everything to folder', ...
                 'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogExport());
             uilabel(gl, 'Text', '');
 
+            app.EDExpFileTable = uitable(gl, 'Data', cell(0, 4), ...
+                'ColumnName', {'Role', 'Status', 'MB', 'Path'}, ...
+                'ColumnEditable', [false false false false]);
+            app.EDExpFileTable.Layout.Row = 5;
+            app.EDExpFileTable.Layout.Column = [1 3];
+
+            uilabel(gl, 'Text', '누락/요약:', 'FontWeight', 'bold');
+            app.EDExpMissingLbl = uilabel(gl, 'Text', '파일 0개', 'FontColor', [0.3 0.3 0.7]);
+            app.EDExpMissingLbl.Layout.Column = [2 3];
+
             uilabel(gl, 'Text', 'Progress log:', 'FontWeight', 'bold');
             app.EDExpLogArea = uitextarea(gl, 'Value', {''}, 'Editable', 'off');
-            app.EDExpLogArea.Layout.Row = 5; app.EDExpLogArea.Layout.Column = [2 3];
+            app.EDExpLogArea.Layout.Row = 8; app.EDExpLogArea.Layout.Column = [1 3];
         end
 
         % ===== Refresh helpers ========================================
@@ -4992,6 +5142,19 @@
                         app.EDProjectStatusLbl.Text = '저장됨';
                     else
                         app.EDProjectStatusLbl.Text = '미저장';
+                    end
+                end
+                if ~isempty(app.EDProjectAutosaveCB) && isvalid(app.EDProjectAutosaveCB)
+                    app.EDProjectAutosaveCB.Value = logical(app.ProjectAutosaveEnabled);
+                end
+                if ~isempty(app.EDProjectConfirmCloseCB) && isvalid(app.EDProjectConfirmCloseCB)
+                    app.EDProjectConfirmCloseCB.Value = logical(app.ProjectConfirmOnClose);
+                end
+                if ~isempty(app.EDProjectLastSaveLbl) && isvalid(app.EDProjectLastSaveLbl)
+                    if isempty(app.ProjectLastSaveText)
+                        app.EDProjectLastSaveLbl.Text = '(없음)';
+                    else
+                        app.EDProjectLastSaveLbl.Text = app.ProjectLastSaveText;
                     end
                 end
             catch
@@ -5129,6 +5292,39 @@
                 if isempty(app.EDExpPreviewLbl) || ~isvalid(app.EDExpPreviewLbl), return; end
                 folderName = ['FlightDashboard_' char(datetime('now', 'Format', 'yyyy-MM-dd_HH-mm-ss'))];
                 app.EDExpPreviewLbl.Text = folderName;
+                if isempty(app.EDExpFileTable) || ~isvalid(app.EDExpFileTable), return; end
+                st = app.collectCurrentProjectState();
+                [fileList, missingList] = app.buildExportFileList(st);
+                rows = cell(numel(fileList) + numel(missingList) + 1, 4);
+                r = 1;
+                rows(r, :) = {'project', 'generated', '', app.getExportProjectPreviewPath()};
+                r = r + 1;
+                for k = 1:numel(fileList)
+                    bytesMb = '';
+                    try
+                        d = dir(fileList(k).src);
+                        if ~isempty(d)
+                            bytesMb = sprintf('%.2f', d(1).bytes / 1024 / 1024);
+                        end
+                    catch
+                    end
+                    rows(r, :) = {fileList(k).role, 'copy', bytesMb, fileList(k).src};
+                    r = r + 1;
+                end
+                for k = 1:numel(missingList)
+                    rows(r, :) = {missingList(k).role, 'missing', '', missingList(k).src};
+                    r = r + 1;
+                end
+                app.EDExpFileTable.Data = rows;
+                if ~isempty(app.EDExpMissingLbl) && isvalid(app.EDExpMissingLbl)
+                    totalFiles = numel(fileList) + 1;
+                    app.EDExpMissingLbl.Text = sprintf('복사/생성 %d개, 누락 %d개', totalFiles, numel(missingList));
+                    if isempty(missingList)
+                        app.EDExpMissingLbl.FontColor = [0.06 0.45 0.22];
+                    else
+                        app.EDExpMissingLbl.FontColor = [0.75 0.20 0.20];
+                    end
+                end
             catch
             end
         end
@@ -5178,11 +5374,23 @@
 
         function editDialogToggleAutosave(app, on)
             try
+                app.ProjectAutosaveEnabled = logical(on);
                 if ~on
                     if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
                         stop(app.AutosaveTimer); delete(app.AutosaveTimer); app.AutosaveTimer = [];
                     end
+                elseif app.ProjectDirty
+                    app.markProjectDirtyAndScheduleRefresh('autosave-on');
                 end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
+        function editDialogToggleCloseConfirm(app, on)
+            try
+                app.ProjectConfirmOnClose = logical(on);
+                app.markProjectDirtyAndScheduleRefresh('close-confirm-policy');
             catch ME
                 app.logCaught(ME, 'silent')
             end
@@ -5497,6 +5705,13 @@
                         else
                             app.EDPlotYColDD.Value = ycols{1};
                         end
+                        if ~isempty(app.EDPlotYLabelEdit) && isvalid(app.EDPlotYLabelEdit)
+                            if isfield(spec, 'YLabel') && ~isempty(spec.YLabel)
+                                app.EDPlotYLabelEdit.Value = char(spec.YLabel);
+                            else
+                                app.EDPlotYLabelEdit.Value = char(spec.YColumn);
+                            end
+                        end
                         if numel(spec.XLim) == 2
                             app.EDPlotXMin.Value = spec.XLim(1);
                             app.EDPlotXMax.Value = spec.XLim(2);
@@ -5514,6 +5729,9 @@
                 elseif isfield(nd, 'kind') && strcmp(nd.kind, 'tab')
                     app.EDPlotNameEdit.Value = sprintf('Tab %d', nd.tab);
                     app.EDPlotYColDD.Items = ycols; app.EDPlotYColDD.Value = ycols{1};
+                    if ~isempty(app.EDPlotYLabelEdit) && isvalid(app.EDPlotYLabelEdit)
+                        app.EDPlotYLabelEdit.Value = '';
+                    end
                 end
             catch ME, app.logCaught(ME, 'silent'); end
         end
@@ -5560,7 +5778,20 @@
                         cfg = app.ensurePlotConfigShape(app.PlotConfigState);
                     end
                     if numel(cfg.Flights(fIdx).PlotTabs) >= t && numel(cfg.Flights(fIdx).PlotTabs(t).Plots) >= p
+                        yLabelText = strtrim(char(app.EDPlotYLabelEdit.Value));
+                        if isempty(yLabelText)
+                            if isfield(cfg.Flights(fIdx).PlotTabs(t).Plots(p), 'YLabel')
+                                yLabelText = char(cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLabel);
+                            end
+                        end
+                        if isempty(yLabelText)
+                            yLabelText = char(cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn);
+                        end
+                        app.applyPlotYLabelInPlace(fIdx, t, p, yLabelText);
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
+                        cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLabel = yLabelText;
+                        cfg.Flights(fIdx).PlotTabs(t).Plots(p).Order = p;
+                        app.applyPlotHeightInPlace(fIdx, t, p, app.EDPlotHeight.Value);
                         app.PlotConfigState = cfg;
                     else
                         return;
@@ -5592,6 +5823,36 @@
                 app.markProjectDirtyAndScheduleRefresh('plot-duplicate');
                 app.refreshEditDialog();
             catch ME, app.logCaught(ME, 'plot-duplicate'); end
+        end
+
+        function editDialogMoveSelectedPlot(app, delta)
+            % [F-01] Move the selected plot order within the current tab.
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~isfield(nd, 'kind') || ~strcmp(nd.kind, 'plot'), return; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) < nd.tab, return; end
+                plots = cfg.Flights(fIdx).PlotTabs(nd.tab).Plots;
+                if numel(plots) < nd.plot, return; end
+                dst = nd.plot + delta;
+                if dst < 1 || dst > numel(plots), return; end
+                tmp = plots(nd.plot);
+                plots(nd.plot) = plots(dst);
+                plots(dst) = tmp;
+                for k = 1:numel(plots)
+                    plots(k).Order = k;
+                end
+                cfg.Flights(fIdx).PlotTabs(nd.tab).Plots = plots;
+                app.PlotConfigState = cfg;
+                app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
+                app.markProjectDirtyAndScheduleRefresh('plot-move');
+                app.refreshEditDialog();
+            catch ME
+                app.logCaught(ME, 'plot-move')
+            end
         end
 
         function editDialogDeleteSelectedPlot(app)
@@ -7870,6 +8131,7 @@
                 'PathMode',    'absolute', ...
                 'Flights',     [flightTpl, flightTpl], ...
                 'FlightSync',  struct('IsSynced', false, 'SyncT1', 0, 'SyncT2', 0), ...
+                'ProjectSettings', struct('ConfirmOnClose', true, 'AutosaveEnabled', true), ...
                 'PlotConfig',  struct(), ...
                 'UiState',     struct('WindowPosition', [], 'EditDialogPosition', [], 'ActiveTab', 'Project'), ...
                 'AuxFiles',    {{}});
@@ -7914,6 +8176,13 @@
                     'IsSynced', logical(app.SyncState.IsSynced), ...
                     'SyncT1',   double(app.SyncState.SyncT1), ...
                     'SyncT2',   double(app.SyncState.SyncT2));
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+            try
+                st.ProjectSettings = struct( ...
+                    'ConfirmOnClose', logical(app.ProjectConfirmOnClose), ...
+                    'AutosaveEnabled', logical(app.ProjectAutosaveEnabled));
             catch ME
                 app.logCaught(ME, 'silent')
             end
@@ -7970,6 +8239,19 @@
                     end
                 end
             end
+            if isfield(st, 'ProjectSettings') && ~isempty(st.ProjectSettings)
+                try
+                    ps = st.ProjectSettings;
+                    if isfield(ps, 'ConfirmOnClose')
+                        app.ProjectConfirmOnClose = logical(ps.ConfirmOnClose);
+                    end
+                    if isfield(ps, 'AutosaveEnabled')
+                        app.ProjectAutosaveEnabled = logical(ps.AutosaveEnabled);
+                    end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
+            end
             if isfield(st, 'UiState')
                 try
                     if isfield(st.UiState, 'WindowPosition') && ~isempty(st.UiState.WindowPosition) ...
@@ -8015,6 +8297,11 @@
                 txt = fileread(filePath);
                 st  = jsondecode(txt);
                 st  = app.migrateProjectState(st);
+                if isfield(st, 'SavedAt') && ~isempty(st.SavedAt)
+                    app.ProjectLastSaveText = char(st.SavedAt);
+                else
+                    app.ProjectLastSaveText = '';
+                end
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
             catch ME
                 app.logCaught(ME, 'project-load');
@@ -8059,6 +8346,11 @@
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
                 app.ProjectState    = st;
                 app.ProjectDirty    = false;
+                try
+                    app.ProjectLastSaveText = char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss'));
+                catch
+                    app.ProjectLastSaveText = char(st.SavedAt);
+                end
                 app.clearProjectAutosave();
                 ok = true;
             catch ME
@@ -8165,7 +8457,7 @@
                 app.logCaught(ME, 'silent')
             end
             try
-                if isempty(app.AutosaveTimer) || ~isvalid(app.AutosaveTimer)
+                if app.ProjectAutosaveEnabled && (isempty(app.AutosaveTimer) || ~isvalid(app.AutosaveTimer))
                     app.AutosaveTimer = timer( ...
                         'ExecutionMode', 'fixedSpacing', ...
                         'Period', app.AutosaveIntervalSec, ...
