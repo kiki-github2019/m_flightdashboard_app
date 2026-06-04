@@ -327,7 +327,7 @@
             try
                 if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer)
                     try
-                        stop(app.EditApplyTimer)
+                        stop(app.EditApplyTimer);
                     catch
                     end
                     delete(app.EditApplyTimer);
@@ -339,7 +339,7 @@
             try
                 if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
                     try
-                        stop(app.AutosaveTimer)
+                        stop(app.AutosaveTimer);
                     catch
                     end
                     delete(app.AutosaveTimer);
@@ -721,7 +721,7 @@
             catch e
                 app.logCaught(e, 'flight-file-dialog');
                 try
-                    uialert(app.UIFigure, sprintf('파일 선택창을 열 수 없습니다:\n%s', e.message), '파일 선택 오류')
+                    uialert(app.UIFigure, sprintf('파일 선택창을 열 수 없습니다:\n%s', e.message), '파일 선택 오류');
                 catch
                     errordlg(['파일 선택창을 열 수 없습니다: ', e.message], '파일 선택 오류');
                 end
@@ -878,7 +878,7 @@
                         case '적용 후 저장하고 닫기'
                             if pendingTimer
                                 try
-                                    stop(app.EditApplyTimer)
+                                    stop(app.EditApplyTimer);
                                 catch
                                 end
                                 try
@@ -913,13 +913,13 @@
                             end
                             if ~okSave
                                 try
-                                    uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project')
+                                    uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project');
                                 catch
                                 end
                                 return;
                             end
                             try
-                                app.clearProjectAutosave()
+                                app.clearProjectAutosave();
                             catch
                             end
                             % --- Option drafts (warn on failure, ask whether to proceed) ---
@@ -964,7 +964,7 @@
                     end
                 elseif pendingTimer
                     try
-                        stop(app.EditApplyTimer)
+                        stop(app.EditApplyTimer);
                     catch
                     end
                     try
@@ -1107,7 +1107,7 @@
             if ~isfield(opts, 'preserveSync'), opts.preserveSync = false; end
             if isempty(fullPath) || ~isfile(fullPath)
                 try
-                    uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video')
+                    uialert(app.UIFigure, sprintf('AVI 파일을 찾을 수 없습니다:\n%s', fullPath), 'Video');
                 catch
                 end
                 return;
@@ -1157,7 +1157,7 @@
                 app.VideoSyncState(fIdx).DataFps     = syncSnapshot.DataFps;
                 if newTotal <= 0, app.VideoSyncState(fIdx).TotalFrames = syncSnapshot.TotalFrames; end
                 try
-                    app.refreshSyncUi(fIdx)
+                    app.refreshSyncUi(fIdx);
                 catch ME
                     app.logCaught(ME, 'silent');
                 end
@@ -1704,7 +1704,7 @@
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
                         app.IsUpdating(fIdx) = true;
                         try
-                            app.updateDashboard(fIdx, app.Models(fIdx).currentIndex)
+                            app.updateDashboard(fIdx, app.Models(fIdx).currentIndex);
                         catch
                         end
                         app.IsUpdating(fIdx) = false;
@@ -1730,7 +1730,7 @@
             app.IsDecoding(fIdx) = false;
             % [Stabilization P1] Drain the latest queued user request, if any.
             try
-                app.drainPendingVideoRequest(fIdx)
+                app.drainPendingVideoRequest(fIdx);
             catch ME
                 app.logCaught(ME, 'video-pending-drain');
             end
@@ -2009,7 +2009,7 @@
                 app.clearAsyncDecodeState(fIdx, gen);
                 % [Stabilization P1] consume any newer request that arrived during async work
                 try
-                    app.drainPendingVideoRequest(fIdx)
+                    app.drainPendingVideoRequest(fIdx);
                 catch ME
                     app.logCaught(ME, 'async-drain');
                 end
@@ -4241,7 +4241,7 @@
             end
             if ~isfolder(parentFolder)
                 try
-                    uialert(app.UIFigure, 'parent 폴더가 존재하지 않습니다.', 'Export')
+                    uialert(app.UIFigure, 'parent 폴더가 존재하지 않습니다.', 'Export');
                 catch
                 end
                 return;
@@ -4256,7 +4256,7 @@
 
             % [P4] capture live plot UI state so exported project carries current XLim/YLim.
             try
-                app.capturePlotConfigFromUi()
+                app.capturePlotConfigFromUi();
             catch ME_pc
                 app.logCaught(ME_pc, 'silent');
             end
@@ -4288,7 +4288,7 @@
                         return;
                     case '중단'
                         try
-                            uialert(app.UIFigure, 'export 가 취소되었습니다.', 'Export')
+                            uialert(app.UIFigure, 'export 가 취소되었습니다.', 'Export');
                         catch
                         end
                         return;
@@ -4301,7 +4301,7 @@
 
             if isempty(fileList)
                 try
-                    uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export')
+                    uialert(app.UIFigure, '복사할 파일이 없습니다.', 'Export');
                 catch
                 end
                 return;
@@ -4496,7 +4496,7 @@
                             if ~isempty(app.VideoState(fIdx).videoReader) ...
                                     && isvalid(app.VideoState(fIdx).videoReader)
                                 try
-                                    delete(app.VideoState(fIdx).videoReader)
+                                    delete(app.VideoState(fIdx).videoReader);
                                 catch
                                 end
                             end
@@ -4787,7 +4787,7 @@
                     catch ME
                         app.logCaught(ME, 'file-change-data');
                         try
-                            uialert(app.UIFigure, sprintf('비행데이터 로드 실패:\n%s', ME.message), 'Files')
+                            uialert(app.UIFigure, sprintf('비행데이터 로드 실패:\n%s', ME.message), 'Files');
                         catch
                         end
                     end
@@ -4811,7 +4811,7 @@
                     src = app.Models(fIdx).rawDataUnscaled;
                     if isempty(src) || width(src) == 0
                         try
-                            uialert(app.UIFigure, '비행데이터를 먼저 로드하세요.', 'Files')
+                            uialert(app.UIFigure, '비행데이터를 먼저 로드하세요.', 'Files');
                         catch
                         end
                         return;
@@ -4843,7 +4843,7 @@
                                'dialog에서 해소할 때까지 Apply가 차단됩니다.'], ...
                     fIdx, kind, strjoin(m.brokenMappings, ', '), strjoin(p.brokenPlots, ', '));
                 try
-                    uialert(app.UIFigure, msg, 'D5: 호환성 검증')
+                    uialert(app.UIFigure, msg, 'D5: 호환성 검증');
                 catch
                 end
                 app.ProjectDirty = true;
@@ -4859,7 +4859,7 @@
             %              subsequent step within the same flight.
             if nargin < 2 || isempty(filePath) || ~isfile(filePath)
                 try
-                    uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project')
+                    uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project');
                 catch
                 end
                 return;
@@ -4974,7 +4974,7 @@
                 app.logCaught(ME, 'auto-load');
                 app.ProjectDirty = true;   % [Critical 1] keep dirty on exception
                 try
-                    uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project')
+                    uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project');
                 catch
                 end
             end
@@ -5083,7 +5083,7 @@
                         catch
                         end
                         try
-                            app.plotSelectedVariable(fIdx)
+                            app.plotSelectedVariable(fIdx);
                         catch
                         end
                         % Apply axis spec to the freshly added plot.
@@ -5796,7 +5796,7 @@
             ok = app.saveProjectFile(app.ProjectFilePath);
             if ok
                 try
-                    uialert(app.EditDialog, 'project 저장 완료', 'Project')
+                    uialert(app.EditDialog, 'project 저장 완료', 'Project');
                 catch
                 end
                 app.refreshEditDialog();
@@ -5809,7 +5809,7 @@
             ok = app.saveProjectFile(fullfile(pn, fn));
             if ok
                 try
-                    uialert(app.EditDialog, 'project 저장 완료', 'Project')
+                    uialert(app.EditDialog, 'project 저장 완료', 'Project');
                 catch
                 end
                 app.refreshEditDialog();
@@ -5866,7 +5866,7 @@
                 case 'data'
                     if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
                         try
-                            app.parseFlightData(fIdx, m.dataFilePath)
+                            app.parseFlightData(fIdx, m.dataFilePath);
                         catch ME
                             app.logCaught(ME, 'reload-data');
                         end
@@ -5874,7 +5874,7 @@
                 case 'avi'
                     if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
                         try
-                            app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false))
+                            app.loadAviFileFromPath(fIdx, m.aviFilePath, struct('promptOnSync', false));
                         catch ME
                             app.logCaught(ME, 'reload-avi');
                         end
@@ -6003,7 +6003,7 @@
                 src = app.Models(fIdx).rawDataUnscaled;
                 if isempty(src) || width(src) == 0
                     try
-                        uialert(app.EditDialog, '비행데이터를 먼저 로드하세요.', 'Options')
+                        uialert(app.EditDialog, '비행데이터를 먼저 로드하세요.', 'Options');
                     catch
                     end
                     return;
@@ -6011,7 +6011,7 @@
                 [ok, info] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
                 if ok
                     try
-                        uialert(app.EditDialog, '검증 통과', 'Options')
+                        uialert(app.EditDialog, '검증 통과', 'Options');
                     catch
                     end
                 else
@@ -6019,7 +6019,7 @@
                         strjoin(info.brokenMappings, ', '), strjoin(info.brokenColumns, ', '), ...
                         strjoin(info.reasons, ', '));
                     try
-                        uialert(app.EditDialog, msg, 'Options')
+                        uialert(app.EditDialog, msg, 'Options');
                     catch
                     end
                 end
@@ -6036,18 +6036,18 @@
                 [ok, ~] = app.validateOptionDraft(app.OptionDrafts{fIdx}, src.Properties.VariableNames);
                 if ~ok
                     try
-                        uialert(app.EditDialog, '검증 실패: Apply 차단', 'Options')
+                        uialert(app.EditDialog, '검증 실패: Apply 차단', 'Options');
                     catch
                     end
                     return;
                 end
                 app.applyOptionDraftToModel(fIdx, app.OptionDrafts{fIdx}, false);
                 try
-                    app.setupDataUI(fIdx)
+                    app.setupDataUI(fIdx);
                 catch
                 end
                 try
-                    app.updateDashboard(fIdx, app.Models(fIdx).currentIndex)
+                    app.updateDashboard(fIdx, app.Models(fIdx).currentIndex);
                 catch
                 end
                 app.markProjectDirtyAndScheduleRefresh('option-apply');
@@ -6299,7 +6299,7 @@
                     xLim = [app.EDPlotXMin.Value app.EDPlotXMax.Value];
                     if any(~isfinite(xLim)) || xLim(2) <= xLim(1)
                         try
-                            uialert(app.EditDialog, 'X min/max 범위를 확인하세요.', 'Plot Manager')
+                            uialert(app.EditDialog, 'X min/max 범위를 확인하세요.', 'Plot Manager');
                         catch
                         end
                         return;
@@ -6313,7 +6313,7 @@
                     yLim = [app.EDPlotYMin.Value app.EDPlotYMax.Value];
                     if any(~isfinite(yLim)) || yLim(2) <= yLim(1)
                         try
-                            uialert(app.EditDialog, 'Y min/max 범위를 확인하세요.', 'Plot Manager')
+                            uialert(app.EditDialog, 'Y min/max 범위를 확인하세요.', 'Plot Manager');
                         catch
                         end
                         return;
@@ -6468,7 +6468,7 @@
                     cfg.Flights(fIdx).PlotTabs(nd.tab) = [];
                     app.PlotConfigState = cfg;
                     try
-                        delete(app.UI(fIdx).plotTabs(nd.tab))
+                        delete(app.UI(fIdx).plotTabs(nd.tab));
                     catch
                     end
                     app.markProjectDirtyAndScheduleRefresh('tab-delete');
@@ -6752,7 +6752,7 @@
             catch ME
                 app.logCaught(ME, 'option-write');
                 try
-                    uialert(app.UIFigure, sprintf('option 파일 저장 실패:\n%s', ME.message), 'Options')
+                    uialert(app.UIFigure, sprintf('option 파일 저장 실패:\n%s', ME.message), 'Options');
                 catch
                 end
             end
@@ -7894,7 +7894,7 @@
                 tg = app.UI(fIdx).boardOffTabGroup;
                 if isempty(tg) || ~isvalid(tg), return; end
                 try
-                    delete(tg.Children)
+                    delete(tg.Children);
                 catch ME_silent
                     app.logCaught(ME_silent, 'silent');
                 end
@@ -8935,7 +8935,7 @@
             catch ME
                 app.logCaught(ME, 'project-load');
                 try
-                    uialert(app.UIFigure, sprintf('project 파일 로드 실패:\n%s', ME.message), 'Project')
+                    uialert(app.UIFigure, sprintf('project 파일 로드 실패:\n%s', ME.message), 'Project');
                 catch
                 end
                 st = [];
@@ -9030,7 +9030,7 @@
             catch ME
                 app.logCaught(ME, 'project-save');
                 try
-                    uialert(app.UIFigure, sprintf('project 저장 실패:\n%s', ME.message), 'Project')
+                    uialert(app.UIFigure, sprintf('project 저장 실패:\n%s', ME.message), 'Project');
                 catch
                 end
             end
@@ -9158,7 +9158,7 @@
                 app.LastEditApplyTime = datetime('now');
                 % [Audit fix #1] keep dialog status/values in sync after debounce fires
                 try
-                    app.refreshEditDialog()
+                    app.refreshEditDialog();
                 catch
                 end
             catch ME
@@ -9196,7 +9196,7 @@
             end
             if isempty(app.Models(1).rawData) || isempty(app.Models(2).rawData)
                 try
-                    uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync')
+                    uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync');
                 catch
                 end
                 return;
@@ -9239,21 +9239,21 @@
             end
             if isempty(app.VideoState(fIdx).videoReader)
                 try
-                    uialert(app.UIFigure, '먼저 AVI 파일을 로드하세요.', 'Sync')
+                    uialert(app.UIFigure, '먼저 AVI 파일을 로드하세요.', 'Sync');
                 catch
                 end
                 return;
             end
             if isempty(app.Models(fIdx).rawData)
                 try
-                    uialert(app.UIFigure, '먼저 비행데이터를 로드하세요.', 'Sync')
+                    uialert(app.UIFigure, '먼저 비행데이터를 로드하세요.', 'Sync');
                 catch
                 end
                 return;
             end
             if ~isnumeric(videoFps) || videoFps < 1 || ~isnumeric(dataFps) || dataFps < 1
                 try
-                    uialert(app.UIFigure, 'Hz 값은 1 이상이어야 합니다.', 'Sync')
+                    uialert(app.UIFigure, 'Hz 값은 1 이상이어야 합니다.', 'Sync');
                 catch
                 end
                 return;
@@ -9261,7 +9261,7 @@
             totalFrames = app.VideoSyncState(fIdx).TotalFrames;
             if anchorFrame < 1 || (totalFrames > 0 && anchorFrame > totalFrames)
                 try
-                    uialert(app.UIFigure, sprintf('Frame은 1~%d 범위여야 합니다.', totalFrames), 'Sync')
+                    uialert(app.UIFigure, sprintf('Frame은 1~%d 범위여야 합니다.', totalFrames), 'Sync');
                 catch
                 end
                 return;
@@ -9438,7 +9438,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
                 end
                 [~, victim] = max(ages);
                 try
-                    delete(cache(victim).vr)
+                    delete(cache(victim).vr);
                 catch
                 end
                 cache(victim) = [];
