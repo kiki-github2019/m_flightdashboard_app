@@ -579,7 +579,7 @@
                             if isprop(h, 'Text') && isprop(h, 'ButtonPushedFcn')
                                 txt = char(h.Text);
                                 if ~isempty(txt)
-                                    s.boardOff.buttonTexts{end + 1} = txt; %#ok<AGROW>
+                                    s.boardOff.buttonTexts{end + 1} = txt;
                                 end
                             end
                         catch ME_silent
@@ -907,7 +907,7 @@
                             end
                             okSave = false;
                             try
-                                okSave = app.saveProjectFile(app.ProjectFilePath)
+                                okSave = app.saveProjectFile(app.ProjectFilePath);
                             catch ME
                                 app.logCaught(ME, 'close-save-project')
                             end
@@ -1255,7 +1255,6 @@
 
         % [V3.22 #3-6] TotalFrames 산정 + 관련 UI 위젯/스피너/슬라이더 동기화
         function applyVideoLoadedUI(app, fIdx, vr)
-            totalFrames = 1;
             actualFps = 15;
             try
                 totalFrames = app.computeTotalFrames(fIdx, vr);
@@ -1775,7 +1774,7 @@
                 % stack은 길이가 다른 struct array일 수 있어 cell로 wrap → 차원 불일치 회피
                 stackCell = {[]};
                 try
-                    stackCell = {ME.stack}
+                    stackCell = {ME.stack};
                 catch
                 end
                 entry = struct( ...
@@ -1824,9 +1823,9 @@
                     tstr = char(datetime(log(k).time, 'Format', 'HH:mm:ss.SSS'));
                 catch
                     try
-                        tstr = datestr(log(k).time, 'HH:MM:SS.FFF')
+                        tstr = char(string(log(k).time));
                     catch
-                        tstr = ''
+                        tstr = '';
                     end
                 end
                 fprintf('  [%s] [%s] %s: %s\n', tstr, ...
@@ -2071,7 +2070,8 @@
                         end
                         vr.CurrentTime = relTime;
                         if hasFrame(vr), img = readFrame(vr); end
-                    catch ME, app.logCaught(ME, 'prefetch:fallback');
+                    catch ME
+                        app.logCaught(ME, 'prefetch:fallback');
                     end
                 end
                 if isempty(img), return; end
@@ -2545,7 +2545,8 @@
                     if hasFrame(vr)
                         img = readFrame(vr);
                     end
-                catch ME, app.logCaught(ME, 'decodeSync:fallback');
+                catch ME
+                    app.logCaught(ME, 'decodeSync:fallback');
                     img = [];
                 end
             end
@@ -3651,7 +3652,7 @@
                                 if isempty(ax) || ~isvalid(ax), continue; end
                                 ylabStr = '';
                                 try
-                                    ylabStr = char(ax.YLabel.String)
+                                    ylabStr = char(ax.YLabel.String);
                                 catch
                                 end
                                 % [P4] preserve YColumn if a corresponding existing entry has one.
@@ -3676,7 +3677,7 @@
                         end
                         titleStr = sprintf('Tab %d', tabIdx);
                         try
-                            titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title)
+                            titleStr = char(app.UI(fIdx).plotTabs(tabIdx).Title);
                         catch
                         end
                         link = app.getLinkXWithinTab(fIdx, tabIdx);
@@ -4309,7 +4310,7 @@
                                     report.errors{end+1} = sprintf('hash mismatch: %s', dst);
                                 end
                             catch ME
-                                app.logCaught(ME, 'export-hash'); hashOK = false
+                                app.logCaught(ME, 'export-hash'); hashOK = false;
                             end
                         end
                     else
@@ -4548,7 +4549,6 @@
                 end
                 return;
             end
-            d = [];
             try
                 d = uiprogressdlg(app.UIFigure, 'Title', 'Project 자동 로드', ...
                     'Message', 'project 파일 읽는 중', 'Cancelable', 'on');
@@ -4576,7 +4576,7 @@
                     advance(stepBase(fIdx, 2), sprintf('Flight %d 비행데이터 로드 중', fIdx));
                     if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
                         try
-                            app.parseFlightData(fIdx, m.dataFilePath)
+                            app.parseFlightData(fIdx, m.dataFilePath);
                         catch ME
                             app.logCaught(ME, 'auto-load-data')
                         end
@@ -4692,7 +4692,7 @@
             if isempty(tabs), return; end
 
             try
-                app.clearAllTabs(fIdx)
+                app.clearAllTabs(fIdx);
             catch
             end
 
@@ -4700,7 +4700,7 @@
             existingTabCount = numel(app.UI(fIdx).plotTabs);
             for t = (existingTabCount + 1):numel(tabs)
                 try
-                    app.addPlotTab(fIdx)
+                    app.addPlotTab(fIdx);
                 catch
                 end
             end
@@ -4716,7 +4716,7 @@
                         && numel(app.UI(fIdx).plotTabs) >= t ...
                         && isvalid(app.UI(fIdx).plotTabs(t))
                     try
-                        app.UI(fIdx).plotTabs(t).Title = char(tabSpec.Title)
+                        app.UI(fIdx).plotTabs(t).Title = char(tabSpec.Title);
                     catch
                     end
                 end
@@ -5539,7 +5539,9 @@
                     app.EDSyncF2Time.Value = app.UI(2).spinner.Value;
                 end
                 app.refreshSyncOffsetLabel();
-            catch ME, app.logCaught(ME, 'sync-capture-ff'); end
+            catch ME
+                app.logCaught(ME, 'sync-capture-ff');
+            end
         end
 
         function editDialogCaptureCurrentVideoSync(app, fIdx)
@@ -5560,7 +5562,9 @@
                 end
                 if vss.VideoFps > 0, vf.Value = double(vss.VideoFps); end
                 if vss.DataFps  > 0, df.Value = double(vss.DataFps);  end
-            catch ME, app.logCaught(ME, 'sync-capture-video'); end
+            catch ME
+                app.logCaught(ME, 'sync-capture-video');
+            end
         end
 
         function editDialogApplyFlightSync(app, enabled)
@@ -5818,14 +5822,18 @@
                         app.EDPlotYLabelEdit.Value = '';
                     end
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent');
+            end
         end
 
         function editDialogToggleYAuto(app, isAuto)
             try
                 app.EDPlotYMin.Enable = ternary(isAuto, 'off', 'on');
                 app.EDPlotYMax.Enable = ternary(isAuto, 'off', 'on');
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME
+                app.logCaught(ME, 'silent');
+            end
         end
 
         function editDialogApplyPlotProps(app)
@@ -5884,7 +5892,9 @@
                 end
                 app.markProjectDirtyAndScheduleRefresh('plot-props');
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'plot-apply'); end
+            catch ME
+                app.logCaught(ME, 'plot-apply');
+            end
         end
 
         function editDialogDuplicatePlot(app)
@@ -5907,7 +5917,9 @@
                 app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
                 app.markProjectDirtyAndScheduleRefresh('plot-duplicate');
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'plot-duplicate'); end
+            catch ME
+                app.logCaught(ME, 'plot-duplicate');
+            end
         end
 
         function editDialogMoveSelectedPlot(app, delta)
@@ -5959,7 +5971,9 @@
                 app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
                 app.markProjectDirtyAndScheduleRefresh('plot-delete');
                 app.refreshEditDialog();
-            catch ME, app.logCaught(ME, 'plot-delete'); end
+            catch ME
+                app.logCaught(ME, 'plot-delete');
+            end
         end
 
         function editDialogDeleteSelectedTab(app)
@@ -6239,15 +6253,15 @@
             if nargin < 3 || isempty(optPath) || isempty(draft), return; end
             try
                 lines = {};
-                lines{end+1} = '# RequiredColumns'; %#ok<AGROW>
+                lines{end+1} = '# RequiredColumns';
                 reqKeys = app.REQ_KEYS;
                 for i = 1:length(reqKeys)
                     v = '';
                     if isfield(draft.mappedCols, reqKeys{i}), v = char(draft.mappedCols.(reqKeys{i})); end
                     lines{end+1} = sprintf('%s: %s', reqKeys{i}, v); %#ok<AGROW>
                 end
-                lines{end+1} = ''; %#ok<AGROW>
-                lines{end+1} = '# DisplayColumns'; %#ok<AGROW>
+                lines{end+1} = '';
+                lines{end+1} = '# DisplayColumns';
                 for i = 1:numel(draft.displayMeta)
                     dm = draft.displayMeta(i);
                     lines{end+1} = sprintf('%s, %s, %s, %d, %g', ...
@@ -7363,7 +7377,7 @@
                 for tIdx = 1:numel(tabs)
                     tabTitle = '';
                     try
-                        tabTitle = char(tabs(tIdx).Title)
+                        tabTitle = char(tabs(tIdx).Title);
                     catch
                     end
                     plotCount = 0;
@@ -7380,7 +7394,7 @@
                         end
                         yLen = 0;
                         try
-                            yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx})
+                            yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx});
                         catch
                         end
                         sigParts{end+1} = sprintf('P%d:%d:%s', pIdx, yLen, yLabel); %#ok<AGROW>
@@ -7436,7 +7450,7 @@
                 for tIdx = 1:numel(sourceTabs)
                     tabTitle = sprintf('Tab %d', tIdx);
                     try
-                        tabTitle = char(sourceTabs(tIdx).Title)
+                        tabTitle = char(sourceTabs(tIdx).Title);
                     catch
                     end
                     newTab = uitab(tg, 'Title', tabTitle);
@@ -7535,7 +7549,7 @@
 
                 if selectedIdx <= numel(app.UI(fIdx).boardOffPlotTabs)
                     try
-                        tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx)
+                        tg.SelectedTab = app.UI(fIdx).boardOffPlotTabs(selectedIdx);
                     catch
                     end
                 end
