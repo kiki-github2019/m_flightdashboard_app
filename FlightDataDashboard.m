@@ -4788,6 +4788,11 @@
 
         function autoLoadProjectFromFile(app, filePath)
             % [Phase 5] 12-step uiprogressdlg auto-load matching design §5.
+            % [Critical 1] Track load integrity. Only clear ProjectDirty when every
+            %              referenced file loaded cleanly (no missing/reselect/validation issue).
+            % [Critical 2] Refresh local Models(fIdx) snapshot BEFORE each load step
+            %              so warnMissingFile->requestFileChange takes effect on the
+            %              subsequent step within the same flight.
             if nargin < 2 || isempty(filePath) || ~isfile(filePath)
                 try
                     uialert(app.UIFigure, 'project 파일을 찾을 수 없습니다.', 'Project')
@@ -4795,10 +4800,11 @@
                 end
                 return;
             end
+            loadCompletedCleanly   = true;   % [Critical 1] flag
             try
                 d = uiprogressdlg(app.UIFigure, 'Title', 'Project 자동 로드', ...
                     'Message', 'project 파일 읽는 중', 'Cancelable', 'on');
-                cleanupDlg = onCleanup(@() app.safeClose(d));
+                cleanupDlg = onCleanup(@() app.safeClose(d)); %#ok<NASGU>
                 advance = @(val, msg) app.setProgress(d, val, msg);
 
                 advance(0.02, 'project 파일 읽는 중');
@@ -4807,29 +4813,39 @@
 
                 advance(0.08, '파일 경로 검증 중');
                 app.applyProjectState(st, struct('skipFiles', true));
-                if ~isempty(d) && d.CancelRequested, return; end
+                if ~isempty(d) && d.CancelRequested
+                    loadCompletedCleanly = false; return;
+                end
 
                 stepBase = [0.10 0.18 0.30; 0.42 0.50 0.62]; % rows: flights, cols: option/data/avi
                 for fIdx = 1:2
-                    m = app.Models(fIdx);
-                    if ~isempty(d) && d.CancelRequested, return; end
-                    advance(stepBase(fIdx, 1), sprintf('Flight %d option 파일 읽는 중', fIdx));
-                    % option load happens together with data load (parseFlightData), so just touch path
-                    if ~isempty(m.optionFilePath) && ~isfile(m.optionFilePath)
-                        app.warnMissingFile(fIdx, 'option', m.optionFilePath);
+                    if ~isempty(d) && d.CancelRequested
+                        loadCompletedCleanly = false; return;
                     end
 
+                    % [Critical 2] Always re-read Models(fIdx) before each sub-step.
+                    m = app.Models(fIdx);
+                    advance(stepBase(fIdx, 1), sprintf('Flight %d option 파일 읽는 중', fIdx));
+                    if ~isempty(m.optionFilePath) && ~isfile(m.optionFilePath)
+                        status = app.warnMissingFile(fIdx, 'option', m.optionFilePath);
+                        if ~strcmp(status, 'ok'), loadCompletedCleanly = false; end
+                    end
+
+                    m = app.Models(fIdx);  % [Critical 2] refresh after possible reselect
                     advance(stepBase(fIdx, 2), sprintf('Flight %d 비행데이터 로드 중', fIdx));
                     if ~isempty(m.dataFilePath) && isfile(m.dataFilePath)
                         try
                             app.parseFlightData(fIdx, m.dataFilePath);
                         catch ME
                             app.logCaught(ME, 'auto-load-data');
+                            loadCompletedCleanly = false;
                         end
                     elseif ~isempty(m.dataFilePath)
-                        app.warnMissingFile(fIdx, 'data', m.dataFilePath);
+                        status = app.warnMissingFile(fIdx, 'data', m.dataFilePath);
+                        if ~strcmp(status, 'ok'), loadCompletedCleanly = false; end
                     end
 
+                    m = app.Models(fIdx);  % [Critical 2] refresh again before AVI step
                     advance(stepBase(fIdx, 3), sprintf('Flight %d AVI 메타데이터 로드 중', fIdx));
                     if ~isempty(m.aviFilePath) && isfile(m.aviFilePath)
                         try
@@ -4838,13 +4854,17 @@
                                 struct('promptOnSync', false, 'preserveSync', true));
                         catch ME
                             app.logCaught(ME, 'auto-load-avi');
+                            loadCompletedCleanly = false;
                         end
                     elseif ~isempty(m.aviFilePath)
-                        app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
+                        status = app.warnMissingFile(fIdx, 'avi', m.aviFilePath);
+                        if ~strcmp(status, 'ok'), loadCompletedCleanly = false; end
                     end
                 end
 
-                if ~isempty(d) && d.CancelRequested, return; end
+                if ~isempty(d) && d.CancelRequested
+                    loadCompletedCleanly = false; return;
+                end
                 advance(0.78, '비행데이터 동기화 상태 복원 중');
                 if app.SyncState.IsSynced
                     app.setFlightDataSync(app.SyncState.SyncT1, app.SyncState.SyncT2, true);
@@ -4860,7 +4880,7 @@
                 if ~isempty(app.PlotConfigState)
                     for fIdx = 1:2
                         try
-                            app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState)
+                            app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
                         catch ME
                             app.logCaught(ME, 'auto-load-plots');
                         end
@@ -4880,9 +4900,15 @@
                 end
 
                 advance(1.00, '완료');
-                app.ProjectDirty = false;
+                % [Critical 1] Only clear dirty when nothing went sideways.
+                if loadCompletedCleanly
+                    app.ProjectDirty = false;
+                else
+                    app.ProjectDirty = true;
+                end
             catch ME
                 app.logCaught(ME, 'auto-load');
+                app.ProjectDirty = true;   % [Critical 1] keep dirty on exception
                 try
                     uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project')
                 catch
@@ -4899,8 +4925,14 @@
             end
         end
 
-        function warnMissingFile(app, fIdx, kind, p)
-            % Lightweight non-blocking warn; design §5 calls for skip/reselect/abort dialog.
+        function status = warnMissingFile(app, fIdx, kind, p)
+            % [Critical 1] Returns a status string so autoLoadProjectFromFile can
+            % decide whether to clear ProjectDirty at the end:
+            %   'skip'    — user skipped the missing file (load remains incomplete)
+            %   'changed' — user reselected (Models updated; caller must refresh local m)
+            %   (throws 'FlightDataDashboard:AutoLoadAborted' on cancel/abort)
+            % Returns 'ok' only when nothing was missing (caller still gates on isfile).
+            status = 'skip';
             try
                 sel = uiconfirm(app.UIFigure, ...
                     sprintf('Flight %d %s 파일을 찾을 수 없습니다:\n%s', fIdx, kind, p), ...
@@ -4909,8 +4941,11 @@
                 switch sel
                     case '파일 다시 선택'
                         app.requestFileChange(fIdx, kind);
+                        status = 'changed';
                     case '중단'
                         error('FlightDataDashboard:AutoLoadAborted', '사용자가 자동 로드를 중단했습니다.');
+                    otherwise
+                        status = 'skip';
                 end
                 app.ProjectDirty = true;   % stays dirty until resolved
             catch ME
