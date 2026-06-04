@@ -768,7 +768,7 @@
                             estFps = round(1 / dt);
                             if estFps >= 1 && estFps <= 1000
                                 app.VideoSyncState(fIdx).DataFps = estFps;
-                                if isfield(app.UI(fIdx), 'vidDataFpsInput') && isvalid(app.UI(fIdx).vidDataFpsInput)
+                                if isfield(app.UI(fIdx), 'vidDataFpsInput') && ~isempty(app.UI(fIdx).vidDataFpsInput) && isvalid(app.UI(fIdx).vidDataFpsInput)
                                     app.UI(fIdx).vidDataFpsInput.Value = estFps;
                                 end
                             end
@@ -787,7 +787,7 @@
                         newFps = app.VideoSyncState(fIdx).TotalFrames / maxTime;
                         app.VideoSyncState(fIdx).VideoFps = newFps; % 소수점 정밀도 저장
 
-                        if isfield(app.UI(fIdx), 'vidVideoFpsInput') && any(isvalid(app.UI(fIdx).vidVideoFpsInput))
+                        if isfield(app.UI(fIdx), 'vidVideoFpsInput') && ~isempty(app.UI(fIdx).vidVideoFpsInput) && any(isvalid(app.UI(fIdx).vidVideoFpsInput))
                             app.UI(fIdx).vidVideoFpsInput.Value = round(newFps);
                         end
                         % 재계산된 FPS를 바탕으로 슬라이더 위의 총 시간 텍스트 즉시 갱신
@@ -1656,7 +1656,7 @@
                             else
                                 app.IsUpdating(fIdx) = true;
                                 app.updateDashboard(fIdx, idx);
-                                if isfield(app.UI(fIdx), 'spinner') && isvalid(app.UI(fIdx).spinner)
+                                if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
                                     currDataTime = app.Models(fIdx).rawData.(timeCol)(idx);
                                     if abs(app.UI(fIdx).spinner.Value - currDataTime) > eps
                                         app.UI(fIdx).spinner.Value = currDataTime;
@@ -2205,11 +2205,11 @@
             app.VideoSyncState(fIdx).AnchorFrame = 0;
             app.VideoSyncState(fIdx).AnchorTime = 0;
             try
-                if isfield(app.UI(fIdx), 'vidSyncBtn') && isvalid(app.UI(fIdx).vidSyncBtn)
+                if isfield(app.UI(fIdx), 'vidSyncBtn') && ~isempty(app.UI(fIdx).vidSyncBtn) && isvalid(app.UI(fIdx).vidSyncBtn)
                     app.UI(fIdx).vidSyncBtn.Text = '동기';
                     app.UI(fIdx).vidSyncBtn.BackgroundColor = [0.58 0.0 0.83];
                 end
-                if isfield(app.UI(fIdx), 'vidSyncStatus') && isvalid(app.UI(fIdx).vidSyncStatus)
+                if isfield(app.UI(fIdx), 'vidSyncStatus') && ~isempty(app.UI(fIdx).vidSyncStatus) && isvalid(app.UI(fIdx).vidSyncStatus)
                     app.UI(fIdx).vidSyncStatus.Text = '동기 미설정';
                     app.UI(fIdx).vidSyncStatus.FontColor = [0.5 0.5 0.5];
                 end
@@ -3038,7 +3038,7 @@
             try
                 if isempty(app.Models(fIdx).rawData), return; end
 
-                if isfield(app.UI(fIdx), 'dataTable') && isvalid(app.UI(fIdx).dataTable)
+                if isfield(app.UI(fIdx), 'dataTable') && ~isempty(app.UI(fIdx).dataTable) && isvalid(app.UI(fIdx).dataTable)
                     metaList = app.Models(fIdx).displayMeta;
                     dataCell = cell(length(metaList), 2);
                     for i = 1:length(metaList)
@@ -3054,23 +3054,23 @@
                 roll  = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Roll)(idx);
                 hdg   = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Heading)(idx);
 
-                if isfield(app.UI(fIdx), 'pitchLabel') && isvalid(app.UI(fIdx).pitchLabel)
+                if isfield(app.UI(fIdx), 'pitchLabel') && ~isempty(app.UI(fIdx).pitchLabel) && isvalid(app.UI(fIdx).pitchLabel)
                     app.UI(fIdx).pitchLabel.Text = sprintf('Pitch %+.3f°', pitch);
                 end
-                if isfield(app.UI(fIdx), 'rollLabel') && isvalid(app.UI(fIdx).rollLabel)
+                if isfield(app.UI(fIdx), 'rollLabel') && ~isempty(app.UI(fIdx).rollLabel) && isvalid(app.UI(fIdx).rollLabel)
                     app.UI(fIdx).rollLabel.Text = sprintf('Roll %+.3f°', roll);
                 end
-                if isfield(app.UI(fIdx), 'hdgLabel') && isvalid(app.UI(fIdx).hdgLabel)
+                if isfield(app.UI(fIdx), 'hdgLabel') && ~isempty(app.UI(fIdx).hdgLabel) && isvalid(app.UI(fIdx).hdgLabel)
                     app.UI(fIdx).hdgLabel.Text = sprintf('Heading %+.3f°', hdg);
                 end
 
-                if isfield(app.UI(fIdx), 'hgPitch') && isvalid(app.UI(fIdx).hgPitch)
+                if isfield(app.UI(fIdx), 'hgPitch') && ~isempty(app.UI(fIdx).hgPitch) && isvalid(app.UI(fIdx).hgPitch)
                     set(app.UI(fIdx).hgPitch, 'Matrix', makehgtform('zrotate', -pitch * pi / 180));
                 end
-                if isfield(app.UI(fIdx), 'hgRoll') && isvalid(app.UI(fIdx).hgRoll)
+                if isfield(app.UI(fIdx), 'hgRoll') && ~isempty(app.UI(fIdx).hgRoll) && isvalid(app.UI(fIdx).hgRoll)
                     set(app.UI(fIdx).hgRoll, 'Matrix', makehgtform('zrotate', -roll * pi / 180));
                 end
-                if isfield(app.UI(fIdx), 'hgHdg') && isvalid(app.UI(fIdx).hgHdg)
+                if isfield(app.UI(fIdx), 'hgHdg') && ~isempty(app.UI(fIdx).hgHdg) && isvalid(app.UI(fIdx).hgHdg)
                     set(app.UI(fIdx).hgHdg, 'Matrix', makehgtform('zrotate', -hdg * pi / 180));
                 end
                 app.refreshBoardOffSummaryPanel(fIdx);
@@ -3093,20 +3093,20 @@
                 alts = app.Models(fIdx).rawData.(altCol);
 
                 % Altitude 패널 마커 + xline 갱신
-                if isfield(app.UI(fIdx), 'hAltMarker') && isvalid(app.UI(fIdx).hAltMarker)
+                if isfield(app.UI(fIdx), 'hAltMarker') && ~isempty(app.UI(fIdx).hAltMarker) && isvalid(app.UI(fIdx).hAltMarker)
                     set(app.UI(fIdx).hAltMarker, 'XData', currTime, 'YData', alts(idx));
                 end
-                if isfield(app.UI(fIdx), 'timeLine') && isvalid(app.UI(fIdx).timeLine)
+                if isfield(app.UI(fIdx), 'timeLine') && ~isempty(app.UI(fIdx).timeLine) && isvalid(app.UI(fIdx).timeLine)
                     app.UI(fIdx).timeLine.Value = currTime;
                 end
 
                 % 현재시간 라벨 (매우 가벼움)
-                if isfield(app.UI(fIdx), 'currentTimeLabel') && isvalid(app.UI(fIdx).currentTimeLabel)
+                if isfield(app.UI(fIdx), 'currentTimeLabel') && ~isempty(app.UI(fIdx).currentTimeLabel) && isvalid(app.UI(fIdx).currentTimeLabel)
                     app.UI(fIdx).currentTimeLabel.Text = sprintf('%.3f s', currTime);
                 end
 
                 % 스피너 갱신 (가벼움)
-                if isfield(app.UI(fIdx), 'spinner') && isvalid(app.UI(fIdx).spinner)
+                if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
                     if abs(app.UI(fIdx).spinner.Value - currTime) > eps
                         app.UI(fIdx).spinner.Value = currTime;
                     end
@@ -3124,13 +3124,13 @@
                 currLat = pathLat(1:idx);
                 validIdx = (currLon ~= 0) | (currLat ~= 0);
 
-                if isfield(app.UI(fIdx), 'hMapPath') && isvalid(app.UI(fIdx).hMapPath)
+                if isfield(app.UI(fIdx), 'hMapPath') && ~isempty(app.UI(fIdx).hMapPath) && isvalid(app.UI(fIdx).hMapPath)
                     set(app.UI(fIdx).hMapPath, 'XData', currLon(validIdx), 'YData', currLat(validIdx));
                 end
 
                 hdg = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Heading)(idx);
                 lastValid = find(validIdx, 1, 'last');
-                if ~isempty(lastValid) && isfield(app.UI(fIdx), 'hgMapPlane') && isvalid(app.UI(fIdx).hgMapPlane)
+                if ~isempty(lastValid) && isfield(app.UI(fIdx), 'hgMapPlane') && ~isempty(app.UI(fIdx).hgMapPlane) && isvalid(app.UI(fIdx).hgMapPlane)
                     T_map = makehgtform('translate', [currLon(lastValid), currLat(lastValid), 0]) * makehgtform('zrotate', -hdg * pi / 180);
                     set(app.UI(fIdx).hgMapPlane, 'Matrix', T_map);
                 end
@@ -7405,7 +7405,7 @@
                     end
                     dlg.Visible = 'on';
                     drawnow limitrate;
-                    if isfield(app.UI(fIdx), 'vidControlBtn') && isvalid(app.UI(fIdx).vidControlBtn)
+                    if isfield(app.UI(fIdx), 'vidControlBtn') && ~isempty(app.UI(fIdx).vidControlBtn) && isvalid(app.UI(fIdx).vidControlBtn)
                         app.UI(fIdx).vidControlBtn.Text = '제어창 닫기';
                     end
                 end
@@ -8829,6 +8829,9 @@
                 app.PlotConfigState = st.PlotConfig;
             end
             app.ProjectState = st;
+            % [Medium 1] dirty=false 는 caller 가 file load 까지 완료한 후에만 의미가 있음.
+            % autoLoadProjectFromFile 은 이후 loadCompletedCleanly 플래그로 다시 결정함.
+            % 직접 호출(예: 외부 import) 시에도 caller 가 후속 결정을 내려야 한다.
             app.ProjectDirty = false;
         end
 
