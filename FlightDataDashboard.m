@@ -155,6 +155,7 @@
         EDFilesPathLbl       = struct()
         EDSyncF1Time         = []
         EDSyncF2Time         = []
+        EDSyncOffsetLbl      = []   % [F-04] offset preview
         EDVSync1Frame        = []
         EDVSync1Time         = []
         EDVSync1VFPS         = []
@@ -4370,8 +4371,9 @@
         end
 
         function buildEditTabSync(app, parent)
-            gl = uigridlayout(parent, [12 5]);
-            gl.RowHeight = repmat({'fit'}, 1, 12);
+            % [F-03/F-04] Adds "현재 화면값 가져오기" buttons + offset preview label.
+            gl = uigridlayout(parent, [16 5]);
+            gl.RowHeight = repmat({'fit'}, 1, 16);
             gl.ColumnWidth = {130, 100, 100, 100, 100};
             gl.RowSpacing = 5; gl.Padding = [10 10 10 10];
 
@@ -4379,14 +4381,25 @@
             lbl.Layout.Column = [1 5];
             lbl = uilabel(gl, 'Text', 'Flight 1 기준 시간(s):');
             lbl.Tooltip = lbl.Text;
-            app.EDSyncF1Time = uieditfield(gl, 'numeric', 'Value', 0);
+            app.EDSyncF1Time = uieditfield(gl, 'numeric', 'Value', 0, ...
+                'ValueChangedFcn', @(~,~) app.refreshSyncOffsetLabel());
             lbl = uilabel(gl, 'Text', 'Flight 2 기준 시간(s):');
             lbl.Tooltip = lbl.Text;
-            app.EDSyncF2Time = uieditfield(gl, 'numeric', 'Value', 0);
+            app.EDSyncF2Time = uieditfield(gl, 'numeric', 'Value', 0, ...
+                'ValueChangedFcn', @(~,~) app.refreshSyncOffsetLabel());
             uibutton(gl, 'Text', '동기 적용', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(true));
+            % [F-03] Capture current spinner values from main UI into both fields.
+            uibutton(gl, 'Text', '현재값 가져오기', ...
+                'Tooltip', '메인 UI 의 Flight 1/2 spinner 값을 그대로 가져옵니다.', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogCaptureCurrentFlightSync());
             uibutton(gl, 'Text', '동기 해제', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(false));
+            % [F-04] Offset preview spans full row.
+            app.EDSyncOffsetLbl = uilabel(gl, 'Text', 'Offset (t2 - t1): 0.000 s', ...
+                'FontColor', [0.3 0.3 0.7], 'FontWeight', 'bold');
+            app.EDSyncOffsetLbl.Layout.Column = [1 5];
+
             for fIdx = 1:2
                 lbl = uilabel(gl, 'Text', sprintf('== Flight %d AVI sync ==', fIdx), 'FontWeight', 'bold');
                 lbl.Layout.Column = [1 5];
@@ -4412,6 +4425,11 @@
                 btnB = uibutton(gl, 'Text', '동기 해제', ...
                     'ButtonPushedFcn', @(~,~) app.editDialogApplyVideoSync(fIdx, false));
                 btnB.Layout.Column = [4 5];
+                % [F-03] Capture current frame/time/fps for this flight.
+                btnC = uibutton(gl, 'Text', '현재 화면값 가져오기', ...
+                    'Tooltip', '메인 UI 의 현재 AVI Frame / Flight time / Hz 를 가져옵니다.', ...
+                    'ButtonPushedFcn', @(~,~) app.editDialogCaptureCurrentVideoSync(fIdx));
+                btnC.Layout.Column = [1 5];
             end
         end
 
@@ -4616,6 +4634,7 @@
                 if ~isempty(app.EDSyncF2Time) && isvalid(app.EDSyncF2Time)
                     app.EDSyncF2Time.Value = app.SyncState.SyncT2;
                 end
+                app.refreshSyncOffsetLabel();
                 for fIdx = 1:2
                     vss = app.VideoSyncState(fIdx);
                     handles = {sprintf('EDVSync%dFrame', fIdx), vss.AnchorFrame; ...
@@ -4810,6 +4829,54 @@
                     end
             end
             app.refreshEditDialog();
+        end
+
+        function refreshSyncOffsetLabel(app)
+            % [F-04] Update offset preview label whenever Sync inputs change.
+            try
+                if isempty(app.EDSyncOffsetLbl) || ~isvalid(app.EDSyncOffsetLbl), return; end
+                t1 = 0; t2 = 0;
+                if ~isempty(app.EDSyncF1Time) && isvalid(app.EDSyncF1Time), t1 = app.EDSyncF1Time.Value; end
+                if ~isempty(app.EDSyncF2Time) && isvalid(app.EDSyncF2Time), t2 = app.EDSyncF2Time.Value; end
+                app.EDSyncOffsetLbl.Text = sprintf('Offset (t2 - t1): %.3f s', t2 - t1);
+            catch
+            end
+        end
+
+        function editDialogCaptureCurrentFlightSync(app)
+            % [F-03] Pull current spinner values into Flight-Flight sync inputs.
+            try
+                if ~isempty(app.UI) && numel(app.UI) >= 1 && isfield(app.UI(1), 'spinner') ...
+                        && ~isempty(app.UI(1).spinner) && isvalid(app.UI(1).spinner)
+                    app.EDSyncF1Time.Value = app.UI(1).spinner.Value;
+                end
+                if numel(app.UI) >= 2 && isfield(app.UI(2), 'spinner') ...
+                        && ~isempty(app.UI(2).spinner) && isvalid(app.UI(2).spinner)
+                    app.EDSyncF2Time.Value = app.UI(2).spinner.Value;
+                end
+                app.refreshSyncOffsetLabel();
+            catch ME, app.logCaught(ME, 'sync-capture-ff'); end
+        end
+
+        function editDialogCaptureCurrentVideoSync(app, fIdx)
+            % [F-03] Pull current AVI frame + flight time + Hz into Video sync inputs.
+            try
+                vss = app.VideoSyncState(fIdx);
+                ef = app.(sprintf('EDVSync%dFrame', fIdx));
+                et = app.(sprintf('EDVSync%dTime',  fIdx));
+                vf = app.(sprintf('EDVSync%dVFPS',  fIdx));
+                df = app.(sprintf('EDVSync%dDFPS',  fIdx));
+                if vss.CurrentFrame > 0
+                    ef.Value = double(vss.CurrentFrame);
+                end
+                % current spinner time
+                if ~isempty(app.UI) && numel(app.UI) >= fIdx && isfield(app.UI(fIdx), 'spinner') ...
+                        && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
+                    et.Value = app.UI(fIdx).spinner.Value;
+                end
+                if vss.VideoFps > 0, vf.Value = double(vss.VideoFps); end
+                if vss.DataFps  > 0, df.Value = double(vss.DataFps);  end
+            catch ME, app.logCaught(ME, 'sync-capture-video'); end
         end
 
         function editDialogApplyFlightSync(app, enabled)
