@@ -354,6 +354,35 @@
                            'currentIndex', 1, 'selectedRow', 1, 'isMockData', false, ...
                            'dataFilePath', '', 'aviFilePath', '', 'optionFilePath', '');
         end
+
+        function varargout = testHook(app, methodName, varargin)
+            % [Testing] Public dispatch for private methods used by
+            % auto_test_runner.m. Production code MUST NOT depend on this.
+            switch methodName
+                case 'parseFlightData',               app.parseFlightData(varargin{:});
+                case 'setupDataUI',                   app.setupDataUI(varargin{:});
+                case 'calculateBounds',               app.calculateBounds(varargin{:});
+                case 'initPlots',                     app.initPlots(varargin{:});
+                case 'updateDashboard',               app.updateDashboard(varargin{:});
+                case 'togglePanel',                   app.togglePanel(varargin{:});
+                case 'toggleBoardVisibility',         app.toggleBoardVisibility(varargin{:});
+                case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
+                case 'boardOffClearCurrentTab',       app.boardOffClearCurrentTab(varargin{:});
+                case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
+                case 'applyTimeChange',               app.applyTimeChange(varargin{:});
+                case 'setVideoSync',                  app.setVideoSync(varargin{:});
+                case 'loadAviFileFromPath',           app.loadAviFileFromPath(varargin{:});
+                case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
+                case 'addPlotTab',                    app.addPlotTab(varargin{:});
+                case 'setSelectedRow'
+                    fIdx = varargin{1}; row = varargin{2};
+                    app.Models(fIdx).selectedRow = row;
+                otherwise
+                    error('FlightDataDashboard:UnknownTestHook', ...
+                          'Unknown testHook method: %s', methodName);
+            end
+            varargout = {};
+        end
     end
 
     % =========================================================================

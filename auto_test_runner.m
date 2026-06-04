@@ -156,11 +156,11 @@ function app = i_setupFreshApp(needAvi)
         fpath = dataFiles{k, 2};
         if ~isfile(fpath), continue; end
         try
-            app.parseFlightData(fIdx, fpath);
-            app.setupDataUI(fIdx);
-            app.calculateBounds(fIdx);
-            app.initPlots(fIdx);
-            app.updateDashboard(fIdx, 1);
+            app.testHook('parseFlightData', fIdx, fpath);
+            app.testHook('setupDataUI', fIdx);
+            app.testHook('calculateBounds', fIdx);
+            app.testHook('initPlots', fIdx);
+            app.testHook('updateDashboard', fIdx, 1);
         catch ME
             warning('setupFreshApp:data%d %s', fIdx, ME.message);
         end
@@ -173,7 +173,7 @@ function app = i_setupFreshApp(needAvi)
             fpath = aviFiles{k, 2};
             if ~isfile(fpath), continue; end
             try
-                app.loadAviFileFromPath(fIdx, fpath, struct('promptOnSync', false));
+                app.testHook('loadAviFileFromPath', fIdx, fpath, struct('promptOnSync', false));
             catch ME
                 warning('setupFreshApp:avi%d %s', fIdx, ME.message);
             end
@@ -212,24 +212,24 @@ end
 function i_applyAction(app, act)
     switch act.fn
         case 'togglePanel'
-            app.togglePanel(act.args{:});
+            app.testHook('togglePanel', act.args{:});
         case 'toggleBoardVisibility'
-            app.toggleBoardVisibility(act.args{:});
+            app.testHook('toggleBoardVisibility', act.args{:});
         case 'boardOffAddPlotTab'
-            app.boardOffAddPlotTab(act.args{:});
+            app.testHook('boardOffAddPlotTab', act.args{:});
         case 'boardOffClearCurrentTab'
-            app.boardOffClearCurrentTab(act.args{:});
+            app.testHook('boardOffClearCurrentTab', act.args{:});
         case 'boardOffPlotSelectedVariable'
             offIdx    = act.args{1};
             sourceIdx = 3 - offIdx;
             if ~isnan(act.row)
-                app.Models(sourceIdx).selectedRow = act.row;
+                app.testHook('setSelectedRow', sourceIdx, act.row);
             end
-            app.boardOffPlotSelectedVariable(offIdx);
+            app.testHook('boardOffPlotSelectedVariable', offIdx);
         case 'applyTimeChange'
-            app.applyTimeChange(act.args{:});
+            app.testHook('applyTimeChange', act.args{:});
         case 'setVideoSync'
-            app.setVideoSync(act.args{:});
+            app.testHook('setVideoSync', act.args{:});
         otherwise
             error('AutoTest:UnknownAction', 'Unknown action: %s', act.fn);
     end
