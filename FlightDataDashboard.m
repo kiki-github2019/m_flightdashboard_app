@@ -180,6 +180,7 @@
         EDPlotNameEdit       = []
         EDPlotYColDD         = []
         EDPlotYLabelEdit     = []
+        EDPlotXAutoCB        = []
         EDPlotXMin           = []
         EDPlotXMax           = []
         EDPlotYMin           = []
@@ -251,6 +252,7 @@
             end
 
             app.createLayout();
+            app.applyLightPanelTitleContrast(app.UIFigure);
             try
                 app.UIFigure.SizeChangedFcn = @(~,~) app.onFigureSizeChanged();
             catch ME_silent
@@ -3510,7 +3512,8 @@
             try
                 app.recordPlotInConfig(fIdx, tabIdx, struct( ...
                     'YColumn', yCol, 'YLabel', yLabelStr, ...
-                    'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
+                    'XLim', ax.XLim, 'XLimMode', char(ax.XLimMode), ...
+                    'YLimMode', char(ax.YLimMode), ...
                     'YLim', ax.YLim, 'Height', app.PLOT_ROW_HEIGHT));
             catch
             end
@@ -3524,6 +3527,122 @@
     % [Phase 4] PlotConfig capture/apply + LinkXWithinTab gating (D3)
     % =========================================================================
     methods (Access = private)
+        function spec = emptyPlotSpec(app)
+            spec = struct('YColumn', '', 'YLabel', '', 'XLim', [0 1], ...
+                'XLimMode', 'manual', 'YLimMode', 'auto', 'YLim', [0 1], ...
+                'Height', app.PLOT_ROW_HEIGHT, 'Order', 1);
+        end
+
+        function plots = normalizePlotSpecArray(app, plots)
+            defaults = app.emptyPlotSpec();
+            if isempty(plots)
+                plots = defaults([]);
+                return;
+            end
+            fields = fieldnames(defaults);
+            for iField = 1:numel(fields)
+                f = fields{iField};
+                if ~isfield(plots, f)
+                    for p = 1:numel(plots)
+                        plots(p).(f) = defaults.(f);
+                    end
+                end
+            end
+            for p = 1:numel(plots)
+                hVal = NaN;
+                try
+                    if isnumeric(plots(p).Height) && ~isempty(plots(p).Height)
+                        hVal = double(plots(p).Height(1));
+                    elseif ischar(plots(p).Height) || isstring(plots(p).Height)
+                        hVal = str2double(char(plots(p).Height));
+                    end
+                catch
+                    hVal = NaN;
+                end
+                if ~isfinite(hVal) || hVal <= 0
+                    hVal = app.PLOT_ROW_HEIGHT;
+                end
+                plots(p).Height = max(60, min(600, hVal));
+                if isempty(plots(p).XLimMode)
+                    plots(p).XLimMode = 'manual';
+                end
+                if isempty(plots(p).YLimMode)
+                    plots(p).YLimMode = 'auto';
+                end
+                if isempty(plots(p).Order)
+                    plots(p).Order = p;
+                end
+            end
+        end
+
+        function spec = normalizePlotSpec(app, spec)
+            specs = app.normalizePlotSpecArray(spec);
+            if isempty(specs)
+                spec = app.emptyPlotSpec();
+            else
+                spec = specs(1);
+            end
+        end
+
+        function tabs = compactPlotTabsSpec(~, tabs)
+            if isempty(tabs), return; end
+            lastKeep = 0;
+            for t = 1:numel(tabs)
+                if isfield(tabs(t), 'Plots') && ~isempty(tabs(t).Plots)
+                    lastKeep = t;
+                end
+            end
+            if lastKeep == 0
+                tabs = tabs(1);
+                if isfield(tabs, 'Plots')
+                    tabs.Plots = tabs.Plots([]);
+                end
+            else
+                tabs = tabs(1:lastKeep);
+            end
+        end
+
+        function h = getConfiguredPlotHeight(app, fIdx, tabIdx, plotIdx, fallback)
+            h = fallback;
+            try
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                tabs = cfg.Flights(fIdx).PlotTabs;
+                if numel(tabs) >= tabIdx && isfield(tabs(tabIdx), 'Plots') ...
+                        && numel(tabs(tabIdx).Plots) >= plotIdx ...
+                        && isfield(tabs(tabIdx).Plots(plotIdx), 'Height')
+                    rawVal = tabs(tabIdx).Plots(plotIdx).Height;
+                    if isnumeric(rawVal)
+                        val = double(rawVal(1));
+                    else
+                        val = str2double(char(rawVal));
+                    end
+                    if isfinite(val) && val > 0
+                        h = max(60, min(600, val));
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
+        function h = getLivePlotHeight(app, fIdx, tabIdx, plotIdx, fallback)
+            h = fallback;
+            try
+                if tabIdx <= numel(app.UI(fIdx).plotLayouts)
+                    layout = app.UI(fIdx).plotLayouts{tabIdx};
+                    if ~isempty(layout) && isvalid(layout)
+                        rows = layout.RowHeight;
+                        if numel(rows) >= plotIdx && isnumeric(rows{plotIdx}) ...
+                                && isfinite(double(rows{plotIdx}))
+                            h = max(60, min(600, double(rows{plotIdx})));
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
         function cfg = ensurePlotConfigShape(app, cfg)
             if isempty(cfg) || ~isstruct(cfg) || ~isfield(cfg, 'Flights')
                 empty = struct('PlotTabs', []);
@@ -3535,6 +3654,23 @@
                 end
                 if ~isfield(cfg.Flights(fIdx), 'PlotTabs')
                     cfg.Flights(fIdx).PlotTabs = [];
+                end
+                if ~isempty(cfg.Flights(fIdx).PlotTabs)
+                    for t = 1:numel(cfg.Flights(fIdx).PlotTabs)
+                        if ~isfield(cfg.Flights(fIdx).PlotTabs(t), 'Title') ...
+                                || isempty(cfg.Flights(fIdx).PlotTabs(t).Title)
+                            cfg.Flights(fIdx).PlotTabs(t).Title = sprintf('Tab %d', t);
+                        end
+                        if ~isfield(cfg.Flights(fIdx).PlotTabs(t), 'LinkXWithinTab') ...
+                                || isempty(cfg.Flights(fIdx).PlotTabs(t).LinkXWithinTab)
+                            cfg.Flights(fIdx).PlotTabs(t).LinkXWithinTab = true;
+                        end
+                        if ~isfield(cfg.Flights(fIdx).PlotTabs(t), 'Plots')
+                            cfg.Flights(fIdx).PlotTabs(t).Plots = [];
+                        end
+                        cfg.Flights(fIdx).PlotTabs(t).Plots = ...
+                            app.normalizePlotSpecArray(cfg.Flights(fIdx).PlotTabs(t).Plots);
+                    end
                 end
             end
             app.PlotConfigState = cfg;
@@ -3599,12 +3735,13 @@
         function recordPlotInConfig(app, fIdx, tabIdx, entry)
             cfg = app.ensurePlotConfigShape(app.PlotConfigState);
             try
+                entry = app.normalizePlotSpec(entry);
                 if numel(cfg.Flights(fIdx).PlotTabs) < tabIdx
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Title          = sprintf('Tab %d', tabIdx);
                     cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab = true;
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots          = [];
                 end
-                plots = cfg.Flights(fIdx).PlotTabs(tabIdx).Plots;
+                plots = app.normalizePlotSpecArray(cfg.Flights(fIdx).PlotTabs(tabIdx).Plots);
                 if isempty(plots)
                     plots = entry;
                 else
@@ -3634,17 +3771,21 @@
                     else
                         existingTabs = [];
                     end
-                    numTabs = numel(app.UI(fIdx).plotAxes);
+                    numTabs = numel(app.UI(fIdx).plotTabs);
                     newTabs = struct('Title', {}, 'LinkXWithinTab', {}, 'Plots', {});
                     for tabIdx = 1:numTabs
+                        if isempty(app.UI(fIdx).plotTabs(tabIdx)) || ~isvalid(app.UI(fIdx).plotTabs(tabIdx))
+                            continue;
+                        end
                         axesCell = app.UI(fIdx).plotAxes{tabIdx};
                         plots = struct('YColumn', {}, 'YLabel', {}, 'XLim', {}, ...
-                                       'YLimMode', {}, 'YLim', {}, 'Height', {}, 'Order', {});
+                                       'XLimMode', {}, 'YLimMode', {}, 'YLim', {}, ...
+                                       'Height', {}, 'Order', {});
                         % Existing per-tab plot list for identity lookup.
                         existingPlots = [];
                         if ~isempty(existingTabs) && numel(existingTabs) >= tabIdx ...
                                 && isfield(existingTabs(tabIdx), 'Plots')
-                            existingPlots = existingTabs(tabIdx).Plots;
+                            existingPlots = app.normalizePlotSpecArray(existingTabs(tabIdx).Plots);
                         end
                         if iscell(axesCell)
                             for p = 1:numel(axesCell)
@@ -3662,16 +3803,33 @@
                                         && ~isempty(existingPlots(p).YColumn)
                                     yColumn = char(existingPlots(p).YColumn);
                                 end
+                                if isempty(yColumn)
+                                    try
+                                        metaHeaders = {app.Models(fIdx).displayMeta.header};
+                                        for hIdx = 1:numel(metaHeaders)
+                                            hdr = char(metaHeaders{hIdx});
+                                            if strcmp(ylabStr, hdr) || startsWith(ylabStr, [hdr ' ('])
+                                                yColumn = hdr;
+                                                break;
+                                            end
+                                        end
+                                    catch ME
+                                        app.logCaught(ME, 'silent')
+                                    end
+                                end
                                 % Inherit Height from existing entry when possible.
                                 heightVal = app.PLOT_ROW_HEIGHT;
-                                if ~isempty(existingPlots) && numel(existingPlots) >= p ...
-                                        && isfield(existingPlots(p), 'Height') ...
-                                        && ~isempty(existingPlots(p).Height)
-                                    heightVal = existingPlots(p).Height;
+                                heightVal = app.getConfiguredPlotHeight(fIdx, tabIdx, p, heightVal);
+                                heightVal = app.getLivePlotHeight(fIdx, tabIdx, p, heightVal);
+                                xMode = 'manual';
+                                try
+                                    xMode = char(ax.XLimMode);
+                                catch
                                 end
                                 plots(end+1) = struct('YColumn', yColumn, 'YLabel', ylabStr, ...
-                                    'XLim', ax.XLim, 'YLimMode', char(ax.YLimMode), ...
-                                    'YLim', ax.YLim, 'Height', heightVal, ...
+                                    'XLim', ax.XLim, 'XLimMode', xMode, ...
+                                    'YLimMode', char(ax.YLimMode), 'YLim', ax.YLim, ...
+                                    'Height', heightVal, ...
                                     'Order', p); %#ok<AGROW>
                             end
                         end
@@ -3684,6 +3842,7 @@
                         newTabs(tabIdx) = struct( ...
                             'Title', titleStr, 'LinkXWithinTab', link, 'Plots', plots);
                     end
+                    newTabs = app.compactPlotTabsSpec(newTabs);
                     cfg.Flights(fIdx).PlotTabs = newTabs;
                 catch ME
                     app.logCaught(ME, 'silent')
@@ -3700,13 +3859,27 @@
                 if ~iscell(axesCell) || numel(axesCell) < plotIdx, return; end
                 ax = axesCell{plotIdx};
                 if isempty(ax) || ~isvalid(ax), return; end
-                xChanged = isfield(axisCfg, 'XLim') && ~isequal(ax.XLim, axisCfg.XLim);
+                manualX = ~isfield(axisCfg, 'XLimMode') || strcmpi(char(axisCfg.XLimMode), 'manual');
+                xChanged = manualX && isfield(axisCfg, 'XLim') && ~isequal(ax.XLim, axisCfg.XLim);
                 if xChanged && app.getLinkXWithinTab(fIdx, tabIdx)
                     app.disableLinkXOnIndividualEdit(fIdx, tabIdx);
                 end
-                if isfield(axisCfg, 'XLim'),     ax.XLim     = axisCfg.XLim; end
-                if isfield(axisCfg, 'YLim'),     ax.YLim     = axisCfg.YLim; end
+                oldFlag = app.IsProgrammaticXLim(fIdx);
+                app.IsProgrammaticXLim(fIdx) = true;
+                cleanupFlag = onCleanup(@() app.restoreProgrammaticXLim(fIdx, oldFlag));
+                if isfield(axisCfg, 'XLimMode') && strcmpi(char(axisCfg.XLimMode), 'auto')
+                    ax.XLimMode = 'auto';
+                elseif isfield(axisCfg, 'XLim') && numel(axisCfg.XLim) == 2 ...
+                        && all(isfinite(axisCfg.XLim)) && axisCfg.XLim(2) > axisCfg.XLim(1)
+                    ax.XLim = axisCfg.XLim;
+                    ax.XLimMode = 'manual';
+                end
                 if isfield(axisCfg, 'YLimMode'), ax.YLimMode = axisCfg.YLimMode; end
+                if isfield(axisCfg, 'YLim') && numel(axisCfg.YLim) == 2 ...
+                        && all(isfinite(axisCfg.YLim)) && axisCfg.YLim(2) > axisCfg.YLim(1)
+                    ax.YLim = axisCfg.YLim;
+                end
+                clear cleanupFlag
             catch ME
                 app.logCaught(ME, 'silent')
             end
@@ -3756,6 +3929,11 @@
                 ax = app.UI(fIdx).plotAxes{tabIdx}{plotIdx};
                 if isempty(ax) || ~isvalid(ax), return; end
                 oldXLim = ax.XLim;
+                oldXLimMode = 'manual';
+                try
+                    oldXLimMode = char(ax.XLimMode);
+                catch
+                end
 
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 tData = app.Models(fIdx).rawData.(timeCol);
@@ -3799,7 +3977,9 @@
                     end
                 end
 
-                if numel(oldXLim) == 2 && all(isfinite(oldXLim)) && oldXLim(2) > oldXLim(1)
+                if strcmpi(oldXLimMode, 'auto')
+                    ax.XLimMode = 'auto';
+                elseif numel(oldXLim) == 2 && all(isfinite(oldXLim)) && oldXLim(2) > oldXLim(1)
                     ax.XLim = oldXLim;
                 elseif numel(tData) >= 2 && tData(end) > tData(1)
                     ax.XLim = [tData(1), tData(end)];
@@ -3812,6 +3992,7 @@
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YColumn = yCol;
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLabel = yLabelStr;
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).XLim = ax.XLim;
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).XLimMode = char(ax.XLimMode);
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLimMode = char(ax.YLimMode);
                     cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLim = ax.YLim;
                     app.PlotConfigState = cfg;
@@ -4688,7 +4869,7 @@
                     || numel(cfg.Flights) < fIdx
                 return;
             end
-            tabs = cfg.Flights(fIdx).PlotTabs;
+            tabs = app.compactPlotTabsSpec(cfg.Flights(fIdx).PlotTabs);
             if isempty(tabs), return; end
 
             try
@@ -4721,7 +4902,7 @@
                     end
                 end
                 if isfield(tabSpec, 'Plots') && ~isempty(tabSpec.Plots)
-                    plotsSpec = tabSpec.Plots;
+                    plotsSpec = app.normalizePlotSpecArray(tabSpec.Plots);
                     for p = 1:numel(plotsSpec)
                         spec = plotsSpec(p);
                         yCol = '';
@@ -4747,8 +4928,13 @@
                             if iscell(axesCell) && ~isempty(axesCell)
                                 ax = axesCell{end};
                                 if isvalid(ax)
-                                    if isfield(spec, 'XLim') && ~isempty(spec.XLim) ...
-                                            && numel(spec.XLim) == 2, ax.XLim = spec.XLim; end
+                                    if isfield(spec, 'XLimMode') && strcmpi(char(spec.XLimMode), 'auto')
+                                        ax.XLimMode = 'auto';
+                                    elseif isfield(spec, 'XLim') && ~isempty(spec.XLim) ...
+                                            && numel(spec.XLim) == 2
+                                        ax.XLim = spec.XLim;
+                                        ax.XLimMode = 'manual';
+                                    end
                                     if isfield(spec, 'YLimMode') && ~isempty(spec.YLimMode)
                                         ax.YLimMode = char(spec.YLimMode);
                                     end
@@ -4771,6 +4957,8 @@
                                         if isfield(spec, 'Height') && ~isempty(spec.Height)
                                             cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).Height = spec.Height;
                                         end
+                                        cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).XLim = ax.XLim;
+                                        cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).XLimMode = char(ax.XLimMode);
                                         cfgLive.Flights(fIdx).PlotTabs(t).Plots(livePlotIdx).Order = livePlotIdx;
                                         app.PlotConfigState = cfgLive;
                                     end
@@ -4847,6 +5035,7 @@
             app.buildEditTabOptions(tabOpts);
             app.buildEditTabPlot(tabPlot);
             app.buildEditTabExport(tabExport);
+            app.applyLightPanelTitleContrast(fig);
 
             % Bottom button row
             bottom = uigridlayout(outer, [1 4]);
@@ -5113,9 +5302,10 @@
             app.EDPlotTree = uitree(mid, ...
                 'SelectionChangedFcn', @(~,~) app.onPlotTreeSelectionChanged());
 
-            propPanel = uipanel(mid, 'Title', '선택 항목 속성', 'FontWeight', 'bold');
-            pg = uigridlayout(propPanel, [11 2]);
-            pg.RowHeight = repmat({'fit'}, 1, 11);
+            propPanel = uipanel(mid, 'Title', '선택 항목 속성', ...
+                'FontWeight', 'bold', 'Scrollable', 'on');
+            pg = uigridlayout(propPanel, [12 2]);
+            pg.RowHeight = repmat({'fit'}, 1, 12);
             pg.ColumnWidth = {110, '1x'};
             pg.RowSpacing = 4; pg.Padding = [6 6 6 6];
 
@@ -5127,6 +5317,9 @@
             uilabel(pg, 'Text', 'Y 라벨:');
             app.EDPlotYLabelEdit = uieditfield(pg, 'text', 'Value', '', ...
                 'Tooltip', 'plot y축에 표시할 라벨');
+            uilabel(pg, 'Text', 'X auto:');
+            app.EDPlotXAutoCB = uicheckbox(pg, 'Text', 'XLimMode = auto', 'Value', false, ...
+                'ValueChangedFcn', @(src,~) app.editDialogToggleXAuto(src.Value));
             uilabel(pg, 'Text', 'X min:');
             app.EDPlotXMin = uieditfield(pg, 'numeric', 'Value', 0);
             uilabel(pg, 'Text', 'X max:');
@@ -5350,7 +5543,9 @@
                 fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
                 cfg = app.ensurePlotConfigShape(app.PlotConfigState);
                 if numel(cfg.Flights) >= fIdx
-                    tabs = cfg.Flights(fIdx).PlotTabs;
+                    tabs = app.compactPlotTabsSpec(cfg.Flights(fIdx).PlotTabs);
+                    cfg.Flights(fIdx).PlotTabs = tabs;
+                    app.PlotConfigState = cfg;
                     for t = 1:numel(tabs)
                         title = sprintf('Tab %d', t);
                         if isfield(tabs(t), 'Title') && ~isempty(tabs(t).Title)
@@ -5805,6 +6000,12 @@
                             app.EDPlotXMin.Value = spec.XLim(1);
                             app.EDPlotXMax.Value = spec.XLim(2);
                         end
+                        autoX = isfield(spec, 'XLimMode') && strcmpi(char(spec.XLimMode), 'auto');
+                        if ~isempty(app.EDPlotXAutoCB) && isvalid(app.EDPlotXAutoCB)
+                            app.EDPlotXAutoCB.Value = autoX;
+                        end
+                        app.EDPlotXMin.Enable = ternary(autoX, 'off', 'on');
+                        app.EDPlotXMax.Enable = ternary(autoX, 'off', 'on');
                         autoY = strcmpi(spec.YLimMode, 'auto');
                         app.EDPlotYAutoCB.Value = autoY;
                         app.EDPlotYMin.Enable = ternary(autoY, 'off', 'on');
@@ -5818,6 +6019,11 @@
                 elseif isfield(nd, 'kind') && strcmp(nd.kind, 'tab')
                     app.EDPlotNameEdit.Value = sprintf('Tab %d', nd.tab);
                     app.EDPlotYColDD.Items = ycols; app.EDPlotYColDD.Value = ycols{1};
+                    if ~isempty(app.EDPlotXAutoCB) && isvalid(app.EDPlotXAutoCB)
+                        app.EDPlotXAutoCB.Value = false;
+                    end
+                    app.EDPlotXMin.Enable = 'on';
+                    app.EDPlotXMax.Enable = 'on';
                     if ~isempty(app.EDPlotYLabelEdit) && isvalid(app.EDPlotYLabelEdit)
                         app.EDPlotYLabelEdit.Value = '';
                     end
@@ -5836,6 +6042,15 @@
             end
         end
 
+        function editDialogToggleXAuto(app, isAuto)
+            try
+                app.EDPlotXMin.Enable = ternary(isAuto, 'off', 'on');
+                app.EDPlotXMax.Enable = ternary(isAuto, 'off', 'on');
+            catch ME
+                app.logCaught(ME, 'silent');
+            end
+        end
+
         function editDialogApplyPlotProps(app)
             % [F-01] Apply property panel values to the selected plot.
             try
@@ -5846,12 +6061,34 @@
                 if ~isfield(nd, 'kind') || ~strcmp(nd.kind, 'plot'), return; end
                 t = nd.tab; p = nd.plot;
 
-                axisCfg = struct('XLim', [app.EDPlotXMin.Value app.EDPlotXMax.Value]);
+                axisCfg = struct();
+                if ~isempty(app.EDPlotXAutoCB) && isvalid(app.EDPlotXAutoCB) && app.EDPlotXAutoCB.Value
+                    axisCfg.XLimMode = 'auto';
+                else
+                    xLim = [app.EDPlotXMin.Value app.EDPlotXMax.Value];
+                    if any(~isfinite(xLim)) || xLim(2) <= xLim(1)
+                        try
+                            uialert(app.EditDialog, 'X min/max 범위를 확인하세요.', 'Plot Manager')
+                        catch
+                        end
+                        return;
+                    end
+                    axisCfg.XLim = xLim;
+                    axisCfg.XLimMode = 'manual';
+                end
                 if app.EDPlotYAutoCB.Value
                     axisCfg.YLimMode = 'auto';
                 else
+                    yLim = [app.EDPlotYMin.Value app.EDPlotYMax.Value];
+                    if any(~isfinite(yLim)) || yLim(2) <= yLim(1)
+                        try
+                            uialert(app.EditDialog, 'Y min/max 범위를 확인하세요.', 'Plot Manager')
+                        catch
+                        end
+                        return;
+                    end
                     axisCfg.YLimMode = 'manual';
-                    axisCfg.YLim    = [app.EDPlotYMin.Value app.EDPlotYMax.Value];
+                    axisCfg.YLim    = yLim;
                 end
                 app.applyPlotAxisConfig(fIdx, t, p, axisCfg);
 
@@ -5881,11 +6118,23 @@
                             yLabelText = char(cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn);
                         end
                         app.applyPlotYLabelInPlace(fIdx, t, p, yLabelText);
+                        try
+                            ax = app.UI(fIdx).plotAxes{t}{p};
+                            if ~isempty(ax) && isvalid(ax)
+                                cfg.Flights(fIdx).PlotTabs(t).Plots(p).XLim = ax.XLim;
+                                cfg.Flights(fIdx).PlotTabs(t).Plots(p).XLimMode = char(ax.XLimMode);
+                                cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLimMode = char(ax.YLimMode);
+                                cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLim = ax.YLim;
+                            end
+                        catch ME
+                            app.logCaught(ME, 'silent')
+                        end
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLabel = yLabelText;
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).Order = p;
                         app.applyPlotHeightInPlace(fIdx, t, p, app.EDPlotHeight.Value);
                         app.PlotConfigState = cfg;
+                        app.refreshBoardOffSummaryPanel(fIdx, true);
                     else
                         return;
                     end
@@ -7109,6 +7358,7 @@
             ctrl.vidFrameAxes = gobjects(0);
             ctrl.vidFrameXLine = gobjects(0);
             ctrl.vidFrameMarker = gobjects(0);
+            app.applyLightPanelTitleContrast(dlg);
         end
 
         function toggleBoardVisibility(app, fIdx)
@@ -7485,7 +7735,9 @@
                             yData = yData(1:n);
                             currX = currTime;
                         end
-                        plotLayout.RowHeight{end+1} = app.PLOT_ROW_HEIGHT;
+                        rowHeightValue = app.getConfiguredPlotHeight(sourceIdx, tIdx, pIdx, app.PLOT_ROW_HEIGHT);
+                        rowHeightValue = app.getLivePlotHeight(sourceIdx, tIdx, pIdx, rowHeightValue);
+                        plotLayout.RowHeight{end+1} = rowHeightValue;
                         rowIdx = numel(plotLayout.RowHeight);
                         p = uipanel(plotLayout, 'BorderType', 'line', 'BackgroundColor', 'w');
                         p.Layout.Row = rowIdx;
@@ -7719,6 +7971,37 @@
                     h.Visible = 'off';
                 end
             catch
+            end
+        end
+
+        function applyLightPanelTitleContrast(app, root)
+            try
+                panels = findall(root, 'Type', 'uipanel');
+            catch
+                panels = [];
+            end
+            for k = 1:numel(panels)
+                p = panels(k);
+                try
+                    if isempty(p) || ~isvalid(p) || ~isprop(p, 'Title') ...
+                            || isempty(char(p.Title)) || ~isprop(p, 'ForegroundColor')
+                        continue;
+                    end
+                    isLightBg = false;
+                    if isprop(p, 'BackgroundColor')
+                        bg = p.BackgroundColor;
+                        if isnumeric(bg) && numel(bg) == 3
+                            isLightBg = all(double(bg) >= 0.90);
+                        elseif ischar(bg) || isstring(bg)
+                            isLightBg = any(strcmpi(char(bg), {'w', 'white'}));
+                        end
+                    end
+                    if isLightBg
+                        p.ForegroundColor = [0 0 0];
+                    end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
             end
         end
 
@@ -8475,7 +8758,7 @@
                 % [P4] capture live plot UI state right before persistence so the saved
                 % project reflects current XLim/YLim/YLimMode without losing YColumn.
                 try
-                    app.capturePlotConfigFromUi()
+                    app.capturePlotConfigFromUi();
                 catch ME
                     app.logCaught(ME, 'silent')
                 end
@@ -8515,7 +8798,7 @@
                 autoPath = [base '.autosave.json'];
                 % [P4] autosave the live plot UI state too.
                 try
-                    app.capturePlotConfigFromUi()
+                    app.capturePlotConfigFromUi();
                 catch ME_pc
                     app.logCaught(ME_pc, 'silent')
                 end
