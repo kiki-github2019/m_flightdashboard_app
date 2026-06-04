@@ -1164,6 +1164,12 @@
                     app.logCaught(ME, 'silent')
                 end
             end
+            % [Q-07] Keep Export file table current after path-based AVI changes.
+            try
+                app.refreshExportTab();
+            catch ME
+                app.logCaught(ME, 'export-refresh-avi');
+            end
             ok = true;
         end
 
@@ -4727,6 +4733,12 @@
                 otherwise
                     return;
             end
+            % [Q-07] Reflect changed data/AVI/option paths in the Export tab immediately.
+            try
+                app.refreshExportTab();
+            catch ME
+                app.logCaught(ME, 'export-refresh-path');
+            end
             app.markProjectDirtyAndScheduleRefresh('file-change');
         end
 
@@ -5597,10 +5609,14 @@
 
         function refreshExportTab(app)
             try
-                if isempty(app.EDExpPreviewLbl) || ~isvalid(app.EDExpPreviewLbl), return; end
-                folderName = ['FlightDashboard_' char(datetime('now', 'Format', 'yyyy-MM-dd_HH-mm-ss'))];
-                app.EDExpPreviewLbl.Text = folderName;
-                if isempty(app.EDExpFileTable) || ~isvalid(app.EDExpFileTable), return; end
+                hasPreview = ~isempty(app.EDExpPreviewLbl) && isvalid(app.EDExpPreviewLbl);
+                hasTable = ~isempty(app.EDExpFileTable) && isvalid(app.EDExpFileTable);
+                if ~hasPreview && ~hasTable, return; end
+                if hasPreview
+                    folderName = ['FlightDashboard_' char(datetime('now', 'Format', 'yyyy-MM-dd_HH-mm-ss'))];
+                    app.EDExpPreviewLbl.Text = folderName;
+                end
+                if ~hasTable, return; end
                 st = app.collectCurrentProjectState();
                 [fileList, missingList] = app.buildExportFileList(st);
                 rows = cell(numel(fileList) + numel(missingList) + 1, 4);
