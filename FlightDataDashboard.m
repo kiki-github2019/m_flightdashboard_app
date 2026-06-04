@@ -5393,8 +5393,8 @@
         end
 
         function buildEditTabOptions(app, parent)
-            gl = uigridlayout(parent, [4 4]);
-            gl.RowHeight = {'fit', 'fit', '1x', 'fit'};
+            gl = uigridlayout(parent, [5 4]);
+            gl.RowHeight = {'fit', '1x', 'fit', 'fit', 'fit'};   % header / tabs / reset / btn
             gl.ColumnWidth = {120, '1x', 100, 100};
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
@@ -5406,8 +5406,19 @@
             uibutton(gl, 'Text', '되돌리기', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogRevertOptionDraft());
 
+            % [D-05] Explicit reset path — restores RequiredColumns to first-N-data-columns
+            % defaults so a user can recover after an option file replace breaks mappings.
+            resetRow = uigridlayout(gl, [1 3]);
+            resetRow.Layout.Row = 3; resetRow.Layout.Column = [1 4];
+            resetRow.ColumnWidth = {'1x', 200, '1x'};
+            uilabel(resetRow, 'Text', '');
+            uibutton(resetRow, 'Text', 'Reset to default mapping', ...
+                'Tooltip', '확인 후 RequiredColumns 매핑을 data file 의 첫 N개 컬럼으로 초기화', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogResetOptionDraftMapping());
+            uilabel(resetRow, 'Text', '');
+
             tabs = uitabgroup(gl);
-            tabs.Layout.Row = [2 3]; tabs.Layout.Column = [1 4];
+            tabs.Layout.Row = 2; tabs.Layout.Column = [1 4];
             tabReq = uitab(tabs, 'Title', 'RequiredColumns');
             tabDsp = uitab(tabs, 'Title', 'DisplayColumns');
 
@@ -5423,7 +5434,7 @@
             app.EDOptDspTable.Position = [10 10 900 280];
 
             btnRow = uigridlayout(gl, [1 3]);
-            btnRow.Layout.Row = 4; btnRow.Layout.Column = [1 4];
+            btnRow.Layout.Row = 4; btnRow.Layout.Column = [1 4];   % [D-05] 한 칸 위로 이동(reset 행 추가)
             btnRow.ColumnWidth = {'1x', 140, 160};
             uilabel(btnRow, 'Text', '');
             uibutton(btnRow, 'Text', '적용 (즉시 반영)', ...
@@ -6073,6 +6084,58 @@
                 app.refreshEditDialog();
             catch ME
                 app.logCaught(ME, 'option-revert');
+            end
+        end
+
+        function editDialogResetOptionDraftMapping(app)
+            % [D-05] Reset RequiredColumns of the current option draft to defaults
+            % (first-N data columns, paralleling parseOptionFileToDraft auto-fill).
+            % Asks user to confirm because this discards manual mapping work.
+            try
+                fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                src = app.Models(fIdx).rawDataUnscaled;
+                if isempty(src) || width(src) == 0
+                    try
+                        uialert(app.EditDialog, '비행데이터가 먼저 로드되어야 합니다.', 'Options');
+                    catch
+                    end
+                    return;
+                end
+                sel = '';
+                try
+                    sel = uiconfirm(app.EditDialog, ...
+                        sprintf(['Flight %d 의 RequiredColumns 매핑을 데이터 파일 기본값(첫 N개 컬럼)으로 ', ...
+                                 '초기화 합니다.\n현재 편집 중인 매핑은 폐기됩니다. 계속하시겠습니까?'], fIdx), ...
+                        'Reset mapping', ...
+                        'Options', {'초기화', '취소'}, 'DefaultOption', 2, 'CancelOption', 2);
+                catch
+                    sel = '초기화';
+                end
+                if ~strcmp(sel, '초기화'), return; end
+
+                headers  = src.Properties.VariableNames;
+                reqKeys  = app.REQ_KEYS;
+                mappedCols = struct();
+                for i = 1:numel(reqKeys)
+                    if i <= numel(headers)
+                        mappedCols.(reqKeys{i}) = char(headers{i});
+                    else
+                        mappedCols.(reqKeys{i}) = '';
+                    end
+                end
+                draft = app.OptionDrafts{fIdx};
+                if isempty(draft) || ~isstruct(draft)
+                    draft = struct('sourcePath', char(app.resolveOptionFilePath(fIdx)), ...
+                                   'mappedCols', mappedCols, 'displayMeta', struct( ...
+                                   'header', {}, 'unit', {}, 'format', {}, 'scale', {}, 'order', {}));
+                else
+                    draft.mappedCols = mappedCols;
+                end
+                app.OptionDrafts{fIdx} = draft;
+                app.ProjectDirty = true;
+                app.refreshEditDialog();
+            catch ME
+                app.logCaught(ME, 'option-reset');
             end
         end
 
