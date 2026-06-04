@@ -3352,6 +3352,12 @@
 
             grid(ax, 'on'); set(ax, 'XMinorGrid', 'on', 'YMinorGrid', 'on');
             plot(ax, tData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82]);
+            % [Bug #1 fix v2] Force XLim to data span immediately so the off-mode summary
+            % mirror cannot inherit a pre-commit default [0 1] / [0 0.x] when reading
+            % srcAx.XLim during refreshBoardOffSummaryPanel.
+            if numel(tData) >= 2 && tData(end) > tData(1)
+                ax.XLim = [tData(1) tData(end)];
+            end
             xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
             ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
 
@@ -7100,7 +7106,16 @@
                                 srcAx = app.UI(sourceIdx).plotAxes{tIdx}{pIdx};
                                 dstAx = app.UI(fIdx).boardOffPlotAxes{tIdx}{pIdx};
                                 if ~isempty(srcAx) && isvalid(srcAx) && ~isempty(dstAx) && isvalid(dstAx)
-                                    dstAx.XLim = srcAx.XLim;
+                                    % [Bug #1 fix v2] Only mirror srcAx.XLim when the user
+                                    % pinned it (XLimMode='manual'). When auto, a freshly
+                                    % added source plot's XLim may still be the default
+                                    % [0 1] / [0 0.x] because uiaxes auto-commit defers to
+                                    % drawnow, leaking that stale value into the off summary.
+                                    if strcmpi(char(srcAx.XLimMode), 'manual')
+                                        dstAx.XLim = srcAx.XLim;
+                                    elseif ~isempty(times)
+                                        dstAx.XLim = [times(1) times(end)];
+                                    end
                                     dstAx.YLimMode = srcAx.YLimMode;
                                     if strcmpi(char(srcAx.YLimMode), 'manual')
                                         dstAx.YLim = srcAx.YLim;
