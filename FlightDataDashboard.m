@@ -702,7 +702,20 @@
     % =========================================================================
     methods (Access = public)
         function handleFlightFile(app, fIdx)
-            [filename, pathname] = uigetfile('*.csv', sprintf('비행경로 %d 파일 선택', fIdx));
+            try
+                [filename, pathname] = uigetfile( ...
+                    {'*.csv;*.dat;*.txt', 'Flight data files (*.csv, *.dat, *.txt)'; ...
+                     '*.*', 'All files (*.*)'}, ...
+                    sprintf('비행경로 %d 파일 선택', fIdx));
+            catch e
+                app.logCaught(e, 'flight-file-dialog');
+                try
+                    uialert(app.UIFigure, sprintf('파일 선택창을 열 수 없습니다:\n%s', e.message), '파일 선택 오류')
+                catch
+                    errordlg(['파일 선택창을 열 수 없습니다: ', e.message], '파일 선택 오류');
+                end
+                return;
+            end
             if isequal(filename, 0), return; end
 
             % [V3.12] 기존 비디오 동기 설정이 있으면 사용자 확인 후 해제
