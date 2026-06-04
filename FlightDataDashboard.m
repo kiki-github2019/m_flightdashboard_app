@@ -435,6 +435,228 @@
                 end
             end
         end
+
+        function s = emptyTestBoardState(~)
+            panelVisible = struct('attitude', false, 'map', false, 'video', false);
+            s = struct( ...
+                'exists', false, ...
+                'panelVisible', false, ...
+                'PanelVisible', panelVisible, ...
+                'sideHandleVisible', panelVisible, ...
+                'dataLoaded', false, ...
+                'aviLoaded', false, ...
+                'currentIndex', NaN, ...
+                'currentTime', NaN, ...
+                'spinnerValue', NaN, ...
+                'currentTimeLabel', '', ...
+                'dataTableRows', 0, ...
+                'selectedRow', NaN, ...
+                'dataGridColumnWidth', {{}}, ...
+                'infoColumnHidden', false, ...
+                'plotColumnHidden', false, ...
+                'splitterColumnHidden', false, ...
+                'plotTabCount', 0, ...
+                'selectedPlotTab', 0, ...
+                'plotCounts', [], ...
+                'totalPlotCount', 0, ...
+                'selectedTabPlotCount', 0, ...
+                'altMarkerInteractive', false, ...
+                'altLineInteractive', false, ...
+                'videoSync', struct('IsSynced', false, 'AnchorFrame', 0, 'AnchorTime', 0, ...
+                                    'VideoFps', 0, 'DataFps', 0, 'TotalFrames', 0, 'CurrentFrame', 0), ...
+                'boardOffPanelVisible', false, ...
+                'boardOff', struct('tableRows', 0, 'buttonTexts', {{}}, 'tabCount', 0, ...
+                                   'selectedTab', 0, 'plotCounts', [], 'totalPlotCount', 0, ...
+                                   'markerCount', 0, 'interactiveMarkerCount', 0, ...
+                                   'lineCount', 0, 'interactiveLineCount', 0, ...
+                                   'firstMarkerX', NaN, 'firstLineX', NaN));
+        end
+
+        function s = collectTestBoardState(app, fIdx)
+            s = app.emptyTestBoardState();
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                s.exists = true;
+                s.panelVisible = app.isUiVisible(app.UI(fIdx).panel);
+
+                if isfield(app.UI(fIdx), 'PanelVisible')
+                    names = {'attitude', 'map', 'video'};
+                    for iName = 1:numel(names)
+                        nm = names{iName};
+                        if isfield(app.UI(fIdx).PanelVisible, nm)
+                            s.PanelVisible.(nm) = logical(app.UI(fIdx).PanelVisible.(nm));
+                        end
+                    end
+                end
+                if isfield(app.UI(fIdx), 'panelAttitude')
+                    s.sideHandleVisible.attitude = app.isUiVisible(app.UI(fIdx).panelAttitude);
+                end
+                if isfield(app.UI(fIdx), 'panelMapAlt')
+                    s.sideHandleVisible.map = app.isUiVisible(app.UI(fIdx).panelMapAlt);
+                end
+                if isfield(app.UI(fIdx), 'panelVideo')
+                    s.sideHandleVisible.video = app.isUiVisible(app.UI(fIdx).panelVideo);
+                end
+
+                s.dataLoaded = ~isempty(app.Models(fIdx).rawData);
+                s.aviLoaded = ~isempty(app.VideoState(fIdx).videoReader);
+                s.currentIndex = double(app.Models(fIdx).currentIndex);
+                s.selectedRow = double(app.Models(fIdx).selectedRow);
+                if s.dataLoaded && isfield(app.Models(fIdx).mappedCols, 'Time')
+                    timeCol = app.Models(fIdx).mappedCols.Time;
+                    idx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                    s.currentTime = double(app.Models(fIdx).rawData.(timeCol)(idx));
+                end
+                if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
+                    s.spinnerValue = double(app.UI(fIdx).spinner.Value);
+                end
+                if isfield(app.UI(fIdx), 'currentTimeLabel') && ~isempty(app.UI(fIdx).currentTimeLabel) ...
+                        && isvalid(app.UI(fIdx).currentTimeLabel)
+                    s.currentTimeLabel = char(app.UI(fIdx).currentTimeLabel.Text);
+                end
+                if isfield(app.UI(fIdx), 'dataTable') && ~isempty(app.UI(fIdx).dataTable) && isvalid(app.UI(fIdx).dataTable)
+                    s.dataTableRows = size(app.UI(fIdx).dataTable.Data, 1);
+                end
+
+                if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
+                    widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                    s.dataGridColumnWidth = widths;
+                    if numel(widths) >= 5
+                        s.infoColumnHidden = app.isTestWidthZero(widths{3});
+                        s.plotColumnHidden = app.isTestWidthZero(widths{4});
+                        s.splitterColumnHidden = app.isTestWidthZero(widths{5});
+                    end
+                end
+
+                if isfield(app.UI(fIdx), 'plotTabs')
+                    s.plotTabCount = numel(app.UI(fIdx).plotTabs);
+                    s.plotCounts = zeros(1, s.plotTabCount);
+                    for tIdx = 1:s.plotTabCount
+                        if tIdx <= numel(app.UI(fIdx).plotAxes) && ~isempty(app.UI(fIdx).plotAxes{tIdx})
+                            s.plotCounts(tIdx) = numel(app.UI(fIdx).plotAxes{tIdx});
+                        end
+                    end
+                    s.totalPlotCount = sum(s.plotCounts);
+                    try
+                        sel = find(app.UI(fIdx).plotTabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
+                        if ~isempty(sel)
+                            s.selectedPlotTab = double(sel);
+                            s.selectedTabPlotCount = s.plotCounts(sel);
+                        end
+                    catch ME_silent
+                        app.logCaught(ME_silent, 'silent')
+                    end
+                end
+
+                if isfield(app.UI(fIdx), 'hAltMarker')
+                    s.altMarkerInteractive = app.isTestCallbackSet(app.UI(fIdx).hAltMarker, 'ButtonDownFcn');
+                end
+                if isfield(app.UI(fIdx), 'timeLine')
+                    s.altLineInteractive = app.isTestCallbackSet(app.UI(fIdx).timeLine, 'ButtonDownFcn');
+                end
+
+                vss = app.VideoSyncState(fIdx);
+                s.videoSync = struct('IsSynced', logical(vss.IsSynced), ...
+                    'AnchorFrame', double(vss.AnchorFrame), 'AnchorTime', double(vss.AnchorTime), ...
+                    'VideoFps', double(vss.VideoFps), 'DataFps', double(vss.DataFps), ...
+                    'TotalFrames', double(vss.TotalFrames), 'CurrentFrame', double(vss.CurrentFrame));
+
+                if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
+                        && isvalid(app.UI(fIdx).boardOffPanel)
+                    s.boardOffPanelVisible = app.isUiVisible(app.UI(fIdx).boardOffPanel);
+                    allKids = findall(app.UI(fIdx).boardOffPanel);
+                    for iKid = 1:numel(allKids)
+                        h = allKids(iKid);
+                        try
+                            if isprop(h, 'Text') && isprop(h, 'ButtonPushedFcn')
+                                txt = char(h.Text);
+                                if ~isempty(txt)
+                                    s.boardOff.buttonTexts{end + 1} = txt; %#ok<AGROW>
+                                end
+                            end
+                        catch ME_silent
+                            app.logCaught(ME_silent, 'silent')
+                        end
+                    end
+                end
+                if isfield(app.UI(fIdx), 'boardOffTable') && ~isempty(app.UI(fIdx).boardOffTable) ...
+                        && isvalid(app.UI(fIdx).boardOffTable)
+                    s.boardOff.tableRows = size(app.UI(fIdx).boardOffTable.Data, 1);
+                end
+                if isfield(app.UI(fIdx), 'boardOffPlotTabs')
+                    s.boardOff.tabCount = numel(app.UI(fIdx).boardOffPlotTabs);
+                    s.boardOff.plotCounts = zeros(1, s.boardOff.tabCount);
+                    for tIdx = 1:s.boardOff.tabCount
+                        if tIdx <= numel(app.UI(fIdx).boardOffPlotAxes) && ~isempty(app.UI(fIdx).boardOffPlotAxes{tIdx})
+                            s.boardOff.plotCounts(tIdx) = numel(app.UI(fIdx).boardOffPlotAxes{tIdx});
+                        end
+                        if tIdx <= numel(app.UI(fIdx).boardOffTimeMarkers) && ~isempty(app.UI(fIdx).boardOffTimeMarkers{tIdx})
+                            s.boardOff.markerCount = s.boardOff.markerCount + numel(app.UI(fIdx).boardOffTimeMarkers{tIdx});
+                            for pIdx = 1:numel(app.UI(fIdx).boardOffTimeMarkers{tIdx})
+                                h = app.UI(fIdx).boardOffTimeMarkers{tIdx}{pIdx};
+                                if app.isTestCallbackSet(h, 'ButtonDownFcn')
+                                    s.boardOff.interactiveMarkerCount = s.boardOff.interactiveMarkerCount + 1;
+                                end
+                                if isnan(s.boardOff.firstMarkerX) && ~isempty(h) && isvalid(h)
+                                    xData = h.XData;
+                                    if ~isempty(xData)
+                                        s.boardOff.firstMarkerX = double(xData(1));
+                                    end
+                                end
+                            end
+                        end
+                        if tIdx <= numel(app.UI(fIdx).boardOffTimeLines) && ~isempty(app.UI(fIdx).boardOffTimeLines{tIdx})
+                            s.boardOff.lineCount = s.boardOff.lineCount + numel(app.UI(fIdx).boardOffTimeLines{tIdx});
+                            for pIdx = 1:numel(app.UI(fIdx).boardOffTimeLines{tIdx})
+                                h = app.UI(fIdx).boardOffTimeLines{tIdx}{pIdx};
+                                if app.isTestCallbackSet(h, 'ButtonDownFcn')
+                                    s.boardOff.interactiveLineCount = s.boardOff.interactiveLineCount + 1;
+                                end
+                                if isnan(s.boardOff.firstLineX) && ~isempty(h) && isvalid(h)
+                                    s.boardOff.firstLineX = double(h.Value);
+                                end
+                            end
+                        end
+                    end
+                    s.boardOff.totalPlotCount = sum(s.boardOff.plotCounts);
+                    try
+                        sel = find(app.UI(fIdx).boardOffPlotTabs == app.UI(fIdx).boardOffTabGroup.SelectedTab, 1);
+                        if ~isempty(sel), s.boardOff.selectedTab = double(sel); end
+                    catch ME_silent
+                        app.logCaught(ME_silent, 'silent')
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'testState')
+            end
+        end
+
+        function tf = isTestCallbackSet(~, h, propName)
+            tf = false;
+            try
+                if isempty(h) || ~isvalid(h) || ~isprop(h, propName), return; end
+                cb = h.(propName);
+                if isempty(cb), return; end
+                if isprop(h, 'HitTest') && strcmpi(char(h.HitTest), 'off'), return; end
+                if isprop(h, 'PickableParts') && strcmpi(char(h.PickableParts), 'none'), return; end
+                tf = true;
+            catch
+                tf = false;
+            end
+        end
+
+        function tf = isTestWidthZero(~, widthSpec)
+            tf = false;
+            try
+                if isnumeric(widthSpec)
+                    tf = widthSpec <= 0;
+                elseif isstring(widthSpec) || ischar(widthSpec)
+                    tf = strcmp(strtrim(char(widthSpec)), '0');
+                end
+            catch
+                tf = false;
+            end
+        end
     end
 
     % =========================================================================

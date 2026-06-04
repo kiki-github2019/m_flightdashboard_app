@@ -30,6 +30,10 @@ function auto_test_runner(varargin)
     p.addParameter('LoadAvi', 'lazy', @(s) ischar(s) || isstring(s));
     p.parse(varargin{:});
     opts = p.Results;
+    loadAviMode = lower(char(opts.LoadAvi));
+    if ~ismember(loadAviMode, {'lazy', 'always', 'never'})
+        error('auto_test_runner:BadLoadAvi', 'LoadAvi must be lazy, always, or never.');
+    end
 
     outDir = i_resolveOutputDir();
     if ~isfolder(outDir), mkdir(outDir); end
@@ -52,12 +56,22 @@ function auto_test_runner(varargin)
         tc = cases(i);
         fprintf('\n[%02d/%02d] %s | %s\n', i, nCases, tc.group, tc.title);
 
+        if tc.requireAvi && strcmp(loadAviMode, 'never')
+            r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
+                       'status', 'SKIPPED', 'steps', 0, ...
+                       'error', 'LoadAvi=never: AVI-required case skipped');
+            results(i) = r;
+            i_writeCaseMd(outDir, i, tc, r);
+            fprintf('  SKIPPED: %s\n', r.error);
+            continue;
+        end
+
         i_aggressiveCleanup();   % kill any leftover figures/timers/dialogs
 
         app = [];
         try
-            needAvi = strcmpi(opts.LoadAvi, 'always') || ...
-                      (strcmpi(opts.LoadAvi, 'lazy') && tc.requireAvi);
+            needAvi = strcmp(loadAviMode, 'always') || ...
+                      (strcmp(loadAviMode, 'lazy') && tc.requireAvi);
             app = i_setupFreshApp(needAvi);
             r   = i_runCase(app, tc, i, outDir);
         catch ME
@@ -81,11 +95,13 @@ function auto_test_runner(varargin)
     i_writeIndexMd(outDir, results);
 
     nPass = sum(strcmp({results.status}, 'PASS'));
+    nFail = sum(strcmp({results.status}, 'FAIL'));
     nExc  = sum(strcmp({results.status}, 'EXCEPTION'));
+    nCap  = sum(strcmp({results.status}, 'CAPTURE_FAIL'));
     nSF   = sum(strcmp({results.status}, 'SETUP_FAIL'));
     nSkip = sum(strcmp({results.status}, 'SKIPPED'));
-    fprintf('\nDone. %d cases. PASS=%d EXCEPTION=%d SETUP_FAIL=%d SKIPPED=%d\n', ...
-        nCases, nPass, nExc, nSF, nSkip);
+    fprintf('\nDone. %d cases. PASS=%d FAIL=%d EXCEPTION=%d CAPTURE_FAIL=%d SETUP_FAIL=%d SKIPPED=%d\n', ...
+        nCases, nPass, nFail, nExc, nCap, nSF, nSkip);
     fprintf('See: %s\n', fullfile(outDir, 'index.md'));
 end
 
@@ -121,24 +137,22 @@ end
 % Aggressive cleanup (MATLAB Online OOM mitigation)
 % =========================================================================
 function i_aggressiveCleanup()
-    % Stop and delete any stray timers (autosave / debounce / drag).
-    try
-        t = timerfindall;
-        if ~isempty(t)
-            try, stop(t); catch, end
-            try, delete(t); catch, end
-        end
-    catch
-    end
-    % Close any leftover figures (uiprogressdlg / uialert / dashboard).
+    % Close only FlightDataDashboard figures created by this runner.
     try
         figs = findall(groot, 'Type', 'figure');
-        if ~isempty(figs)
-            try, delete(figs); catch, end
+        for k = 1:numel(figs)
+            try
+                nm = char(figs(k).Name);
+                if strcmp(nm, '비행 데이터 리뷰 대시보드 (Dual)') || ...
+                        strcmp(nm, '설정/프로젝트 편집기') || ...
+                        startsWith(nm, 'AVI 제어 - Flight Data')
+                    delete(figs(k));
+                end
+            catch
+            end
         end
     catch
     end
-    try, close all force; catch, end
 end
 
 % =========================================================================
@@ -154,7 +168,9 @@ function app = i_setupFreshApp(needAvi)
     for k = 1:size(dataFiles, 1)
         fIdx  = dataFiles{k, 1};
         fpath = dataFiles{k, 2};
-        if ~isfile(fpath), continue; end
+        if ~isfile(fpath)
+            error('AutoTest:MissingDataFile', 'Missing required data file: %s', fpath);
+        end
         try
             app.testHook('parseFlightData', fIdx, fpath);
             app.testHook('setupDataUI', fIdx);
@@ -162,7 +178,7 @@ function app = i_setupFreshApp(needAvi)
             app.testHook('initPlots', fIdx);
             app.testHook('updateDashboard', fIdx, 1);
         catch ME
-            warning('setupFreshApp:data%d %s', fIdx, ME.message);
+            error('AutoTest:DataLoadFailed', 'Data load failed for flight %d: %s', fIdx, ME.message);
         end
     end
 
@@ -171,11 +187,16 @@ function app = i_setupFreshApp(needAvi)
         for k = 1:size(aviFiles, 1)
             fIdx  = aviFiles{k, 1};
             fpath = aviFiles{k, 2};
-            if ~isfile(fpath), continue; end
+            if ~isfile(fpath)
+                error('AutoTest:MissingAviFile', 'Missing required AVI file: %s', fpath);
+            end
             try
-                app.testHook('loadAviFileFromPath', fIdx, fpath, struct('promptOnSync', false));
+                ok = app.testHook('loadAviFileFromPath', fIdx, fpath, struct('promptOnSync', false));
+                if isempty(ok) || ~ok
+                    error('loadAviFileFromPath returned false');
+                end
             catch ME
-                warning('setupFreshApp:avi%d %s', fIdx, ME.message);
+                error('AutoTest:AviLoadFailed', 'AVI load failed for flight %d: %s', fIdx, ME.message);
             end
         end
     end
@@ -190,13 +211,32 @@ function r = i_runCase(app, tc, caseIdx, outDir)
                'status', 'PASS', 'steps', 0, 'error', '');
 
     drawnow;
-    i_capture(app, outDir, caseIdx, 1);
+    try
+        i_capture(app, outDir, caseIdx, 1);
+    catch ME
+        r.status = 'CAPTURE_FAIL';
+        r.error = sprintf('baseline capture: %s', ME.message);
+        fprintf('  CAPTURE_FAIL: %s\n', ME.message);
+        return;
+    end
     r.steps = 1;
+
+    st = app.testHook('getTestState');
+    exp = i_expectedFromState(st);
+    [ok, msg] = i_validateState(st, exp);
+    if ~ok
+        r.status = 'FAIL';
+        r.error = sprintf('baseline validation: %s', msg);
+        fprintf('  FAIL: %s\n', r.error);
+        return;
+    end
 
     for j = 1:numel(tc.actions)
         act = tc.actions{j};
         try
-            i_applyAction(app, act);
+            beforeState = app.testHook('getTestState');
+            i_applyAction(app, act, beforeState);
+            exp = i_updateExpectedState(exp, act, beforeState);
         catch ME
             r.status = 'EXCEPTION';
             r.error  = sprintf('step %d (%s): %s', j + 1, act.label, ME.message);
@@ -204,17 +244,37 @@ function r = i_runCase(app, tc, caseIdx, outDir)
         end
         drawnow;
         r.steps = r.steps + 1;
-        i_capture(app, outDir, caseIdx, r.steps);
+        try
+            i_capture(app, outDir, caseIdx, r.steps);
+        catch ME
+            r.status = 'CAPTURE_FAIL';
+            r.error  = sprintf('step %d (%s): %s', j + 1, act.label, ME.message);
+            fprintf('  CAPTURE_FAIL at step %d: %s\n', j + 1, ME.message);
+        end
         if strcmp(r.status, 'EXCEPTION'), break; end
+        if strcmp(r.status, 'CAPTURE_FAIL'), break; end
+
+        st = app.testHook('getTestState');
+        [ok, msg] = i_validateState(st, exp);
+        if ~ok
+            r.status = 'FAIL';
+            r.error = sprintf('step %d (%s): %s', j + 1, act.label, msg);
+            fprintf('  FAIL at step %d: %s\n', j + 1, msg);
+            break;
+        end
     end
 end
 
-function i_applyAction(app, act)
+function i_applyAction(app, act, beforeState)
     switch act.fn
         case 'togglePanel'
-            app.testHook('togglePanel', act.args{:});
+            fIdx = act.args{1};
+            if beforeState.BoardOffState(fIdx)
+                return;
+            end
+            app.testHook('pushPanelToggleButton', act.args{:});
         case 'toggleBoardVisibility'
-            app.testHook('toggleBoardVisibility', act.args{:});
+            app.testHook('pushBoardToggleButton', act.args{:});
         case 'boardOffAddPlotTab'
             app.testHook('boardOffAddPlotTab', act.args{:});
         case 'boardOffClearCurrentTab'
@@ -235,6 +295,210 @@ function i_applyAction(app, act)
     end
 end
 
+function exp = i_expectedFromState(st)
+    side = struct('attitude', true, 'map', true, 'video', true);
+    exp = struct();
+    exp.boardOff = logical(st.BoardOffState);
+    exp.panel = repmat(side, 1, 2);
+    exp.currentIndex = NaN(1, 2);
+    exp.minPlotTabCount = zeros(1, 2);
+    exp.minTotalPlotCount = zeros(1, 2);
+    exp.expectSelectedTabClear = false(1, 2);
+    exp.videoSynced = false(1, 2);
+    for fIdx = 1:2
+        exp.panel(fIdx) = st.boards(fIdx).PanelVisible;
+        exp.currentIndex(fIdx) = st.boards(fIdx).currentIndex;
+        exp.minPlotTabCount(fIdx) = st.boards(fIdx).plotTabCount;
+        exp.minTotalPlotCount(fIdx) = st.boards(fIdx).totalPlotCount;
+        exp.videoSynced(fIdx) = st.boards(fIdx).videoSync.IsSynced;
+    end
+end
+
+function exp = i_updateExpectedState(exp, act, beforeState)
+    switch act.fn
+        case 'togglePanel'
+            fIdx = act.args{1};
+            if beforeState.BoardOffState(fIdx)
+                return;
+            end
+            name = char(act.args{2});
+            exp.panel(fIdx).(name) = ~exp.panel(fIdx).(name);
+        case 'toggleBoardVisibility'
+            fIdx = act.args{1};
+            if exp.boardOff(fIdx)
+                exp.boardOff(fIdx) = false;
+            elseif ~any(exp.boardOff)
+                exp.boardOff(fIdx) = true;
+            end
+        case 'boardOffAddPlotTab'
+            sourceIdx = 3 - act.args{1};
+            exp.minPlotTabCount(sourceIdx) = exp.minPlotTabCount(sourceIdx) + 1;
+            exp.expectSelectedTabClear(sourceIdx) = false;
+        case 'boardOffClearCurrentTab'
+            sourceIdx = 3 - act.args{1};
+            exp.expectSelectedTabClear(sourceIdx) = true;
+        case 'boardOffPlotSelectedVariable'
+            sourceIdx = 3 - act.args{1};
+            exp.minTotalPlotCount(sourceIdx) = exp.minTotalPlotCount(sourceIdx) + 1;
+            exp.expectSelectedTabClear(sourceIdx) = false;
+        case 'applyTimeChange'
+            exp.currentIndex(act.args{1}) = act.args{2};
+        case 'setVideoSync'
+            exp.videoSynced(act.args{1}) = true;
+    end
+end
+
+function [ok, msg] = i_validateState(st, exp)
+    issues = {};
+    if sum(st.BoardOffState) > 1
+        issues{end + 1} = 'both boards are off'; %#ok<AGROW>
+    end
+
+    activeOff = find(st.BoardOffState, 1);
+    if isempty(activeOff)
+        for fIdx = 1:2
+            if ~st.boards(fIdx).panelVisible
+                issues{end + 1} = sprintf('board %d panel hidden while no board-off active', fIdx); %#ok<AGROW>
+            end
+            if st.boards(fIdx).boardOffPanelVisible
+                issues{end + 1} = sprintf('board %d summary visible while no board-off active', fIdx); %#ok<AGROW>
+            end
+            if st.boards(fIdx).infoColumnHidden || st.boards(fIdx).plotColumnHidden
+                issues{end + 1} = sprintf('board %d info/plot column hidden after board-on restore', fIdx); %#ok<AGROW>
+            end
+        end
+    else
+        offIdx = activeOff;
+        srcIdx = 3 - offIdx;
+        if st.boards(offIdx).panelVisible
+            issues{end + 1} = sprintf('off board %d original panel still visible', offIdx); %#ok<AGROW>
+        end
+        if ~st.boards(offIdx).boardOffPanelVisible
+            issues{end + 1} = sprintf('off board %d summary panel not visible', offIdx); %#ok<AGROW>
+        end
+        if ~st.boards(srcIdx).panelVisible
+            issues{end + 1} = sprintf('source board %d panel hidden', srcIdx); %#ok<AGROW>
+        end
+        if ~(st.boards(srcIdx).infoColumnHidden && st.boards(srcIdx).plotColumnHidden && st.boards(srcIdx).splitterColumnHidden)
+            issues{end + 1} = sprintf('source board %d info/plot columns were not moved out', srcIdx); %#ok<AGROW>
+        end
+        if st.boards(srcIdx).dataLoaded && st.boards(offIdx).boardOff.tableRows ~= st.boards(srcIdx).dataTableRows
+            issues{end + 1} = sprintf('summary table rows mismatch: off=%d source=%d', ...
+                st.boards(offIdx).boardOff.tableRows, st.boards(srcIdx).dataTableRows); %#ok<AGROW>
+        end
+        if ~i_hasButtonText(st.boards(offIdx).boardOff.buttonTexts, '+ 빈 탭 추가') || ...
+                ~i_hasButtonText(st.boards(offIdx).boardOff.buttonTexts, '현재 탭 지우기')
+            issues{end + 1} = sprintf('off board %d summary plot buttons missing', offIdx); %#ok<AGROW>
+        end
+        if st.boards(offIdx).boardOff.markerCount > 0 && ...
+                st.boards(offIdx).boardOff.interactiveMarkerCount ~= st.boards(offIdx).boardOff.markerCount
+            issues{end + 1} = sprintf('off board %d summary marker is not draggable', offIdx); %#ok<AGROW>
+        end
+        if st.boards(offIdx).boardOff.lineCount > 0 && ...
+                st.boards(offIdx).boardOff.interactiveLineCount ~= st.boards(offIdx).boardOff.lineCount
+            issues{end + 1} = sprintf('off board %d summary xline is not draggable', offIdx); %#ok<AGROW>
+        end
+        if st.boards(offIdx).boardOff.markerCount > 0 && st.boards(srcIdx).dataLoaded && ...
+                abs(st.boards(offIdx).boardOff.firstMarkerX - st.boards(srcIdx).currentTime) > 0.05
+            issues{end + 1} = sprintf('summary marker time mismatch on off board %d', offIdx); %#ok<AGROW>
+        end
+    end
+
+    for fIdx = 1:2
+        if ~st.boards(fIdx).exists
+            issues{end + 1} = sprintf('board %d state missing', fIdx); %#ok<AGROW>
+            continue;
+        end
+        names = {'attitude', 'map', 'video'};
+        for iName = 1:numel(names)
+            nm = names{iName};
+            if st.boards(fIdx).PanelVisible.(nm) ~= exp.panel(fIdx).(nm)
+                issues{end + 1} = sprintf('board %d %s PanelVisible expected=%d actual=%d', ...
+                    fIdx, nm, exp.panel(fIdx).(nm), st.boards(fIdx).PanelVisible.(nm)); %#ok<AGROW>
+            end
+            if ~st.BoardOffState(fIdx) && st.boards(fIdx).sideHandleVisible.(nm) ~= st.boards(fIdx).PanelVisible.(nm)
+                issues{end + 1} = sprintf('board %d %s handle visibility mismatch', fIdx, nm); %#ok<AGROW>
+            end
+        end
+        if st.boards(fIdx).dataLoaded
+            if st.boards(fIdx).dataTableRows < 1
+                issues{end + 1} = sprintf('board %d data table empty', fIdx); %#ok<AGROW>
+            end
+            if isfinite(st.boards(fIdx).currentTime) && isfinite(st.boards(fIdx).spinnerValue) && ...
+                    abs(st.boards(fIdx).currentTime - st.boards(fIdx).spinnerValue) > 0.01
+                issues{end + 1} = sprintf('board %d spinner/current time mismatch', fIdx); %#ok<AGROW>
+            end
+            if isfinite(exp.currentIndex(fIdx)) && st.boards(fIdx).currentIndex ~= exp.currentIndex(fIdx)
+                issues{end + 1} = sprintf('board %d currentIndex expected=%d actual=%d', ...
+                    fIdx, exp.currentIndex(fIdx), st.boards(fIdx).currentIndex); %#ok<AGROW>
+            end
+            if ~st.boards(fIdx).altMarkerInteractive || ~st.boards(fIdx).altLineInteractive
+                issues{end + 1} = sprintf('board %d altitude marker/xline callback missing', fIdx); %#ok<AGROW>
+            end
+        end
+        if st.boards(fIdx).plotTabCount < exp.minPlotTabCount(fIdx)
+            issues{end + 1} = sprintf('board %d plot tab count below expected minimum', fIdx); %#ok<AGROW>
+        end
+        if st.boards(fIdx).totalPlotCount < exp.minTotalPlotCount(fIdx)
+            issues{end + 1} = sprintf('board %d plot count below expected minimum', fIdx); %#ok<AGROW>
+        end
+        if exp.expectSelectedTabClear(fIdx) && st.boards(fIdx).selectedTabPlotCount ~= 0
+            issues{end + 1} = sprintf('board %d selected tab not cleared', fIdx); %#ok<AGROW>
+        end
+        if exp.videoSynced(fIdx) && ~st.boards(fIdx).videoSync.IsSynced
+            issues{end + 1} = sprintf('board %d video sync not enabled', fIdx); %#ok<AGROW>
+        end
+        if st.boards(fIdx).videoSync.IsSynced && st.boards(fIdx).videoSync.TotalFrames > 0 && ...
+                st.boards(fIdx).dataLoaded && isfinite(st.boards(fIdx).currentTime)
+            vss = st.boards(fIdx).videoSync;
+            expectedFrame = round(vss.AnchorFrame + (st.boards(fIdx).currentTime - vss.AnchorTime) * vss.VideoFps);
+            expectedFrame = max(1, min(expectedFrame, vss.TotalFrames));
+            if abs(vss.CurrentFrame - expectedFrame) > 1
+                issues{end + 1} = sprintf('board %d video frame mismatch expected=%d actual=%d', ...
+                    fIdx, expectedFrame, vss.CurrentFrame); %#ok<AGROW>
+            end
+        end
+    end
+
+    if isempty(activeOff)
+        if ~i_buttonStateOk(st.toggleButtons(1), 'off', 'on') || ~i_buttonStateOk(st.toggleButtons(2), 'off', 'on')
+            issues{end + 1} = 'board toggle buttons not restored to off/on-enabled labels'; %#ok<AGROW>
+        end
+    else
+        otherIdx = 3 - activeOff;
+        if ~i_buttonStateOk(st.toggleButtons(activeOff), 'on', 'on') || ...
+                ~i_buttonStateOk(st.toggleButtons(otherIdx), 'off', 'off')
+            issues{end + 1} = 'board toggle mutual-exclusion button state mismatch'; %#ok<AGROW>
+        end
+    end
+
+    ok = isempty(issues);
+    if ok
+        msg = '';
+    else
+        msg = strjoin(issues, '; ');
+    end
+end
+
+function tf = i_hasButtonText(buttonTexts, needle)
+    tf = false;
+    for k = 1:numel(buttonTexts)
+        if contains(buttonTexts{k}, needle)
+            tf = true;
+            return;
+        end
+    end
+end
+
+function tf = i_buttonStateOk(btn, labelNeedle, enableValue)
+    tf = false;
+    try
+        tf = contains(btn.Text, labelNeedle) && strcmpi(btn.Enable, enableValue);
+    catch
+        tf = false;
+    end
+end
+
 % =========================================================================
 % Capture helpers
 % =========================================================================
@@ -242,19 +506,16 @@ function i_capture(app, outDir, caseIdx, stepIdx)
     file = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
     try
         exportapp(app.UIFigure, file);
-        return;
+        if isfile(file), return; end
     catch
     end
     try
         f = getframe(app.UIFigure);
         imwrite(f.cdata, file);
-        return;
+        if isfile(file), return; end
     catch
     end
-    try
-        imwrite(zeros(10, 10, 3, 'uint8'), file);
-    catch
-    end
+    error('AutoTest:CaptureFailed', 'Failed to capture %s', file);
 end
 
 % =========================================================================
@@ -277,14 +538,19 @@ function i_writeCaseMd(outDir, idx, tc, r)
     fprintf(fid, '## 액션 시퀀스\n\n');
     fprintf(fid, '| Step | 액션 | 캡처 |\n');
     fprintf(fid, '|------|------|------|\n');
-    fprintf(fid, '| 01 | baseline (data loaded) | ![](case%02d_step01.png) |\n', idx);
-    for j = 1:numel(tc.actions)
+    if r.steps >= 1
+        fprintf(fid, '| 01 | baseline (data loaded) | ![](case%02d_step01.png) |\n', idx);
+    else
+        fprintf(fid, '| - | not executed | - |\n');
+    end
+    maxActionRows = min(numel(tc.actions), max(0, r.steps - 1));
+    for j = 1:maxActionRows
         fprintf(fid, '| %02d | %s | ![](case%02d_step%02d.png) |\n', ...
             j + 1, tc.actions{j}.label, idx, j + 1);
     end
 
     if ~isempty(r.error)
-        fprintf(fid, '\n## Exception\n```\n%s\n```\n', r.error);
+        fprintf(fid, '\n## Failure Detail\n```\n%s\n```\n', r.error);
     end
     clear closeFid;
 end
@@ -299,7 +565,9 @@ function i_writeIndexMd(outDir, results)
     fprintf(fid, '- 실행 시각: %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
     fprintf(fid, '- 총 케이스 수: %d\n', numel(results));
     fprintf(fid, '- PASS: %d\n', sum(strcmp({results.status}, 'PASS')));
+    fprintf(fid, '- FAIL: %d\n', sum(strcmp({results.status}, 'FAIL')));
     fprintf(fid, '- EXCEPTION: %d\n', sum(strcmp({results.status}, 'EXCEPTION')));
+    fprintf(fid, '- CAPTURE_FAIL: %d\n', sum(strcmp({results.status}, 'CAPTURE_FAIL')));
     fprintf(fid, '- SETUP_FAIL: %d\n', sum(strcmp({results.status}, 'SETUP_FAIL')));
     fprintf(fid, '- SKIPPED: %d\n\n', sum(strcmp({results.status}, 'SKIPPED')));
 
@@ -428,7 +696,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('D','D03 보드1 off + 자세 off → on → 자세 on','','잔여 상태 회귀 없음', ...
         {BV(1,'보드1 off'), P(2,'attitude','자세 off'), BV(1,'보드1 on'), P(2,'attitude','자세 on')});
     cases(end + 1) = mk('D','D04 복합 전이','','전체 시퀀스 회귀', ...
-        {BV(1,'보드1 off'), P(2,'video','비디오 off'), BV(1,'보드1 on'), BV(2,'보드2 off'), P(1,'video','보드1 비디오 on'), BV(2,'보드2 on')});
+        {BV(1,'보드1 off'), P(2,'video','비디오 off'), BV(1,'보드1 on'), BV(2,'보드2 off'), P(1,'video','보드1 비디오 off'), P(1,'video','보드1 비디오 on'), BV(2,'보드2 on')});
     cases(end + 1) = mk('D','D05 빠른 보드1 off/on 5회','timer/drawnow 회귀','크래시 없음', ...
         {BV(1,'off1'), BV(1,'on1'), BV(1,'off2'), BV(1,'on2'), BV(1,'off3'), BV(1,'on3'), BV(1,'off4'), BV(1,'on4'), BV(1,'off5'), BV(1,'on5')});
     cases(end + 1) = mk('D','D06 보드1 off 중 보드1 자세 off 시도','','hidden 이므로 무영향', ...
