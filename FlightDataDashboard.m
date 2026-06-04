@@ -4060,6 +4060,31 @@
             end
         end
 
+        function yData = getPlotYData(app, fIdx, tabIdx, plotIdx)
+            % [R-12] plotData mirrors the tagged data line's YData and must stay in sync.
+            yData = [];
+            try
+                if tabIdx <= numel(app.UI(fIdx).plotData) ...
+                        && numel(app.UI(fIdx).plotData{tabIdx}) >= plotIdx ...
+                        && ~isempty(app.UI(fIdx).plotData{tabIdx}{plotIdx})
+                    yData = app.UI(fIdx).plotData{tabIdx}{plotIdx};
+                    return;
+                end
+                if tabIdx <= numel(app.UI(fIdx).plotAxes) ...
+                        && numel(app.UI(fIdx).plotAxes{tabIdx}) >= plotIdx
+                    ax = app.UI(fIdx).plotAxes{tabIdx}{plotIdx};
+                    if ~isempty(ax) && isvalid(ax)
+                        lineObj = app.findMainPlotLine(ax);
+                        if ~isempty(lineObj) && isvalid(lineObj)
+                            yData = lineObj.YData;
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'silent');
+            end
+        end
+
         function syncSelectedPlotXLimToAll(app, fIdx, tabIdx, plotIdx)
             % Apply this plot's X range to every plot in every tab of every flight.
             try
@@ -7688,7 +7713,8 @@
                         end
                         yLen = 0;
                         try
-                            yLen = numel(app.UI(fIdx).plotData{tIdx}{pIdx});
+                            yData = app.getPlotYData(fIdx, tIdx, pIdx);
+                            yLen = numel(yData);
                         catch
                         end
                         sigParts{end+1} = sprintf('P%d:%d:%s', pIdx, yLen, yLabel); %#ok<AGROW>
@@ -7759,7 +7785,10 @@
 
                     plotCount = 0;
                     if tIdx <= numel(app.UI(sourceIdx).plotData) && ~isempty(app.UI(sourceIdx).plotData{tIdx})
-                        plotCount = numel(app.UI(sourceIdx).plotData{tIdx});
+                        plotCount = max(plotCount, numel(app.UI(sourceIdx).plotData{tIdx}));
+                    end
+                    if tIdx <= numel(app.UI(sourceIdx).plotAxes) && ~isempty(app.UI(sourceIdx).plotAxes{tIdx})
+                        plotCount = max(plotCount, numel(app.UI(sourceIdx).plotAxes{tIdx}));
                     end
                     if plotCount == 0
                         plotLayout.RowHeight = {'1x'};
@@ -7769,7 +7798,8 @@
                     end
 
                     for pIdx = 1:plotCount
-                        yData = app.UI(sourceIdx).plotData{tIdx}{pIdx};
+                        yData = app.getPlotYData(sourceIdx, tIdx, pIdx);
+                        if isempty(yData), continue; end
                         if isempty(timeData)
                             xData = 1:numel(yData);
                             currX = min(currIdx, numel(xData));
@@ -7881,7 +7911,12 @@
                         try
                             tl = app.UI(fIdx).boardOffTimeLines{tIdx}{pIdx};
                             mk = app.UI(fIdx).boardOffTimeMarkers{tIdx}{pIdx};
-                            yData = app.UI(fIdx).boardOffPlotData{tIdx}{pIdx};
+                            yData = app.getPlotYData(sourceIdx, tIdx, pIdx);
+                            if isempty(yData)
+                                yData = app.UI(fIdx).boardOffPlotData{tIdx}{pIdx};
+                            else
+                                app.UI(fIdx).boardOffPlotData{tIdx}{pIdx} = yData;
+                            end
                             if ~isempty(tl) && isvalid(tl), tl.Value = currTime; end
                             if ~isempty(mk) && isvalid(mk)
                                 markerIdx = max(1, min(currIdx, numel(yData)));
