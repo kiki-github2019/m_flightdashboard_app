@@ -3594,6 +3594,114 @@
             end
         end
 
+        function ok = replacePlotYColumnInPlace(app, fIdx, tabIdx, plotIdx, yCol)
+            % Replace one Plot Manager plot's Y source without rebuilding the tab.
+            % Rebuilding from PlotConfig can drop plots when config and live UI are out of sync.
+            ok = false;
+            try
+                if isempty(app.Models(fIdx).rawData) || ~ismember(yCol, app.Models(fIdx).rawData.Properties.VariableNames)
+                    return;
+                end
+                if tabIdx > numel(app.UI(fIdx).plotAxes) || ~iscell(app.UI(fIdx).plotAxes{tabIdx}) ...
+                        || plotIdx > numel(app.UI(fIdx).plotAxes{tabIdx})
+                    return;
+                end
+                ax = app.UI(fIdx).plotAxes{tabIdx}{plotIdx};
+                if isempty(ax) || ~isvalid(ax), return; end
+                oldXLim = ax.XLim;
+
+                timeCol = app.Models(fIdx).mappedCols.Time;
+                tData = app.Models(fIdx).rawData.(timeCol);
+                yData = app.Models(fIdx).rawData.(yCol);
+                n = min(numel(tData), numel(yData));
+                if n < 1, return; end
+                tData = tData(1:n);
+                yData = yData(1:n);
+
+                metaIdx = find(strcmp({app.Models(fIdx).displayMeta.header}, yCol), 1);
+                if ~isempty(metaIdx)
+                    meta = app.Models(fIdx).displayMeta(metaIdx);
+                    yLabelStr = sprintf('%s (%s)', meta.header, meta.unit);
+                else
+                    yLabelStr = yCol;
+                end
+
+                mainLine = app.findMainPlotLine(ax);
+                if isempty(mainLine) || ~isvalid(mainLine), return; end
+                mainLine.XData = tData;
+                mainLine.YData = yData;
+                ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
+
+                if tabIdx <= numel(app.UI(fIdx).plotData) && numel(app.UI(fIdx).plotData{tabIdx}) >= plotIdx
+                    app.UI(fIdx).plotData{tabIdx}{plotIdx} = yData;
+                end
+
+                currIdx = max(1, min(app.Models(fIdx).currentIndex, n));
+                currTime = tData(currIdx);
+                if tabIdx <= numel(app.UI(fIdx).timeLines) && numel(app.UI(fIdx).timeLines{tabIdx}) >= plotIdx
+                    tl = app.UI(fIdx).timeLines{tabIdx}{plotIdx};
+                    if ~isempty(tl) && isvalid(tl)
+                        tl.Value = currTime;
+                    end
+                end
+                if tabIdx <= numel(app.UI(fIdx).timeMarkers) && numel(app.UI(fIdx).timeMarkers{tabIdx}) >= plotIdx
+                    mk = app.UI(fIdx).timeMarkers{tabIdx}{plotIdx};
+                    if ~isempty(mk) && isvalid(mk)
+                        mk.XData = currTime;
+                        mk.YData = yData(currIdx);
+                    end
+                end
+
+                if numel(oldXLim) == 2 && all(isfinite(oldXLim)) && oldXLim(2) > oldXLim(1)
+                    ax.XLim = oldXLim;
+                elseif numel(tData) >= 2 && tData(end) > tData(1)
+                    ax.XLim = [tData(1), tData(end)];
+                end
+
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) >= tabIdx ...
+                        && isfield(cfg.Flights(fIdx).PlotTabs(tabIdx), 'Plots') ...
+                        && numel(cfg.Flights(fIdx).PlotTabs(tabIdx).Plots) >= plotIdx
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YColumn = yCol;
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLabel = yLabelStr;
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).XLim = ax.XLim;
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLimMode = char(ax.YLimMode);
+                    cfg.Flights(fIdx).PlotTabs(tabIdx).Plots(plotIdx).YLim = ax.YLim;
+                    app.PlotConfigState = cfg;
+                end
+
+                app.updatePlotTimeLines(fIdx, currIdx, currTime);
+                app.refreshBoardOffSummaryPanel(fIdx, true);
+                ok = true;
+            catch ME
+                app.logCaught(ME, 'plot-y-replace')
+            end
+        end
+
+        function lineObj = findMainPlotLine(app, ax)
+            lineObj = [];
+            try
+                lines = findall(ax, 'Type', 'Line');
+                bestN = 0;
+                for k = 1:numel(lines)
+                    h = lines(k);
+                    try
+                        if isempty(h) || ~isvalid(h), continue; end
+                        if isprop(h, 'Marker') && ~strcmpi(char(h.Marker), 'none'), continue; end
+                        n = numel(h.XData);
+                        if n > bestN
+                            bestN = n;
+                            lineObj = h;
+                        end
+                    catch ME_silent
+                        app.logCaught(ME_silent, 'silent')
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'silent')
+            end
+        end
+
         function syncSelectedPlotXLimToAll(app, fIdx, tabIdx, plotIdx)
             % Apply this plot's X range to every plot in every tab of every flight.
             try
@@ -5423,18 +5531,26 @@
                 end
                 app.applyPlotAxisConfig(fIdx, t, p, axisCfg);
 
-                % Update PlotConfigState with new height + YColumn (rebuild plots if YColumn changed).
+                % Update PlotConfigState with new height + YColumn.
+                % [Bug fix] YColumn change uses in-place YData replacement instead of
+                % rebuildPlotsFromConfig — the latter could drop the plot when the
+                % captured PlotConfigState had implicit-empty Tab(1) entries created
+                % by sparse struct-array assignment.
                 cfg = app.ensurePlotConfigShape(app.PlotConfigState);
                 if numel(cfg.Flights(fIdx).PlotTabs) >= t && numel(cfg.Flights(fIdx).PlotTabs(t).Plots) >= p
                     oldY = char(cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn);
                     newY = char(app.EDPlotYColDD.Value);
-                    cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
                     if ~isempty(newY) && ~strcmp(newY, '(none)') && ~strcmp(newY, '(선택)') && ~strcmp(newY, oldY)
-                        cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn = newY;
+                        if ~app.replacePlotYColumnInPlace(fIdx, t, p, newY)
+                            return;
+                        end
+                        cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                    end
+                    if numel(cfg.Flights(fIdx).PlotTabs) >= t && numel(cfg.Flights(fIdx).PlotTabs(t).Plots) >= p
+                        cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
                         app.PlotConfigState = cfg;
-                        app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
                     else
-                        app.PlotConfigState = cfg;
+                        return;
                     end
                 end
                 app.markProjectDirtyAndScheduleRefresh('plot-props');
