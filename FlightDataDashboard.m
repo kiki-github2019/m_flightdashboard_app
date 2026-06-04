@@ -3471,7 +3471,9 @@
             tb.Visible = 'on';
 
             grid(ax, 'on'); set(ax, 'XMinorGrid', 'on', 'YMinorGrid', 'on');
-            plot(ax, tData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82]);
+            % [R-08] Tag the primary data line so overlay lines never win lookup.
+            plot(ax, tData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82], ...
+                'Tag', 'fdd:dataLine');
             % [Bug #1 fix v2] Force XLim to data span immediately so the off-mode summary
             % mirror cannot inherit a pre-commit default [0 1] / [0 0.x] when reading
             % srcAx.XLim during refreshBoardOffSummaryPanel.
@@ -4013,6 +4015,12 @@
         function lineObj = findMainPlotLine(app, ax)
             lineObj = [];
             try
+                % [R-08] Prefer the tagged primary data line; keep legacy heuristic as fallback.
+                tagged = findobj(ax, 'Type', 'Line', 'Tag', 'fdd:dataLine');
+                if ~isempty(tagged)
+                    lineObj = tagged(1);
+                    return;
+                end
                 lines = findall(ax, 'Type', 'Line');
                 bestN = 0;
                 for k = 1:numel(lines)
@@ -7748,7 +7756,9 @@
                         ax.Layout.Column = 1;
                         grid(ax, 'on');
                         set(ax, 'XMinorGrid', 'on', 'YMinorGrid', 'on');
-                        plot(ax, xData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82], 'HitTest', 'off');
+                        % [R-08] Tag the summary data line for robust marker sync fallback.
+                        plot(ax, xData, yData, 'LineWidth', 1.5, 'Color', [0.15 0.38 0.82], ...
+                            'HitTest', 'off', 'Tag', 'fdd:dataLine');
                         xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
                         yLabelStr = '';
                         try
