@@ -7751,6 +7751,8 @@
                         p.Layout.Row = rowIdx;
                         p.Layout.Column = 1;
                         axGrid = uigridlayout(p, [1 1], 'Padding', [5 5 5 5]);
+                        % [R-10] Summary plot panels are created dynamically after layout init.
+                        app.applyLightPanelTitleContrast(p);
                         ax = uiaxes(axGrid);
                         ax.Layout.Row = 1;
                         ax.Layout.Column = 1;
@@ -8069,6 +8071,8 @@
             uilabel(blankGrid, 'Text', '표시할 plot 없음', ...
                 'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
 
+            % [R-10] Off-summary panels are late-created, so apply title contrast here.
+            app.applyLightPanelTitleContrast(pnl);
             offUi = struct('panel', pnl, 'table', tbl, 'tabGroup', tg);
         end
 
