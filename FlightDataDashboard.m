@@ -1922,9 +1922,13 @@
                     filePath, frameNo, fps, app.WORKER_VR_CACHE_SLOTS);
                 app.AsyncFutures{fIdx} = fut;
 
-                % [V3.21 #1-A] afterEach에 myGen 캡처 → 완료 시 generation 비교
+                % [Critical 3] afterEach displays a successful frame; afterAll runs
+                % regardless of success/failure/cancel so AsyncFutures/AsyncTargetFrame
+                % cannot leak when the worker errors or the cancel races completion.
                 afterEach(fut, @(img) app.onAsyncDecodeComplete(fIdx, frameNo, myGen, img), 1, ...
                     'PassFuture', false);
+                afterAll(fut, @(f) app.onAsyncDecodeFinally(fIdx, frameNo, myGen, f), 0, ...
+                    'PassFuture', true);
                 ok = true;
             catch e
                 app.AsyncTargetFrame(fIdx) = NaN;
@@ -1957,7 +1961,7 @@
                     if app.DebugMode
                         fprintf('[Async] stale: gen mismatch (%d vs %d)\n', gen, app.AsyncGen(fIdx));
                     end
-                    return;
+                    return;  % [Major 1] newer request exists; do NOT clear newer state
                 end
                 % 3) the frame we were asked to decode must still be the live async target
                 if isnan(app.AsyncTargetFrame(fIdx)) || frameNo ~= app.AsyncTargetFrame(fIdx)
@@ -1965,6 +1969,8 @@
                         fprintf('[Async] stale: target moved (frame=%d, target=%g)\n', ...
                             frameNo, app.AsyncTargetFrame(fIdx));
                     end
+                    % [Major 1] same gen + obsolete target → clear so future doesn't leak
+                    app.clearAsyncDecodeState(fIdx, gen);
                     return;
                 end
                 % 4) and must still be the currently selected frame in the video state
@@ -1973,10 +1979,16 @@
                         fprintf('[Async] stale: CurrentFrame moved (frame=%d, cur=%d)\n', ...
                             frameNo, app.VideoSyncState(fIdx).CurrentFrame);
                     end
+                    % [Major 1] CurrentFrame moved on same gen → clear
+                    app.clearAsyncDecodeState(fIdx, gen);
                     return;
                 end
                 % 5) video still ready
-                if ~app.isVideoReady(fIdx), return; end
+                if ~app.isVideoReady(fIdx)
+                    % [Major 1] video gone before display → clear
+                    app.clearAsyncDecodeState(fIdx, gen);
+                    return;
+                end
 
                 app.displayFrame(fIdx, frameNo, img, false);
                 app.clearAsyncDecodeState(fIdx, gen);
@@ -1999,6 +2011,40 @@
                 end
             catch ME
                 app.logCaught(ME, 'async-clear');
+            end
+        end
+
+        function onAsyncDecodeFinally(app, fIdx, frameNo, gen, fut) %#ok<INUSL>
+            % [Critical 3] Terminal-state cleanup for async decode futures.
+            % Fires on Finished / Failed / Cancelled regardless of whether
+            % afterEach delivered an image. Logs worker errors and guarantees
+            % AsyncTargetFrame / AsyncFutures cannot leak to the next request.
+            try
+                if isempty(fut) || ~isvalid(fut), return; end
+                state = '';
+                try, state = char(fut.State); catch, end
+                hadError = false;
+                try
+                    if ~isempty(fut.Error)
+                        app.logCaught(fut.Error, 'async-future-error');
+                        hadError = true;
+                    end
+                catch ME
+                    app.logCaught(ME, 'async-future-inspect');
+                end
+                if app.DebugMode && (hadError || ~strcmpi(state, 'finished'))
+                    fprintf('[Async] finally fIdx=%d gen=%d frame=%d state=%s hadError=%d\n', ...
+                        fIdx, gen, frameNo, state, hadError);
+                end
+                % Always clear when this future's generation is still the live one.
+                app.clearAsyncDecodeState(fIdx, gen);
+                % If this future ended without delivering a usable frame, drain pending
+                % so a queued user request can proceed.
+                if hadError || ~strcmpi(state, 'finished')
+                    try, app.drainPendingVideoRequest(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+                end
+            catch ME
+                app.logCaught(ME, 'async-finally');
             end
         end
 
