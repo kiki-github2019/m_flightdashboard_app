@@ -143,7 +143,8 @@
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
-        BoardPanelVisibleSnapshot = {[], []}   % saved per-board visibility/width state for restore
+        % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
+        % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
 
         % [Audit fix #1] Edit dialog UI handles (all default to [])
         EditDialogStatusLbl  = []
@@ -368,12 +369,30 @@
         function varargout = testHook(app, methodName, varargin)
             % [Testing] Public dispatch for private methods used by
             % auto_test_runner.m. Production code MUST NOT depend on this.
+            varargout = {};
             switch methodName
                 case 'parseFlightData',               app.parseFlightData(varargin{:});
                 case 'setupDataUI',                   app.setupDataUI(varargin{:});
                 case 'calculateBounds',               app.calculateBounds(varargin{:});
                 case 'initPlots',                     app.initPlots(varargin{:});
                 case 'updateDashboard',               app.updateDashboard(varargin{:});
+                case 'pushPanelToggleButton'
+                    fIdx = varargin{1}; pnlName = varargin{2};
+                    switch lower(char(pnlName))
+                        case 'attitude', btn = app.UI(fIdx).btnAtt;
+                        case 'map',      btn = app.UI(fIdx).btnMap;
+                        case 'video',    btn = app.UI(fIdx).btnVid;
+                        otherwise
+                            error('FlightDataDashboard:UnknownPanelToggle', ...
+                                  'Unknown panel toggle: %s', char(pnlName));
+                    end
+                    cb = btn.ButtonPushedFcn;
+                    cb(btn, []);
+                case 'pushBoardToggleButton'
+                    fIdx = varargin{1};
+                    btn = app.BoardToggleButtons(fIdx);
+                    cb = btn.ButtonPushedFcn;
+                    cb(btn, []);
                 case 'togglePanel',                   app.togglePanel(varargin{:});
                 case 'toggleBoardVisibility',         app.toggleBoardVisibility(varargin{:});
                 case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
@@ -381,9 +400,10 @@
                 case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
                 case 'applyTimeChange',               app.applyTimeChange(varargin{:});
                 case 'setVideoSync',                  app.setVideoSync(varargin{:});
-                case 'loadAviFileFromPath',           app.loadAviFileFromPath(varargin{:});
+                case 'loadAviFileFromPath',           varargout{1} = app.loadAviFileFromPath(varargin{:});
                 case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
                 case 'addPlotTab',                    app.addPlotTab(varargin{:});
+                case 'getTestState',                  varargout{1} = app.getTestState();
                 case 'setSelectedRow'
                     fIdx = varargin{1}; row = varargin{2};
                     app.Models(fIdx).selectedRow = row;
@@ -391,7 +411,29 @@
                     error('FlightDataDashboard:UnknownTestHook', ...
                           'Unknown testHook method: %s', methodName);
             end
-            varargout = {};
+        end
+
+        function state = getTestState(app)
+            % [Testing] Read-only UI/model snapshot for auto_test_runner.m.
+            state = struct();
+            state.BoardOffState = logical(app.BoardOffState);
+            state.boards = repmat(app.emptyTestBoardState(), 1, 2);
+            for fIdx = 1:2
+                state.boards(fIdx) = app.collectTestBoardState(fIdx);
+            end
+            state.toggleButtons = repmat(struct('Text', '', 'Enable', '', 'Visible', false), 1, 2);
+            for k = 1:min(2, numel(app.BoardToggleButtons))
+                try
+                    btn = app.BoardToggleButtons(k);
+                    if ~isempty(btn) && isvalid(btn)
+                        state.toggleButtons(k).Text = char(btn.Text);
+                        state.toggleButtons(k).Enable = char(btn.Enable);
+                        state.toggleButtons(k).Visible = app.isUiVisible(btn);
+                    end
+                catch ME
+                    app.logCaught(ME, 'silent')
+                end
+            end
         end
     end
 
@@ -6378,8 +6420,8 @@
                         app.updateBoardToggleButtons();
                         return;
                     end
-                    app.captureBoardPanelState(fIdx);
-                    app.captureBoardPanelState(sourceIdx);
+                    % [Q-03] captureBoardPanelState 호출 제거 — restoreBoardPanelState 가
+                    % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
                     app.BoardOffState(fIdx) = true;
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
@@ -6406,22 +6448,7 @@
             sourceIdx = 3 - offIdx;
         end
 
-        function captureBoardPanelState(app, fIdx)
-            try
-                snap = struct();
-                snap.panelVisible = app.isUiVisible(app.UI(fIdx).panel);
-                if isfield(app.UI(fIdx), 'PanelVisible')
-                    snap.PanelVisible = app.UI(fIdx).PanelVisible;
-                end
-                if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
-                    snap.ColumnWidth = app.UI(fIdx).dataGrid.ColumnWidth;
-                end
-                app.BoardPanelVisibleSnapshot{fIdx} = snap;
-            catch ME
-                app.BoardPanelVisibleSnapshot{fIdx} = [];
-                app.logCaught(ME, 'boardCapture');
-            end
-        end
+        % [Q-03] captureBoardPanelState 함수 삭제 — 더 이상 호출되지 않음.
 
         function restoreBoardPanelState(app, fIdx)
             % [Bug #2 fix] Do NOT overwrite PanelVisible from the pre-off snapshot.
