@@ -169,6 +169,15 @@
         EDPlotFlightDD       = []
         EDPlotTree           = []
         EDPlotLinkCB         = []
+        % [F-01] Plot Manager 속성 패널 핸들
+        EDPlotNameEdit       = []
+        EDPlotYColDD         = []
+        EDPlotXMin           = []
+        EDPlotXMax           = []
+        EDPlotYMin           = []
+        EDPlotYMax           = []
+        EDPlotYAutoCB        = []
+        EDPlotHeight         = []
         EDExpParentEdit      = []
         EDExpPreviewLbl      = []
         EDExpHashCB          = []
@@ -4448,32 +4457,82 @@
         end
 
         function buildEditTabPlot(app, parent)
-            gl = uigridlayout(parent, [5 6]);
-            gl.RowHeight = {'fit', 'fit', '1x', 'fit', 'fit'};
-            gl.ColumnWidth = {120, 100, 100, 100, 100, 100};
-            gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
+            % [F-01] Plot Manager: left tree + right property panel.
+            outer = uigridlayout(parent, [3 1]);
+            outer.RowHeight   = {'fit', '1x', 'fit'};
+            outer.ColumnWidth = {'1x'};
+            outer.RowSpacing  = 6; outer.Padding = [10 10 10 10];
 
-            uilabel(gl, 'Text', 'Flight:', 'FontWeight', 'bold');
-            app.EDPlotFlightDD = uidropdown(gl, 'Items', {'Flight 1', 'Flight 2'}, 'Value', 'Flight 1', ...
+            % Row 1: header
+            header = uigridlayout(outer, [1 6]);
+            header.RowHeight   = {'fit'};
+            header.ColumnWidth = {80, 120, 90, 90, 110, 110};
+            header.ColumnSpacing = 4;
+            uilabel(header, 'Text', 'Flight:', 'FontWeight', 'bold');
+            app.EDPlotFlightDD = uidropdown(header, 'Items', {'Flight 1', 'Flight 2'}, 'Value', 'Flight 1', ...
                 'ValueChangedFcn', @(~,~) app.refreshPlotTab());
-            uibutton(gl, 'Text', '캡처', ...
+            uibutton(header, 'Text', '캡처', ...
                 'ButtonPushedFcn', @(~,~) app.capturePlotConfigAndRefresh());
-            uibutton(gl, 'Text', '재구성', ...
+            uibutton(header, 'Text', '재구성', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogRebuildPlots());
-            uibutton(gl, 'Text', 'Sync X→All Tabs', ...
+            uibutton(header, 'Text', 'Sync X→All Tabs', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSyncTabXLimAll());
-            uibutton(gl, 'Text', 'Sync X→Plot', ...
+            uibutton(header, 'Text', 'Sync X→Plot', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSyncSelectedPlotXLimAll());
 
-            tree = uitree(gl);
-            tree.Layout.Row = [2 3]; tree.Layout.Column = [1 6];
-            app.EDPlotTree = tree;
+            % Row 2: tree (left) + property panel (right)
+            mid = uigridlayout(outer, [1 2]);
+            mid.RowHeight   = {'1x'};
+            mid.ColumnWidth = {'1x', 320};
+            mid.ColumnSpacing = 6;
 
-            uilabel(gl, 'Text', 'LinkXWithinTab:', 'FontWeight', 'bold');
-            app.EDPlotLinkCB = uicheckbox(gl, 'Text', '선택된 tab의 X축 link', 'Value', true, ...
+            app.EDPlotTree = uitree(mid, ...
+                'SelectionChangedFcn', @(~,~) app.onPlotTreeSelectionChanged());
+
+            propPanel = uipanel(mid, 'Title', '선택 항목 속성', 'FontWeight', 'bold');
+            pg = uigridlayout(propPanel, [10 2]);
+            pg.RowHeight = repmat({'fit'}, 1, 10);
+            pg.ColumnWidth = {110, '1x'};
+            pg.RowSpacing = 4; pg.Padding = [6 6 6 6];
+
+            uilabel(pg, 'Text', '이름:');
+            app.EDPlotNameEdit = uieditfield(pg, 'text', 'Value', '', ...
+                'Editable', 'off', 'Tooltip', 'YColumn 기반 자동 생성');
+            uilabel(pg, 'Text', 'Y 데이터 항목:');
+            app.EDPlotYColDD = uidropdown(pg, 'Items', {'(선택)'}, 'Value', '(선택)');
+            uilabel(pg, 'Text', 'X min:');
+            app.EDPlotXMin = uieditfield(pg, 'numeric', 'Value', 0);
+            uilabel(pg, 'Text', 'X max:');
+            app.EDPlotXMax = uieditfield(pg, 'numeric', 'Value', 60);
+            uilabel(pg, 'Text', 'Y auto:');
+            app.EDPlotYAutoCB = uicheckbox(pg, 'Text', 'YLimMode = auto', 'Value', true, ...
+                'ValueChangedFcn', @(src,~) app.editDialogToggleYAuto(src.Value));
+            uilabel(pg, 'Text', 'Y min:');
+            app.EDPlotYMin = uieditfield(pg, 'numeric', 'Value', 0, 'Enable', 'off');
+            uilabel(pg, 'Text', 'Y max:');
+            app.EDPlotYMax = uieditfield(pg, 'numeric', 'Value', 1, 'Enable', 'off');
+            uilabel(pg, 'Text', 'Plot height:');
+            app.EDPlotHeight = uieditfield(pg, 'numeric', 'Value', 150, 'Limits', [60 600]);
+            uilabel(pg, 'Text', '액션:');
+            actRow = uigridlayout(pg, [1 3], 'Padding', [0 0 0 0], 'ColumnSpacing', 4);
+            actRow.ColumnWidth = {'1x', '1x', '1x'};
+            uibutton(actRow, 'Text', '적용', ...
+                'BackgroundColor', [0.15 0.38 0.82], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogApplyPlotProps());
+            uibutton(actRow, 'Text', '복제', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogDuplicatePlot());
+            uibutton(actRow, 'Text', '삭제(plot)', ...
+                'BackgroundColor', [0.75 0.20 0.20], 'FontColor', 'w', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogDeleteSelectedPlot());
+
+            % Row 3: bottom
+            bottom = uigridlayout(outer, [1 3]);
+            bottom.RowHeight = {'fit'};
+            bottom.ColumnWidth = {130, '1x', 120};
+            uilabel(bottom, 'Text', 'LinkXWithinTab:', 'FontWeight', 'bold');
+            app.EDPlotLinkCB = uicheckbox(bottom, 'Text', '선택된 tab의 X축 link', 'Value', true, ...
                 'ValueChangedFcn', @(src,~) app.editDialogToggleSelectedTabLink(src.Value));
-            app.EDPlotLinkCB.Layout.Column = [2 3];
-            uibutton(gl, 'Text', '삭제(tab)', ...
+            uibutton(bottom, 'Text', '삭제(tab)', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogDeleteSelectedTab());
         end
 
@@ -4951,6 +5010,144 @@
             catch ME
                 app.logCaught(ME, 'plot-sync-plot')
             end
+        end
+
+        function onPlotTreeSelectionChanged(app)
+            % [F-01] Populate property panel from selected plot config entry.
+            try
+                if isempty(app.EDPlotTree) || ~isvalid(app.EDPlotTree), return; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                % populate YColumn dropdown choices from displayMeta
+                ycols = {};
+                if ~isempty(app.Models(fIdx).displayMeta)
+                    ycols = {app.Models(fIdx).displayMeta.header};
+                end
+                if isempty(ycols), ycols = {'(none)'}; end
+                if isfield(nd, 'kind') && strcmp(nd.kind, 'plot')
+                    t = nd.tab; p = nd.plot;
+                    tabs = cfg.Flights(fIdx).PlotTabs;
+                    if numel(tabs) >= t && numel(tabs(t).Plots) >= p
+                        spec = tabs(t).Plots(p);
+                        app.EDPlotNameEdit.Value = char(spec.YColumn);
+                        app.EDPlotYColDD.Items   = ycols;
+                        if ismember(spec.YColumn, ycols)
+                            app.EDPlotYColDD.Value = char(spec.YColumn);
+                        else
+                            app.EDPlotYColDD.Value = ycols{1};
+                        end
+                        if numel(spec.XLim) == 2
+                            app.EDPlotXMin.Value = spec.XLim(1);
+                            app.EDPlotXMax.Value = spec.XLim(2);
+                        end
+                        autoY = strcmpi(spec.YLimMode, 'auto');
+                        app.EDPlotYAutoCB.Value = autoY;
+                        app.EDPlotYMin.Enable = ternary(autoY, 'off', 'on');
+                        app.EDPlotYMax.Enable = ternary(autoY, 'off', 'on');
+                        if numel(spec.YLim) == 2
+                            app.EDPlotYMin.Value = spec.YLim(1);
+                            app.EDPlotYMax.Value = spec.YLim(2);
+                        end
+                        app.EDPlotHeight.Value = max(60, min(600, double(spec.Height)));
+                    end
+                elseif isfield(nd, 'kind') && strcmp(nd.kind, 'tab')
+                    app.EDPlotNameEdit.Value = sprintf('Tab %d', nd.tab);
+                    app.EDPlotYColDD.Items = ycols; app.EDPlotYColDD.Value = ycols{1};
+                end
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function editDialogToggleYAuto(app, isAuto)
+            try
+                app.EDPlotYMin.Enable = ternary(isAuto, 'off', 'on');
+                app.EDPlotYMax.Enable = ternary(isAuto, 'off', 'on');
+            catch ME, app.logCaught(ME, 'silent'); end
+        end
+
+        function editDialogApplyPlotProps(app)
+            % [F-01] Apply property panel values to the selected plot.
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~isfield(nd, 'kind') || ~strcmp(nd.kind, 'plot'), return; end
+                t = nd.tab; p = nd.plot;
+
+                axisCfg = struct('XLim', [app.EDPlotXMin.Value app.EDPlotXMax.Value]);
+                if app.EDPlotYAutoCB.Value
+                    axisCfg.YLimMode = 'auto';
+                else
+                    axisCfg.YLimMode = 'manual';
+                    axisCfg.YLim    = [app.EDPlotYMin.Value app.EDPlotYMax.Value];
+                end
+                app.applyPlotAxisConfig(fIdx, t, p, axisCfg);
+
+                % Update PlotConfigState with new height + YColumn (rebuild plots if YColumn changed).
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) >= t && numel(cfg.Flights(fIdx).PlotTabs(t).Plots) >= p
+                    oldY = char(cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn);
+                    newY = char(app.EDPlotYColDD.Value);
+                    cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
+                    if ~isempty(newY) && ~strcmp(newY, '(none)') && ~strcmp(newY, '(선택)') && ~strcmp(newY, oldY)
+                        cfg.Flights(fIdx).PlotTabs(t).Plots(p).YColumn = newY;
+                        app.PlotConfigState = cfg;
+                        app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
+                    else
+                        app.PlotConfigState = cfg;
+                    end
+                end
+                app.markProjectDirtyAndScheduleRefresh('plot-props');
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'plot-apply'); end
+        end
+
+        function editDialogDuplicatePlot(app)
+            % [F-01] Duplicate the selected plot inside the same tab.
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~isfield(nd, 'kind') || ~strcmp(nd.kind, 'plot'), return; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) < nd.tab, return; end
+                plots = cfg.Flights(fIdx).PlotTabs(nd.tab).Plots;
+                if numel(plots) < nd.plot, return; end
+                dup = plots(nd.plot);
+                dup.Order = numel(plots) + 1;
+                plots(end+1) = dup;
+                cfg.Flights(fIdx).PlotTabs(nd.tab).Plots = plots;
+                app.PlotConfigState = cfg;
+                app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
+                app.markProjectDirtyAndScheduleRefresh('plot-duplicate');
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'plot-duplicate'); end
+        end
+
+        function editDialogDeleteSelectedPlot(app)
+            % [F-01] Delete the selected plot inside its tab.
+            try
+                fIdx = 1; if strcmp(app.EDPlotFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                sel = app.EDPlotTree.SelectedNodes;
+                if isempty(sel), return; end
+                nd = sel(1).NodeData;
+                if ~isfield(nd, 'kind') || ~strcmp(nd.kind, 'plot'), return; end
+                cfg = app.ensurePlotConfigShape(app.PlotConfigState);
+                if numel(cfg.Flights(fIdx).PlotTabs) < nd.tab, return; end
+                plots = cfg.Flights(fIdx).PlotTabs(nd.tab).Plots;
+                if numel(plots) < nd.plot, return; end
+                plots(nd.plot) = [];
+                for k = 1:numel(plots), plots(k).Order = k; end
+                cfg.Flights(fIdx).PlotTabs(nd.tab).Plots = plots;
+                app.PlotConfigState = cfg;
+                app.rebuildPlotsFromConfig(fIdx, app.PlotConfigState);
+                app.markProjectDirtyAndScheduleRefresh('plot-delete');
+                app.refreshEditDialog();
+            catch ME, app.logCaught(ME, 'plot-delete'); end
         end
 
         function editDialogDeleteSelectedTab(app)
@@ -7754,6 +7951,11 @@ end
 % - 파일 경로 변경 시에만 VR 재생성
 % - maxSlots: 호출처에서 전달 (기본 4) - 채널별 VR 독립 보유
 % =========================================================================
+function out = ternary(cond, ifTrue, ifFalse)
+    % Simple ternary helper for UI Enable / mode string toggles.
+    if cond, out = ifTrue; else, out = ifFalse; end
+end
+
 function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
     % [PATCH] 다중 슬롯 LRU 캐시 (채널별 VR 독립 보유, 파일락/메모리누수 방지)
     persistent cache   % struct array: .path, .vr, .lastUse
