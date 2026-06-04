@@ -297,7 +297,8 @@
                             cancel(app.AsyncFutures{fIdx});
                         end
                     catch ME
-                        app.logCaught(ME, 'auto-load-refresh');
+                        % [Medium 2] 정확한 subsystem 태그 — cleanup 경로
+                        app.logCaught(ME, 'delete:future-cancel');
                     end
                 end
                 % 캐시 비우기 (메모리 즉시 해제)
@@ -741,6 +742,9 @@
             d = uiprogressdlg(app.UIFigure, 'Title', '데이터 로딩 중', ...
                 'Message', sprintf('비행경로 %d 데이터를 파싱하고 있습니다...', fIdx), ...
                 'Indeterminate', 'on');
+            % [Major 6] uiprogressdlg cleanup 을 autoLoadProjectFromFile 과 동일한 패턴으로
+            % onCleanup + safeClose 로 일관화 → 어떤 분기에서 return/throw 해도 dialog 잔류 없음.
+            cleanupDlg = onCleanup(@() app.safeClose(d)); %#ok<NASGU>
             try
                 fullpath = fullfile(pathname, filename);
                 app.parseFlightData(fIdx, fullpath);
@@ -748,7 +752,6 @@
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 if ~issorted(app.Models(fIdx).rawData.(timeCol), 'strictascend')
                     errordlg('시간 데이터가 순차적으로 증가하지 않거나 중복되었습니다.', '데이터 오류');
-                    close(d);
                     return;
                 end
 
@@ -793,13 +796,8 @@
                 end
 
                 app.UI(fIdx).fileNameLabel.Text = filename;
-                close(d);
+                % [Major 6] dialog cleanup 은 onCleanup 가 담당 — 명시 close 제거
             catch e
-                try
-                    if ~isempty(d) && isvalid(d), close(d); end
-                catch ME
-                    app.logCaught(ME, 'silent');
-                end
                 % [V3.20 (3)] 상세 에러 로그
                 if app.DebugMode
                     fprintf('[Flight] parse failed: %s\n  %s\n  stack: %s\n', ...
@@ -1263,7 +1261,11 @@
 
         % [V3.22 #3-6] TotalFrames 산정 + 관련 UI 위젯/스피너/슬라이더 동기화
         function applyVideoLoadedUI(app, fIdx, vr)
+            % [Major 2] core state (TotalFrames / VideoFps / CurrentFrame / cache size)
+            % MUST succeed before any UI sub-step runs. Otherwise UI would show values
+            % from stale VideoSyncState (e.g. wrong slider range or label).
             actualFps = 15;
+            coreOk = false;
             try
                 totalFrames = app.computeTotalFrames(fIdx, vr);
                 totalFrames = max(1, totalFrames);
@@ -1292,8 +1294,21 @@
                 app.VideoSyncState(fIdx).VideoFps = actualFps;
                 app.VideoSyncState(fIdx).CurrentFrame = 1;
                 app.adjustCacheSize(fIdx);
+                coreOk = true;
             catch ME
                 app.logCaught(ME, 'applyVideoLoadedUI:core');
+            end
+
+            if ~coreOk
+                % [Major 2] core failed → skip UI updates that depend on TotalFrames/VideoFps.
+                % Surface the failure visibly so user knows video is not usable.
+                try
+                    uialert(app.UIFigure, ...
+                        sprintf('Flight %d 영상 메타데이터 로드 실패. 슬라이더/라벨 갱신을 건너뜁니다.', fIdx), ...
+                        'Video') %#ok<NOSEM>
+                catch
+                end
+                return;
             end
 
             try
@@ -2964,13 +2979,16 @@
             for fIdx = 1:2
                 if ~isempty(app.Models(fIdx).rawData)
                     idx = app.Models(fIdx).currentIndex;
+                    % [Major 4] IsUpdating 복원을 onCleanup 로 고정 (예외 경로에서도 복원 보장)
+                    prevUpdating = app.IsUpdating(fIdx);
                     app.IsUpdating(fIdx) = true;
+                    cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating)); %#ok<NASGU>
                     try
                         app.updateDashboard(fIdx, idx);
                     catch e
                         warning('stopPlotMarkerDrag 전체 동기화 오류: %s', e.message);
                     end
-                    app.IsUpdating(fIdx) = false;
+                    clear cleanupUpdating  % 명시적 cleanup (다음 iteration 의 prevUpdating 캡처 안전화)
                     % [V3.18 (4)] 드래그 종료 후 인접 frame 워밍업 (idle CPU 활용)
                     app.prefetchAdjacentFrames(fIdx);
                 end
@@ -3153,11 +3171,11 @@
                 idx2 = app.findClosestIndexByTime(app.Models(2).rawData.(timeCol2), targetT2);
                 if ~isequal(app.Models(2).currentIndex, idx2)
                     % [V3.17 (4)(11)] InCascade 인스턴스 속성으로 cascade 가드
+                    % [Major 3] onCleanup 만으로 복원 — 수동 복원 제거 (중복 호출 방지/의도 명확화)
                     prevCascade = app.InCascade;
                     app.InCascade = true;
-                    cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade));
+                    cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade)); %#ok<NASGU>
                     app.updateMarkersOnly(2, idx2);
-                    app.InCascade = prevCascade;
                 end
             end
 
@@ -9293,6 +9311,17 @@ end
 function out = ternary(cond, ifTrue, ifFalse)
     % Simple ternary helper for UI Enable / mode string toggles.
     if cond, out = ifTrue; else, out = ifFalse; end
+end
+
+function i_restoreIsUpdating(app, fIdx, prevValue)
+    % [Major 4] onCleanup target — restore IsUpdating(fIdx) even if the body throws.
+    try
+        if isempty(app) || ~isvalid(app), return; end
+        if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
+            app.IsUpdating(fIdx) = logical(prevValue);
+        end
+    catch
+    end
 end
 
 function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
