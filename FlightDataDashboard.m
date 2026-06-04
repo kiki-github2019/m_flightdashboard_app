@@ -3693,9 +3693,9 @@
                 if isempty(plots(p).YLimMode)
                     plots(p).YLimMode = 'auto';
                 end
-                if isempty(plots(p).Order)
-                    plots(p).Order = p;
-                end
+                % [Review Medium #4] Order 는 항상 array index 로 재기록 — duplicate/
+                % delete 후 stale Order 가 sort/persist 시 충돌 일으키지 않도록.
+                plots(p).Order = p;
             end
         end
 
@@ -4000,12 +4000,15 @@
                 if isempty(ax) || ~isvalid(ax), return; end
                 manualX = ~isfield(axisCfg, 'XLimMode') || strcmpi(char(axisCfg.XLimMode), 'manual');
                 xChanged = manualX && isfield(axisCfg, 'XLim') && ~isequal(ax.XLim, axisCfg.XLim);
+                yLimSpecified = isfield(axisCfg, 'YLim') && numel(axisCfg.YLim) == 2 ...
+                                && all(isfinite(axisCfg.YLim)) && axisCfg.YLim(2) > axisCfg.YLim(1);
+                yChanged = yLimSpecified && ~isequal(ax.YLim, axisCfg.YLim);
                 if xChanged && app.getLinkXWithinTab(fIdx, tabIdx)
                     app.disableLinkXOnIndividualEdit(fIdx, tabIdx);
                 end
                 oldFlag = app.IsProgrammaticXLim(fIdx);
                 app.IsProgrammaticXLim(fIdx) = true;
-                cleanupFlag = onCleanup(@() app.restoreProgrammaticXLim(fIdx, oldFlag));
+                cleanupFlag = onCleanup(@() app.restoreProgrammaticXLim(fIdx, oldFlag)); %#ok<NASGU>
                 if isfield(axisCfg, 'XLimMode') && strcmpi(char(axisCfg.XLimMode), 'auto')
                     ax.XLimMode = 'auto';
                 elseif isfield(axisCfg, 'XLim') && numel(axisCfg.XLim) == 2 ...
@@ -4014,9 +4017,14 @@
                     ax.XLimMode = 'manual';
                 end
                 if isfield(axisCfg, 'YLimMode'), ax.YLimMode = axisCfg.YLimMode; end
-                if isfield(axisCfg, 'YLim') && numel(axisCfg.YLim) == 2 ...
-                        && all(isfinite(axisCfg.YLim)) && axisCfg.YLim(2) > axisCfg.YLim(1)
+                if yLimSpecified
                     ax.YLim = axisCfg.YLim;
+                end
+                % [Review High #1] Always mark project dirty + schedule refresh when axes
+                % actually changed via Plot Manager so debounce + autosave + off-summary
+                % mirror see the latest XLim/YLim.
+                if xChanged || yChanged
+                    app.markProjectDirtyAndScheduleRefresh('plot-axis-edit');
                 end
                 % [R-11] onCleanup fires at function exit; do not clear manually.
             catch ME
@@ -5272,6 +5280,16 @@
         end
 
         function closeEditDialog(app)
+            % [Review High #2] Before tearing down, force-apply any pending debounce
+            % AND capture live PlotConfig so unsynced edits are not lost.
+            try
+                if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
+                        && strcmpi(app.EditApplyTimer.Running, 'on')
+                    try, stop(app.EditApplyTimer); catch, end
+                    try, app.applyPendingDialogChanges(); catch ME, app.logCaught(ME, 'editClose:pendingApply'); end
+                end
+                try, app.capturePlotConfigFromUi(); catch ME, app.logCaught(ME, 'editClose:plotCapture'); end
+            catch ME, app.logCaught(ME, 'silent'); end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     % Capture position into project ui state before closing.
@@ -5290,9 +5308,10 @@
 
         function refreshEditDialog(app)
             % Refresh status, paths, sync values, option drafts, plot tree if dialog open.
+            % [Review Medium #5] 모든 ED* 핸들 접근 전 ~isempty + isvalid 가드.
             try
                 if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
-                if isvalid(app.EditDialogDirtyLbl)
+                if ~isempty(app.EditDialogDirtyLbl) && isvalid(app.EditDialogDirtyLbl)
                     if app.ProjectDirty
                         app.EditDialogDirtyLbl.Text = '변경됨 ●';
                         app.EditDialogDirtyLbl.FontColor = [0.8 0.2 0.2];
@@ -5301,17 +5320,19 @@
                         app.EditDialogDirtyLbl.FontColor = [0.4 0.4 0.4];
                     end
                 end
-                if isvalid(app.EditDialogTimeLbl) && ~isnat(app.LastEditApplyTime)
+                if ~isempty(app.EditDialogTimeLbl) && isvalid(app.EditDialogTimeLbl) ...
+                        && ~isnat(app.LastEditApplyTime)
                     app.EditDialogTimeLbl.Text = sprintf('마지막 적용 %s', ...
                         char(datetime(app.LastEditApplyTime, 'Format', 'HH:mm:ss')));
                 end
                 % Refresh per-tab content if the handles still exist.
-                app.refreshProjectTab();
-                app.refreshFilesTab();
-                app.refreshSyncTab();
-                app.refreshOptionsTab();
-                app.refreshPlotTab();
-                app.refreshExportTab();
+                % [Medium #5] 각 sub-refresh 호출도 독립 try/catch 로 cascading failure 차단.
+                try, app.refreshProjectTab(); catch ME, app.logCaught(ME, 'refreshProjectTab'); end
+                try, app.refreshFilesTab();   catch ME, app.logCaught(ME, 'refreshFilesTab'); end
+                try, app.refreshSyncTab();    catch ME, app.logCaught(ME, 'refreshSyncTab'); end
+                try, app.refreshOptionsTab(); catch ME, app.logCaught(ME, 'refreshOptionsTab'); end
+                try, app.refreshPlotTab();    catch ME, app.logCaught(ME, 'refreshPlotTab'); end
+                try, app.refreshExportTab();  catch ME, app.logCaught(ME, 'refreshExportTab'); end
             catch ME
                 app.logCaught(ME, 'silent');
             end
@@ -8965,6 +8986,13 @@
             % autoLoadProjectFromFile 은 이후 loadCompletedCleanly 플래그로 다시 결정함.
             % 직접 호출(예: 외부 import) 시에도 caller 가 후속 결정을 내려야 한다.
             app.ProjectDirty = false;
+            % [Review High #3] Edit Dialog 가 열려 있으면 모든 탭의 표시 값을 새 project
+            % 상태로 즉시 재동기화 — Sync / Plot / Files / Options 라벨이 stale 로 남지 않음.
+            try
+                if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                    app.refreshEditDialog();
+                end
+            catch ME, app.logCaught(ME, 'applyProjectState:refresh'); end
         end
 
         function st = migrateProjectState(app, st)
