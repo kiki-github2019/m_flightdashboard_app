@@ -3105,7 +3105,6 @@
                     app.InCascade = true;
                     cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade));
                     app.updateMarkersOnly(2, idx2);
-                    clear cleanupCascade;
                     app.InCascade = prevCascade;
                 end
             end
@@ -3198,7 +3197,6 @@
                             app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
                             cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
-                            clear cleanupXLim;
                             app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
                         elseif currTime < xMin
                             newMax = xMin;
@@ -3211,7 +3209,6 @@
                             app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
                             cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
-                            clear cleanupXLim;
                             app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
                         end
                     end
@@ -3881,7 +3878,7 @@
                         && all(isfinite(axisCfg.YLim)) && axisCfg.YLim(2) > axisCfg.YLim(1)
                     ax.YLim = axisCfg.YLim;
                 end
-                clear cleanupFlag
+                % [R-11] onCleanup fires at function exit; do not clear manually.
             catch ME
                 app.logCaught(ME, 'silent')
             end
@@ -4253,14 +4250,22 @@
                 if ~isempty(b), projDstName = [b '.fdproj']; end
             end
             projDst = fullfile(target, projDstName);
+            fid = -1;
             try
                 txt = jsonencode(stRewritten, 'PrettyPrint', true);
                 fid = fopen(projDst, 'w');
                 if fid < 0, error('FlightDataDashboard:ExportWrite', 'project 파일 쓰기 실패'); end
-                cleanupFid = onCleanup(@() fclose(fid));
                 fwrite(fid, txt, 'char');
-                clear cleanupFid;
+                fclose(fid);
+                fid = -1;
             catch ME
+                if fid > 0
+                    try
+                        fclose(fid);
+                    catch ME_close
+                        app.logCaught(ME_close, 'export-project-close')
+                    end
+                end
                 failures{end+1} = sprintf('project write: %s', ME.message);
             end
 
