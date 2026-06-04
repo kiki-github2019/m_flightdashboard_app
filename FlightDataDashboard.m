@@ -1116,6 +1116,16 @@
             % [P1] snapshot sync state before any reset/invalidate so we can restore it.
             syncSnapshot = app.VideoSyncState(fIdx);
 
+            % [High #2] same-path detection — preserveSync reopen 시 AsyncGen 미증가.
+            samePath = false;
+            try
+                if numel(app.VideoFilePath) >= fIdx
+                    prevAbs = app.normalizeAbsPath(app.VideoFilePath{fIdx});
+                    samePath = ~isempty(prevAbs) && strcmpi(prevAbs, app.normalizeAbsPath(fullPath));
+                end
+            catch
+            end
+
             if opts.preserveSync
                 % Do NOT prompt and do NOT reset; we will restore the snapshot post-load.
             elseif opts.promptOnSync
@@ -1125,7 +1135,19 @@
                 app.resetVideoSync(fIdx);
             end
 
-            app.invalidateFrameCache(fIdx);
+            % [High #2] preserveSync + 동일 경로 재오픈인 경우 AsyncGen 유지.
+            app.invalidateFrameCache(fIdx, ~(opts.preserveSync && samePath));
+
+            % [High #4] AVI 경로가 실제로 바뀐 경우 워커 persistent VR 캐시 해제.
+            % 같은 path 재오픈은 슬롯 재사용이 효율적이므로 건너뜀.
+            % 비정상 종료 시 잔존 file lock 도 다음 로드 직전에 비움.
+            if ~samePath
+                try
+                    if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
+                        parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
+                    end
+                catch ME, app.logCaught(ME, 'silent'); end
+            end
             startTime = app.computeStartTimeFromFlightData(fIdx);
             app.cleanupVideoResources(fIdx);
 
@@ -1187,7 +1209,10 @@
         end
 
         % [V3.22 #3-2] 프레임 캐시 비우기 (LastUse/Hits 포함)
-        function invalidateFrameCache(app, fIdx)
+        function invalidateFrameCache(app, fIdx, bumpAsyncGen)
+            % [High #2] bumpAsyncGen 기본 true. preserveSync 재오픈처럼 동일 AVI 를
+            % 다시 여는 흐름에서는 호출자가 false 를 전달해 stale-rejection 과잉 발동을 피한다.
+            if nargin < 3, bumpAsyncGen = true; end
             app.FrameCache{fIdx}        = {};
             app.FrameCacheKeys{fIdx}    = [];
             app.FrameCacheHits{fIdx}    = [];
@@ -1199,9 +1224,11 @@
             app.LastRequestedFrame(fIdx) = NaN;
             app.PendingVideoFrame(fIdx)  = NaN;
             app.PendingVideoMode{fIdx}   = '';
-            % invalidate any in-flight async result
-            app.AsyncGen(fIdx)           = app.AsyncGen(fIdx) + 1;
-            app.AsyncTargetFrame(fIdx)   = NaN;
+            % invalidate any in-flight async result (optional)
+            if bumpAsyncGen
+                app.AsyncGen(fIdx)           = app.AsyncGen(fIdx) + 1;
+                app.AsyncTargetFrame(fIdx)   = NaN;
+            end
         end
 
         % [V3.22 #3-3] 비행데이터 첫 시간 추출 (시작 오프셋용)
@@ -1301,6 +1328,13 @@
 
             if ~coreOk
                 % [Major 2] core failed → skip UI updates that depend on TotalFrames/VideoFps.
+                % [Medium #5] Ensure TotalFrames is at least 1 so downstream goToFrame /
+                % slider math cannot produce NaN / 0-division.
+                try
+                    if app.VideoSyncState(fIdx).TotalFrames < 1
+                        app.VideoSyncState(fIdx).TotalFrames = 1;
+                    end
+                catch ME, app.logCaught(ME, 'applyVideoLoadedUI:totalFrames-fallback'); end
                 % Surface the failure visibly so user knows video is not usable.
                 try
                     uialert(app.UIFigure, ...
@@ -1502,13 +1536,16 @@
         end
 
         % [V3.14 항목 5] VideoReader 유효성 검사 헬퍼 (일관성 있는 가드)
+        % [Medium #6] TotalFrames > 0 도 함께 확인 — applyVideoLoadedUI core 실패 시
+        % vr 은 valid 지만 TotalFrames=0 인 half-loaded 상태가 가능하므로 false 반환.
         function tf = isVideoReady(app, fIdx)
             tf = false;
             try
                 if fIdx < 1 || fIdx > 2, return; end
                 vr = app.VideoState(fIdx).videoReader;
                 h = app.VideoState(fIdx).vidImageHandle;
-                tf = ~isempty(vr) && isvalid(vr) && ~isempty(h) && isvalid(h);
+                tf = ~isempty(vr) && isvalid(vr) && ~isempty(h) && isvalid(h) ...
+                     && app.VideoSyncState(fIdx).TotalFrames > 0;
             catch ME_silent
                 app.logCaught(ME_silent, 'isVideoReady');
                 tf = false;
@@ -1793,6 +1830,13 @@
             % [V3.22 #1] silent/non-silent 모두 ring buffer에 보관
             % - DebugMode일 때만 콘솔 출력 (silent 태그는 콘솔 출력 생략)
             % - ring buffer는 항상 유지 → app.dumpErrorLog()로 사후 조사
+            % [Medium] delete 진행 중에는 콘솔 출력 강제 silent — handle invalid 잡음 차단.
+            try
+                if ~isempty(app) && isvalid(app) && app.IsDeleting
+                    tag = 'silent';
+                end
+            catch
+            end
             try
                 % stack은 길이가 다른 struct array일 수 있어 cell로 wrap → 차원 불일치 회피
                 stackCell = {[]};
@@ -2034,6 +2078,17 @@
             % Fires on Finished / Failed / Cancelled regardless of whether
             % afterEach delivered an image. Logs worker errors and guarantees
             % AsyncTargetFrame / AsyncFutures cannot leak to the next request.
+            % [High #1] Detach AsyncFutures{fIdx} immediately when this is still
+            % the live future for that gen — prevents a late-arriving afterAll
+            % from racing a newer startAsyncDecode that already overwrote the slot.
+            try
+                if fIdx >= 1 && fIdx <= numel(app.AsyncFutures) ...
+                        && ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx}) ...
+                        && app.AsyncFutures{fIdx} == fut ...
+                        && gen == app.AsyncGen(fIdx)
+                    app.AsyncFutures{fIdx} = [];
+                end
+            catch ME, app.logCaught(ME, 'async-finally:detach'); end
             try
                 if isempty(fut) || ~isvalid(fut), return; end
                 state = '';
@@ -7253,6 +7308,7 @@
         function applyResponsiveLayout(app)
             try
                 if isempty(app.UI), return; end
+                anyBoardOff = ~isempty(find(app.BoardOffState, 1));
                 for fIdx = 1:min(2, numel(app.UI))
                     if ~isfield(app.UI(fIdx), 'dataGrid') || ...
                        isempty(app.UI(fIdx).dataGrid) || ~isvalid(app.UI(fIdx).dataGrid)
@@ -7260,10 +7316,23 @@
                     end
 
                     app.reflowBoardColumns(fIdx);
-                    app.refreshBoardOffSummaryPanel(fIdx);
+                    % [High #3] Off-mode summary plots inherit width from source axes.
+                    % When the window resizes, force rebuild so off-summary 1x columns
+                    % re-collapse against the new container width instead of leaving blanks.
+                    if anyBoardOff
+                        app.refreshBoardOffSummaryPanel(fIdx, true);
+                    else
+                        app.refreshBoardOffSummaryPanel(fIdx);
+                    end
                 end
                 app.updateWindowControlLabels();
-                drawnow limitrate;
+                % [High #3] When any board is off, commit the layout pass eagerly so the
+                % source widths re-settle before next user interaction (avoid blank gaps).
+                if anyBoardOff
+                    drawnow;
+                else
+                    drawnow limitrate;
+                end
             catch ME_silent
                 app.logCaught(ME_silent, 'responsiveLayout');
             end
