@@ -8920,10 +8920,14 @@
 
         function st = loadProjectFile(app, filePath)
             % Read and validate a .fdproj file. Caller decides whether to applyProjectState.
+            % [D-02] If <filePath>.autosave.json exists and is newer than filePath,
+            % prompt user: restore autosave / use original / cancel.
             st = [];
             if nargin < 2 || isempty(filePath) || ~isfile(filePath), return; end
+            [resolvedPath, cancelled] = app.resolveAutosaveChoice(filePath);
+            if cancelled, return; end
             try
-                txt = fileread(filePath);
+                txt = fileread(resolvedPath);
                 st  = jsondecode(txt);
                 st  = app.migrateProjectState(st);
                 if isfield(st, 'SavedAt') && ~isempty(st.SavedAt)
@@ -8931,7 +8935,13 @@
                 else
                     app.ProjectLastSaveText = '';
                 end
+                % Bind ProjectFilePath to the canonical project (not the autosave) so
+                % subsequent saveProjectFile overwrites the user-facing file.
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
+                if ~strcmp(resolvedPath, filePath)
+                    % [D-02] mark dirty so the recovered state is persisted on next save.
+                    app.ProjectDirty = true;
+                end
             catch ME
                 app.logCaught(ME, 'project-load');
                 try
@@ -8939,6 +8949,47 @@
                 catch
                 end
                 st = [];
+            end
+        end
+
+        function [chosenPath, cancelled] = resolveAutosaveChoice(app, filePath)
+            % [D-02] Detect <filePath>.autosave.json and ask the user which to load.
+            chosenPath = filePath;
+            cancelled  = false;
+            try
+                autoPath = [filePath '.autosave.json'];
+                if ~isfile(autoPath), return; end
+                autoInfo = dir(autoPath);
+                mainInfo = dir(filePath);
+                if isempty(autoInfo) || isempty(mainInfo), return; end
+                if autoInfo(1).datenum <= mainInfo(1).datenum
+                    % autosave older than current project; safe to ignore
+                    try, delete(autoPath); catch, end
+                    return;
+                end
+                msg = sprintf(['이전 세션이 정상 종료되지 않아 자동 백업이 남아 있습니다.\n\n', ...
+                               '자동 백업: %s\n원본 project: %s\n\n', ...
+                               '자동 백업을 사용하면 마지막 저장 이후의 편집을 복구할 수 있습니다.'], ...
+                              char(autoInfo(1).date), char(mainInfo(1).date));
+                sel = '';
+                try
+                    sel = uiconfirm(app.UIFigure, msg, 'Project 복구', ...
+                        'Options', {'자동 백업 복구', '원본 사용', '취소'}, ...
+                        'DefaultOption', 1, 'CancelOption', 3);
+                catch
+                    sel = '원본 사용';
+                end
+                switch sel
+                    case '자동 백업 복구'
+                        chosenPath = autoPath;
+                    case '취소'
+                        cancelled = true;
+                    otherwise
+                        % keep chosenPath = filePath; remove stale autosave
+                        try, delete(autoPath); catch, end
+                end
+            catch ME
+                app.logCaught(ME, 'autosave-detect');
             end
         end
 
