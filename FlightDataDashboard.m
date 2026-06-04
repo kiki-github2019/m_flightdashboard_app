@@ -295,7 +295,7 @@
                             cancel(app.AsyncFutures{fIdx});
                         end
                     catch ME
-                        app.logCaught(ME, 'silent')
+                        app.logCaught(ME, 'auto-load-refresh')
                     end
                 end
                 % 캐시 비우기 (메모리 즉시 해제)
@@ -1255,13 +1255,13 @@
 
         % [V3.22 #3-6] TotalFrames 산정 + 관련 UI 위젯/스피너/슬라이더 동기화
         function applyVideoLoadedUI(app, fIdx, vr)
+            totalFrames = 1;
+            actualFps = 15;
             try
                 totalFrames = app.computeTotalFrames(fIdx, vr);
-                app.VideoSyncState(fIdx).TotalFrames = max(1, totalFrames);
-
-                % [수정 1] 비행 데이터가 먼저 로드되어 있다면 전체시간 기준으로 FPS 강제 계산
+                totalFrames = max(1, totalFrames);
+                app.VideoSyncState(fIdx).TotalFrames = totalFrames;
                 hasData = ~isempty(app.Models(fIdx).rawData) && isfield(app.Models(fIdx).mappedCols, 'Time');
-
                 if hasData
                     timeCol = app.Models(fIdx).mappedCols.Time;
                     times = app.Models(fIdx).rawData.(timeCol);
@@ -1278,32 +1278,55 @@
                         if isprop(vr, 'FrameRate') && ~isempty(vr.FrameRate) && vr.FrameRate > 0
                             actualFps = vr.FrameRate;
                         end
-                    catch
+                    catch ME
+                        app.logCaught(ME, 'applyVideoLoadedUI:fps-prop')
                     end
                 end
-
-                % 상태 변수에는 소수점까지 저장하고, UI에는 반올림하여 표시
                 app.VideoSyncState(fIdx).VideoFps = actualFps;
-                if isfield(app.UI(fIdx), 'vidVideoFpsInput') && any(isvalid(app.UI(fIdx).vidVideoFpsInput))
-                    app.UI(fIdx).vidVideoFpsInput.Value = round(actualFps);
-                end
-
                 app.VideoSyncState(fIdx).CurrentFrame = 1;
                 app.adjustCacheSize(fIdx);
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:core');
+            end
 
-                if isfield(app.UI(fIdx), 'vidSyncFrameInput') && any(isvalid(app.UI(fIdx).vidSyncFrameInput))
+            try
+                if isfield(app.UI(fIdx), 'vidVideoFpsInput') && ~isempty(app.UI(fIdx).vidVideoFpsInput) ...
+                        && isvalid(app.UI(fIdx).vidVideoFpsInput)
+                    app.UI(fIdx).vidVideoFpsInput.Value = round(actualFps);
+                end
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:fps-ui');
+            end
+
+            try
+                if isfield(app.UI(fIdx), 'vidSyncFrameInput') && ~isempty(app.UI(fIdx).vidSyncFrameInput) ...
+                        && isvalid(app.UI(fIdx).vidSyncFrameInput)
                     maxF = max(1, app.VideoSyncState(fIdx).TotalFrames);
                     app.UI(fIdx).vidSyncFrameInput.Limits = [1 maxF];
                     if app.UI(fIdx).vidSyncFrameInput.Value > maxF
                         app.UI(fIdx).vidSyncFrameInput.Value = 1;
                     end
                 end
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:frame-input');
+            end
 
+            try
                 app.updateVdubSliderRange(fIdx);
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:slider');
+            end
+
+            try
                 app.updateVdubFrameLabel(fIdx, 1);
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:label');
+            end
+
+            try
                 app.adjustVideoPanelWidth(fIdx);
-            catch ME_silent
-                app.logCaught(ME_silent, 'applyVideoLoadedUI');
+            catch ME
+                app.logCaught(ME, 'applyVideoLoadedUI:panel-size');
             end
         end
 
@@ -1473,7 +1496,8 @@
         % [V3.14 VirtualDub UI] Frame 슬라이더 범위 갱신 (영상 로드 시)
         function updateVdubSliderRange(app, fIdx)
             try
-                if isfield(app.UI(fIdx), 'vidVdubSlider') && isvalid(app.UI(fIdx).vidVdubSlider)
+                if isfield(app.UI(fIdx), 'vidVdubSlider') && ~isempty(app.UI(fIdx).vidVdubSlider) ...
+                        && isvalid(app.UI(fIdx).vidVdubSlider)
                     maxF = max(2, app.VideoSyncState(fIdx).TotalFrames);
                     sld = app.UI(fIdx).vidVdubSlider;
                     sld.Limits = [1, maxF];
@@ -1492,7 +1516,8 @@
         % [V3.15 항목 5-1] milliseconds 정확도 개선 (floor + 0.5) + 캐리오버
         function updateVdubFrameLabel(app, fIdx, frameNo)
             try
-                if ~isfield(app.UI(fIdx), 'vidVdubLabel') || ~isvalid(app.UI(fIdx).vidVdubLabel)
+                if ~isfield(app.UI(fIdx), 'vidVdubLabel') || isempty(app.UI(fIdx).vidVdubLabel) ...
+                        || ~isvalid(app.UI(fIdx).vidVdubLabel)
                     return;
                 end
                 total = app.VideoSyncState(fIdx).TotalFrames;
@@ -1684,7 +1709,8 @@
             % [Stabilization P1] Drain the latest queued user request, if any.
             try
                 app.drainPendingVideoRequest(fIdx)
-            catch
+            catch ME
+                app.logCaught(ME, 'video-pending-drain')
             end
         end
 
@@ -1813,7 +1839,13 @@
         % - 둘 다 실패하면 UseAsyncDecode=false로 자동 폴백 (재시도 안 함)
         % [PATCH Async 1.1] thread pool 사용 금지 - persistent VR이 워커 간 공유되어
         %                   race condition 발생. process pool은 워커별 독립 메모리.
-        function startAsyncDecode(app, fIdx, frameNo)
+        % [Static fix] Async path intentionally does NOT set IsDecoding.
+        % IsDecoding/PendingVideoFrame are sync-decode coalescing state.
+        % AsyncFutures/AsyncTargetFrame/AsyncGen are async in-flight state:
+        % every new async request cancels/invalidates the previous future, and
+        % completion displays only when generation + target + CurrentFrame match.
+        function ok = startAsyncDecode(app, fIdx, frameNo)
+            ok = false;
             try
                 % parallel pool 준비 (없으면 지연 생성)
                 if isempty(app.AsyncPool) || ~isvalid(app.AsyncPool)
@@ -1886,7 +1918,12 @@
                 % [V3.21 #1-A] afterEach에 myGen 캡처 → 완료 시 generation 비교
                 afterEach(fut, @(img) app.onAsyncDecodeComplete(fIdx, frameNo, myGen, img), 1, ...
                     'PassFuture', false);
+                ok = true;
             catch e
+                app.AsyncTargetFrame(fIdx) = NaN;
+                app.AsyncFutures{fIdx} = [];
+                app.UseAsyncDecode = false;
+                app.logCaught(e, 'async-start');
                 if app.DebugMode
                     fprintf('[Async] startAsyncDecode error: %s\n', e.message);
                 end
@@ -1900,11 +1937,12 @@
             % [Stabilization P0] Strong stale-frame rejection.
             % Display ONLY if every condition still holds at completion time.
             try
-                if isempty(img), return; end
+                if isempty(img), app.clearAsyncDecodeState(fIdx, gen); return; end
 
                 % 1) app + figure still valid
                 if isempty(app) || ~isvalid(app) ...
                         || isempty(app.UIFigure) || ~isvalid(app.UIFigure)
+                    app.clearAsyncDecodeState(fIdx, gen);
                     return;
                 end
                 % 2) generation must match the live generation
@@ -1934,14 +1972,26 @@
                 if ~app.isVideoReady(fIdx), return; end
 
                 app.displayFrame(fIdx, frameNo, img, false);
-                app.AsyncTargetFrame(fIdx) = NaN;
+                app.clearAsyncDecodeState(fIdx, gen);
                 % [Stabilization P1] consume any newer request that arrived during async work
                 try
                     app.drainPendingVideoRequest(fIdx)
-                catch
+                catch ME
+                    app.logCaught(ME, 'async-drain')
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent')
+                app.logCaught(ME_silent, 'async-complete')
+            end
+        end
+
+        function clearAsyncDecodeState(app, fIdx, gen)
+            try
+                if nargin < 3 || gen == app.AsyncGen(fIdx)
+                    app.AsyncTargetFrame(fIdx) = NaN;
+                    app.AsyncFutures{fIdx} = [];
+                end
+            catch ME
+                app.logCaught(ME, 'async-clear')
             end
         end
 
@@ -2065,7 +2115,8 @@
                 % [수정] 사용하지 않는 옛날 마커 갱신 코드는 완전히 삭제하여 에러 원천 차단
 
                 % 1. 슬라이더 위치 갱신
-                if isfield(app.UI(fIdx), 'vidVdubSlider') && any(isvalid(app.UI(fIdx).vidVdubSlider))
+                if isfield(app.UI(fIdx), 'vidVdubSlider') && ~isempty(app.UI(fIdx).vidVdubSlider) ...
+                        && isvalid(app.UI(fIdx).vidVdubSlider)
                     if abs(app.UI(fIdx).vidVdubSlider.Value - frameNo) > 0.5
                         app.UI(fIdx).vidVdubSlider.Value = frameNo;
                     end
@@ -2075,7 +2126,7 @@
                 app.updateVdubFrameLabel(fIdx, frameNo);
 
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'video-marker-label');
             end
         end
 
@@ -2420,8 +2471,10 @@
 
             % 전략 선택: async vs sync
             if app.UseAsyncDecode && strcmp(source, 'drag')
-                app.startAsyncDecode(fIdx, clampedFrame);
-                return;
+                if app.startAsyncDecode(fIdx, clampedFrame)
+                    return;
+                end
+                % Async unavailable/failure: continue through sync path once.
             end
 
             % Layer 2: 동기 디코딩
@@ -3013,7 +3066,11 @@
             end
 
             % H 패널 책장 넘기기 + 마커 갱신 (개선안 A의 IsProgrammaticXLim 가드 작동)
-            app.updatePlotTimeLines(fIdx, idx, currTime);
+            try
+                app.updatePlotTimeLines(fIdx, idx, currTime);
+            catch ME
+                app.logCaught(ME, 'hpanel-update')
+            end
 
             % [V3.12 2.2.3] 비디오 동기 설정 시 Frame 마커 + 영상 프레임 갱신
             % (단, 비디오 측에서 시작된 드래그가 아닐 때만 - 무한 루프 방지)
@@ -3041,9 +3098,12 @@
                 idx2 = app.findClosestIndexByTime(app.Models(2).rawData.(timeCol2), targetT2);
                 if ~isequal(app.Models(2).currentIndex, idx2)
                     % [V3.17 (4)(11)] InCascade 인스턴스 속성으로 cascade 가드
+                    prevCascade = app.InCascade;
                     app.InCascade = true;
+                    cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade));
                     app.updateMarkersOnly(2, idx2);
-                    app.InCascade = false;
+                    clear cleanupCascade;
+                    app.InCascade = prevCascade;
                 end
             end
 
@@ -3051,6 +3111,14 @@
             % goToFrame은 자체 종료 시 drawnow 호출하므로 중복 방지
             if isOuter && ~any(app.InGoToFrame)
                 drawnow limitrate;
+            end
+        end
+
+        function restoreInCascade(app, prevValue)
+            try
+                app.InCascade = logical(prevValue);
+            catch ME
+                app.logCaught(ME, 'cascade-restore')
             end
         end
 
@@ -3089,7 +3157,11 @@
             currIdx = app.Models(fIdx).currentIndex;
             timeCol = app.Models(fIdx).mappedCols.Time;
             currTime = app.Models(fIdx).rawData.(timeCol)(currIdx);
-            app.updatePlotTimeLines(fIdx, currIdx, currTime);
+            try
+                app.updatePlotTimeLines(fIdx, currIdx, currTime);
+            catch ME
+                app.logCaught(ME, 'hpanel-tab-timeline')
+            end
             app.refreshBoardOffSummaryPanel(fIdx);
         end
 
@@ -3119,9 +3191,12 @@
                                 newMin = newMax;
                                 newMax = newMax + xWidth;
                             end
-                            app.IsProgrammaticXLim(fIdx) = true;   % ⭐ 리스너 가드 ON
+                            prevProgrammatic = app.IsProgrammaticXLim(fIdx);
+                            app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
+                            cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
-                            app.IsProgrammaticXLim(fIdx) = false;  % ⭐ 리스너 가드 OFF
+                            clear cleanupXLim;
+                            app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
                         elseif currTime < xMin
                             newMax = xMin;
                             newMin = xMin - xWidth;
@@ -3129,13 +3204,16 @@
                                 newMax = newMin;
                                 newMin = newMin - xWidth;
                             end
-                            app.IsProgrammaticXLim(fIdx) = true;   % ⭐ 리스너 가드 ON
+                            prevProgrammatic = app.IsProgrammaticXLim(fIdx);
+                            app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
+                            cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
-                            app.IsProgrammaticXLim(fIdx) = false;  % ⭐ 리스너 가드 OFF
+                            clear cleanupXLim;
+                            app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
                         end
                     end
-                catch
-                    app.IsProgrammaticXLim(fIdx) = false;  % 예외 시 플래그 복원
+                catch ME
+                    app.logCaught(ME, 'hpanel-xlim')
                 end
             end
 
@@ -3153,8 +3231,16 @@
                         set(mkArr{i}, 'XData', currTime, 'YData', yData(currIdx));
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent')
+                    app.logCaught(ME_silent, 'hpanel-marker')
                 end
+            end
+        end
+
+        function restoreProgrammaticXLim(app, fIdx, prevValue)
+            try
+                app.IsProgrammaticXLim(fIdx) = prevValue;
+            catch ME
+                app.logCaught(ME, 'hpanel-xlim-restore')
             end
         end
 
@@ -3730,7 +3816,11 @@
                     app.PlotConfigState = cfg;
                 end
 
-                app.updatePlotTimeLines(fIdx, currIdx, currTime);
+                try
+                    app.updatePlotTimeLines(fIdx, currIdx, currTime);
+                catch ME
+                    app.logCaught(ME, 'hpanel-plot-y-replace')
+                end
                 app.refreshBoardOffSummaryPanel(fIdx, true);
                 ok = true;
             catch ME
@@ -4462,6 +4552,7 @@
             try
                 d = uiprogressdlg(app.UIFigure, 'Title', 'Project 자동 로드', ...
                     'Message', 'project 파일 읽는 중', 'Cancelable', 'on');
+                cleanupDlg = onCleanup(@() app.safeClose(d));
                 advance = @(val, msg) app.setProgress(d, val, msg);
 
                 advance(0.02, 'project 파일 읽는 중');
@@ -4550,12 +4641,6 @@
                     uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project')
                 catch
                 end
-            end
-            try
-                if ~isempty(d) && isvalid(d)
-                    close(d);
-                end
-            catch
             end
         end
 
@@ -6168,20 +6253,8 @@
                     lines{end+1} = sprintf('%s, %s, %s, %d, %g', ...
                         dm.header, dm.unit, dm.format, dm.order, dm.scale); %#ok<AGROW>
                 end
-                tmp = [optPath '.tmp'];
-                fid = fopen(tmp, 'w');
-                if fid < 0, error('FlightDataDashboard:OptionWrite', '임시 파일 열기 실패: %s', tmp); end
-                cleanup = onCleanup(@() fclose(fid));
-                fprintf(fid, '%s\n', lines{:});
-                clear cleanup;
-                if isfile(optPath)
-                    try
-                        copyfile(optPath, [optPath '.bak'], 'f')
-                    catch
-                    end
-                end
-                movefile(tmp, optPath, 'f');
-                ok = true;
+                txt = sprintf('%s\n', lines{:});
+                ok = app.writeTextFileAtomic(optPath, txt, 'option-write');
             catch ME
                 app.logCaught(ME, 'option-write');
                 try
@@ -6545,14 +6618,23 @@
                     % [V3.14] Frame 마커 + xline + 슬라이더 + 라벨 일괄 동기화
                     app.syncFrameMarkersAndLabel(fIdx, targetFrame);
                     app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'sync');  % 정확한 동기화
-                catch
-                    app.updateVideoFrame(fIdx, currTime);  % 폴백
+                catch ME
+                    app.logCaught(ME, 'video-sync-dashboard')
+                    try
+                        app.updateVideoFrame(fIdx, currTime);  % 폴백
+                    catch ME_fallback
+                        app.logCaught(ME_fallback, 'video-sync-dashboard-fallback')
+                    end
                 end
             else
                 % 동기 미설정: 기존 방식대로 시간 기반 갱신
                 % app.updateVideoFrame(fIdx, currTime);  % <--- 이 줄을 주석 처리하여 완전 분리
             end
-            app.updatePlotTimeLines(fIdx, index, currTime);
+            try
+                app.updatePlotTimeLines(fIdx, index, currTime);
+            catch ME
+                app.logCaught(ME, 'hpanel-dashboard')
+            end
             app.refreshBoardOffSummaryPanel(fIdx);
 
             drawnow limitrate;
@@ -8313,6 +8395,61 @@
             end
         end
 
+        function ok = writeTextFileAtomic(app, targetPath, txt, logTag)
+            ok = false;
+            if nargin < 4 || isempty(logTag), logTag = 'atomic-write'; end
+            if isempty(targetPath), return; end
+            txt = char(txt);
+            tmp = [targetPath '.tmp'];
+            fid = -1;
+            try
+                fid = fopen(tmp, 'w');
+                if fid < 0
+                    error('FlightDataDashboard:AtomicOpen', '임시 파일 열기 실패: %s', tmp);
+                end
+                written = fwrite(fid, txt, 'char');
+                if written ~= numel(txt)
+                    error('FlightDataDashboard:AtomicWriteShort', ...
+                        '파일 쓰기 불완전: %s (%d/%d)', tmp, written, numel(txt));
+                end
+                closeStatus = fclose(fid);
+                fid = -1;
+                if closeStatus ~= 0
+                    error('FlightDataDashboard:AtomicClose', '파일 닫기 실패: %s', tmp);
+                end
+                if isfile(targetPath)
+                    try
+                        [bakOk, bakMsg, bakId] = copyfile(targetPath, [targetPath '.bak'], 'f');
+                        if ~bakOk
+                            if isempty(bakId), bakId = 'FlightDataDashboard:BackupCopy'; end
+                            app.logCaught(MException(bakId, 'backup 실패: %s', bakMsg), [logTag ':backup']);
+                        end
+                    catch ME_bak
+                        app.logCaught(ME_bak, [logTag ':backup']);
+                    end
+                end
+                [moveOk, moveMsg, moveId] = movefile(tmp, targetPath, 'f');
+                if ~moveOk
+                    if isempty(moveId), moveId = 'FlightDataDashboard:AtomicMove'; end
+                    error(moveId, 'movefile 실패: %s', moveMsg);
+                end
+                ok = true;
+            catch ME
+                if fid > 0
+                    try
+                        fclose(fid);
+                    catch
+                    end
+                end
+                try
+                    if isfile(tmp), delete(tmp); end
+                catch ME_del
+                    app.logCaught(ME_del, [logTag ':tmp-cleanup']);
+                end
+                rethrow(ME);
+            end
+        end
+
         function ok = saveProjectFile(app, filePath)
             % Atomic write: temp file + movefile + .bak of previous.
             ok = false;
@@ -8330,19 +8467,9 @@
                 end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
-                tmp = [filePath '.tmp'];
-                fid = fopen(tmp, 'w');
-                if fid < 0, error('FlightDataDashboard:ProjectWrite', '임시 파일 열기 실패: %s', tmp); end
-                cleanup = onCleanup(@() fclose(fid));
-                fwrite(fid, txt, 'char');
-                clear cleanup;
-                if isfile(filePath)
-                    try
-                        copyfile(filePath, [filePath '.bak'], 'f')
-                    catch
-                    end
+                if ~app.writeTextFileAtomic(filePath, txt, 'project-save')
+                    return;
                 end
-                movefile(tmp, filePath, 'f');
                 app.ProjectFilePath = app.normalizeAbsPath(filePath);
                 app.ProjectState    = st;
                 app.ProjectDirty    = false;
@@ -8380,12 +8507,9 @@
                 end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
-                fid = fopen(autoPath, 'w');
-                if fid < 0, return; end
-                cleanup = onCleanup(@() fclose(fid));
-                fwrite(fid, txt, 'char');
+                app.writeTextFileAtomic(autoPath, txt, 'project-autosave');
             catch ME
-                app.logCaught(ME, 'silent')
+                app.logCaught(ME, 'project-autosave')
             end
         end
 
