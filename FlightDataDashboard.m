@@ -3583,12 +3583,27 @@
             end
         end
 
-        function tabs = compactPlotTabsSpec(~, tabs)
+        % [R-09] Trailing empty tabs are dropped.
+        % [R-09] A non-trailing empty tab is preserved because the UI tab still exists.
+        % [R-09] Default-title middle empty tabs are logged only in DebugMode.
+        function tabs = compactPlotTabsSpec(app, tabs)
             if isempty(tabs), return; end
             lastKeep = 0;
             for t = 1:numel(tabs)
                 if isfield(tabs(t), 'Plots') && ~isempty(tabs(t).Plots)
                     lastKeep = t;
+                end
+            end
+            if lastKeep > 1 && app.DebugMode
+                for t = 1:(lastKeep - 1)
+                    isEmptyMiddle = ~isfield(tabs(t), 'Plots') || isempty(tabs(t).Plots);
+                    titleStr = '';
+                    if isfield(tabs(t), 'Title') && ~isempty(tabs(t).Title)
+                        titleStr = char(tabs(t).Title);
+                    end
+                    if isEmptyMiddle && strcmp(titleStr, sprintf('Tab %d', t))
+                        fprintf('[R-09] compactPlotTabsSpec preserved middle empty default tab: %s\n', titleStr);
+                    end
                 end
             end
             if lastKeep == 0
