@@ -72,6 +72,7 @@
         WindowMinBtn
         WindowMaxBtn
         BoardToggleButtons
+        LayoutPresetButtons
 
         CoastlineData
         FixedAreaBounds
@@ -151,6 +152,7 @@
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
         BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
+        CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
         % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
 
@@ -1044,6 +1046,8 @@
         function togglePanel(app, fIdx, pnlName)
             % 패널 표시/숨김 토글 (픽셀 고정 기반 리사이징)
             % [L1 B-1] 'mapOnly' / 'altOnly' 두 키로 분리. 'map' 은 backward-compat alias.
+            app.CurrentLayoutPreset = 'custom';
+            app.updateLayoutPresetButtons();
             if strcmp(pnlName, 'map')
                 % 양쪽 모두 켜져 있으면 모두 끄고, 둘 다 꺼져 있으면 모두 켬 (legacy 1-shot 동작 유지).
                 anyOn = app.UI(fIdx).PanelVisible.mapOnly || app.UI(fIdx).PanelVisible.altOnly;
@@ -8127,6 +8131,8 @@
                 if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
                     return;
                 end
+                app.CurrentLayoutPreset = 'custom';
+                app.updateLayoutPresetButtons();
                 sourceIdx = app.getBoardOffSourceIdx(fIdx);
 
                 if app.BoardOffState(fIdx)
@@ -8306,6 +8312,8 @@
                 app.syncBoardPanelHandles(fIdx);
                 panelWidths = app.getResponsivePanelWidths();
                 widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 0, 0};
+                infoOn = true;
+                dataViewOn = true;
                 if isfield(app.UI(fIdx), 'PanelVisible')
                     st = app.UI(fIdx).PanelVisible;
                     if isfield(st, 'attitude') && ~st.attitude, widths{1} = 0; end
@@ -8314,6 +8322,21 @@
                                (isfield(st, 'altOnly') && st.altOnly) || ...
                                (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
                     if ~mapColOn, widths{2} = 0; end
+                    if isfield(st, 'info'), infoOn = logical(st.info); end
+                    if isfield(st, 'dataView'), dataViewOn = logical(st.dataView); end
+                    if ~infoOn, widths{3} = 0; end
+                    if ~dataViewOn, widths{4} = 0; end
+                    if ~infoOn && ~dataViewOn
+                        attOn = isfield(st, 'attitude') && st.attitude;
+                        if attOn && mapColOn
+                            widths{1} = '1x';
+                            widths{2} = '1x';
+                        elseif attOn
+                            widths{1} = '1x';
+                        elseif mapColOn
+                            widths{2} = '1x';
+                        end
+                    end
                 end
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
@@ -8453,6 +8476,146 @@
             catch ME
                 app.logCaught(ME, 'boardButtons');
             end
+        end
+
+        function applyLayoutPreset(app, presetName)
+            try
+                presetName = char(presetName);
+                app.CurrentLayoutPreset = presetName;
+                switch presetName
+                    case 'single-top'
+                        app.setBoardOffDirect(2);
+                        app.setFlightPanelVisiblePreset(1, true, true, true, true, true, true);
+                    case 'single-bot'
+                        app.setBoardOffDirect(1);
+                        app.setFlightPanelVisiblePreset(2, true, true, true, true, true, true);
+                    case 'dual-equal'
+                        app.setBoardOffDirect(0);
+                        app.setBodyGridRowsDirect({'1x', '1x'});
+                    case 'dual-3:1-top'
+                        app.setBoardOffDirect(0);
+                        app.setBodyGridRowsDirect({'3x', '1x'});
+                    case 'data-focus'
+                        app.setBoardOffDirect(0);
+                        for k = 1:2
+                            app.setFlightPanelVisiblePreset(k, false, false, false, false, true, true);
+                        end
+                    case 'gauges-only'
+                        app.setBoardOffDirect(0);
+                        for k = 1:2
+                            app.setFlightPanelVisiblePreset(k, true, false, false, false, false, false);
+                        end
+                    case 'map-focus'
+                        app.setBoardOffDirect(0);
+                        for k = 1:2
+                            app.setFlightPanelVisiblePreset(k, false, true, false, false, false, false);
+                        end
+                    case 'video-focus'
+                        app.setBoardOffDirect(0);
+                        for k = 1:2
+                            app.setFlightPanelVisiblePreset(k, false, false, false, true, false, true);
+                        end
+                    otherwise
+                        app.CurrentLayoutPreset = 'custom';
+                end
+
+                for k = 1:2
+                    app.applyMapAltVisibility(k);
+                    app.reflowBoardColumns(k);
+                    app.refreshBoardOffSummaryPanel(k, true);
+                end
+                app.applyBodyGridRowHeights();
+                if strcmp(presetName, 'dual-3:1-top')
+                    app.setBodyGridRowsDirect({'3x', '1x'});
+                end
+                app.updateBoardToggleButtons();
+                app.updateLayoutPresetButtons();
+                drawnow limitrate;
+            catch ME
+                app.logCaught(ME, 'layoutPreset');
+            end
+        end
+
+        function setBoardOffDirect(app, offIdx)
+            try
+                app.BoardOffState = [false, false];
+                for k = 1:min(2, numel(app.UI))
+                    if isfield(app.UI(k), 'panel')
+                        app.setUiVisible(app.UI(k).panel, true);
+                    end
+                    if isfield(app.UI(k), 'boardOffPanel')
+                        app.setUiVisible(app.UI(k).boardOffPanel, false);
+                    end
+                    if isfield(app.UI(k), 'boardOffSignature')
+                        app.UI(k).boardOffSignature = '';
+                    end
+                end
+                if offIdx >= 1 && offIdx <= 2
+                    app.BoardOffState(offIdx) = true;
+                    app.setUiVisible(app.UI(offIdx).panel, false);
+                    app.setUiVisible(app.UI(offIdx).boardOffPanel, true);
+                    app.refreshBoardOffSummaryPanel(offIdx, true);
+                end
+            catch ME
+                app.logCaught(ME, 'layoutPreset:boardOff');
+            end
+        end
+
+        function setBodyGridRowsDirect(app, rows)
+            try
+                if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
+                    app.BodyGrid.RowHeight = rows;
+                end
+            catch ME
+                app.logCaught(ME, 'layoutPreset:rows');
+            end
+        end
+
+        function setFlightPanelVisiblePreset(app, fIdx, attitude, mapOnly, altOnly, video, info, dataView)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ~isfield(app.UI(fIdx), 'PanelVisible')
+                    return;
+                end
+                app.UI(fIdx).PanelVisible.attitude = logical(attitude);
+                app.UI(fIdx).PanelVisible.mapOnly = logical(mapOnly);
+                app.UI(fIdx).PanelVisible.altOnly = logical(altOnly);
+                app.UI(fIdx).PanelVisible.video = logical(video);
+                app.UI(fIdx).PanelVisible.info = logical(info);
+                app.UI(fIdx).PanelVisible.dataView = logical(dataView);
+            catch ME
+                app.logCaught(ME, 'layoutPreset:panelVisible');
+            end
+        end
+
+        function updateLayoutPresetButtons(app)
+            try
+                if isempty(app.LayoutPresetButtons), return; end
+                names = app.getLayoutPresetNames();
+                icons = app.getLayoutPresetIcons();
+                for k = 1:min(numel(app.LayoutPresetButtons), numel(names))
+                    btn = app.LayoutPresetButtons(k);
+                    if isempty(btn) || ~isvalid(btn), continue; end
+                    if strcmp(app.CurrentLayoutPreset, names{k})
+                        btn.BackgroundColor = [0.80 0.18 0.18];
+                        btn.FontColor = [1 1 1];
+                    else
+                        btn.BackgroundColor = [0.97 0.97 0.97];
+                        btn.FontColor = [0.08 0.08 0.08];
+                    end
+                    btn.Text = icons{k};
+                end
+            catch ME
+                app.logCaught(ME, 'layoutPresetButtons');
+            end
+        end
+
+        function names = getLayoutPresetNames(~)
+            names = {'single-top', 'single-bot', 'dual-equal', 'dual-3:1-top', ...
+                     'data-focus', 'gauges-only', 'map-focus', 'video-focus'};
+        end
+
+        function icons = getLayoutPresetIcons(~)
+            icons = {'□↑', '□↓', '▣', '▥', 'D', 'G', 'M', 'V'};
         end
 
         function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
@@ -9004,7 +9167,7 @@
                         'dataGrid', {}, 'panelAttitude', {}, 'panelAttitudeGrid', {}, ...
                         'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
                         'panelMapAlt', {}, 'panelVideo', {}, ...
-                        'btnAtt', {}, 'btnMap', {}, 'btnVid', {}, 'PanelVisible', {}, ...
+                        'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
                         'vidVideoFpsInput', {}, 'vidDataFpsInput', {}, ...
@@ -9058,7 +9221,9 @@
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
                 UI_temp(fIdx).btnVid.Layout.Column = 9;
-                UI_temp(fIdx).PanelVisible = struct('attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false);
+                UI_temp(fIdx).PanelVisible = struct( ...
+                    'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
+                    'info', true, 'dataView', true);
 
                 % [레이아웃 순서 확정 및 폭 최적화] 자세(200) -> 지도/고도(500) -> 정보(250) -> H패널(1x) -> splitter(6) -> 비디오(500)
                 % [PATCH UX-3] H↔I 경계 splitter 컬럼 추가
@@ -9410,8 +9575,8 @@
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', [0.94 0.94 0.94], 'BorderType', 'line');
-            glHeader = uigridlayout(hHeaderPanel, [1 11]);
-            glHeader.ColumnWidth = {110, 110, 100, 104, 104, '1x', 150, 120, 72, 72, 104};
+            glHeader = uigridlayout(hHeaderPanel, [1 12]);
+            glHeader.ColumnWidth = {110, 110, 100, 104, 104, 282, '1x', 150, 120, 72, 72, 104};
             glHeader.RowHeight = {'1x'};
             glHeader.Padding = [4 4 4 4];
             glHeader.ColumnSpacing = 4;
@@ -9422,6 +9587,7 @@
             app.BoardToggleButtons = gobjects(1, 2);
             app.BoardToggleButtons(1) = app.createToolbarButton(glHeader, '▦', '상단 보드 off', @(~, ~) app.toggleBoardVisibility(1), 'normal');
             app.BoardToggleButtons(2) = app.createToolbarButton(glHeader, '▦', '하단 보드 off', @(~, ~) app.toggleBoardVisibility(2), 'normal');
+            app.buildLayoutPresetPicker(glHeader);
             uilabel(glHeader, 'Text', '');
 
             app.SyncInput = uieditfield(glHeader, 'text', 'Value', '', 'Enable', 'off', ...
@@ -9438,7 +9604,36 @@
                 app.logCaught(ME_silent, 'buildHeaderBar:edit-button');
             end
             app.updateBoardToggleButtons();
+            app.updateLayoutPresetButtons();
             app.refreshGlobalSyncControls();
+        end
+
+        function buildLayoutPresetPicker(app, parent)
+            try
+                pnl = uipanel(parent, 'Title', 'Layout', ...
+                    'BackgroundColor', [0.94 0.94 0.94], 'FontSize', 9, 'FontWeight', 'bold');
+                gl = uigridlayout(pnl, [1 8], ...
+                    'ColumnWidth', repmat({32}, 1, 8), ...
+                    'RowHeight', {'1x'}, ...
+                    'Padding', [2 1 2 1], 'ColumnSpacing', 2);
+                names = app.getLayoutPresetNames();
+                icons = app.getLayoutPresetIcons();
+                tips = {'상단 집중', '하단 집중', '상하 동일', '상단 3:1', ...
+                        '데이터 집중', '자세 집중', '지도 집중', '비디오 집중'};
+                app.LayoutPresetButtons = gobjects(1, numel(names));
+                for k = 1:numel(names)
+                    presetName = names{k};
+                    btn = uibutton(gl, 'Text', icons{k}, 'FontSize', 13, 'FontWeight', 'bold', ...
+                        'ButtonPushedFcn', @(~,~) app.applyLayoutPreset(presetName));
+                    try
+                        btn.Tooltip = tips{k};
+                    catch
+                    end
+                    app.LayoutPresetButtons(k) = btn;
+                end
+            catch ME
+                app.logCaught(ME, 'layoutPresetPicker');
+            end
         end
 
         function [ax, lbl, grid] = createGaugePanel(~, parentPnl, titleStr)
