@@ -120,6 +120,8 @@
         AsyncGen            = [0, 0]          % [V3.21 #1-A] generation counter (race 차단)
         VideoFilePath       = {'', ''}        % [V3.19 (1)] worker가 자체 VideoReader 생성용
         CurrentVideoFrame   = {[], []}        % 표시 해상도 변경 시 재렌더링할 원본 최신 프레임
+        VideoDialogFollowTimer = []           % Video Player 이동 시 AVI 제어 dialog를 따라 움직이는 poll timer
+        VideoDialogLastViewerPos = {[], []}   % 마지막 Video Player 위치(채널별)
         NormalWindowPosition = []             % 마지막 일반 창 위치(최대화 복원용)
         IsRestoringWindow   = false           % 복원 중 SizeChanged 저장 방지
         IsWindowManuallyMaximized = false     % WindowState 미지원 버전 fallback
@@ -272,6 +274,7 @@
             % [Stabilization P2] re-entry guard so partial cleanup cannot run twice
             if app.IsDeleting, return; end
             app.IsDeleting = true;
+            app.stopVideoDialogFollowTimer();
             app.disableAxesInteractionsBeforeDelete(app.UIFigure, 'delete:uifigure-axes');
             try
                 for fIdx = 1:2
@@ -7637,17 +7640,152 @@
 
         function pos = getVideoViewerDialogPosition(app, fIdx)
             sizePx = app.getSelectedVideoDisplaySize(fIdx);
-            dlgW = max(780, sizePx(1) + 60);
-            dlgH = max(620, sizePx(2) + 120);
+            dlgW = max(520, sizePx(1) + 36);
+            dlgH = max(360, sizePx(2) + 92);
             try
                 screen = app.getActiveScreenArea();
-                dlgW = min(dlgW, max(640, screen(3) - 80));
-                dlgH = min(dlgH, max(480, screen(4) - 120));
+                dlgW = min(dlgW, max(520, screen(3) - 80));
+                dlgH = min(dlgH, max(360, screen(4) - 120));
                 x = screen(1) + max(20, round((screen(3) - dlgW) / 2));
                 y = screen(2) + max(40, round((screen(4) - dlgH) / 2));
                 pos = [x, y, dlgW, dlgH];
             catch
                 pos = [120, 120, dlgW, dlgH];
+            end
+        end
+
+        function pos = getVideoControlDialogPosition(app, fIdx)
+            dlgW = 760;
+            dlgH = 300;
+            try
+                if ~isempty(app.UI) && fIdx <= numel(app.UI) && ...
+                        isfield(app.UI(fIdx), 'vidControlDialog') && ~isempty(app.UI(fIdx).vidControlDialog) && ...
+                        isvalid(app.UI(fIdx).vidControlDialog)
+                    oldPos = app.UI(fIdx).vidControlDialog.Position;
+                    dlgW = max(dlgW, oldPos(3));
+                    dlgH = max(dlgH, oldPos(4));
+                end
+                screen = app.getActiveScreenArea();
+                viewerPos = [];
+                if ~isempty(app.UI) && fIdx <= numel(app.UI) && ...
+                        isfield(app.UI(fIdx), 'vidViewerDialog') && ~isempty(app.UI(fIdx).vidViewerDialog) && ...
+                        isvalid(app.UI(fIdx).vidViewerDialog)
+                    viewerPos = app.UI(fIdx).vidViewerDialog.Position;
+                end
+                if isempty(viewerPos)
+                    viewerPos = app.UIFigure.Position;
+                end
+
+                gap = 8;
+                x = viewerPos(1) + viewerPos(3) + gap;
+                y = viewerPos(2) + max(0, viewerPos(4) - dlgH);
+                if x + dlgW > screen(1) + screen(3) - 8
+                    x = viewerPos(1) - dlgW - gap;
+                end
+                x = max(screen(1) + 8, min(x, screen(1) + screen(3) - dlgW - 8));
+                y = max(screen(2) + 8, min(y, screen(2) + screen(4) - dlgH - 48));
+                pos = [x, y, dlgW, dlgH];
+            catch
+                pos = [120, 120, dlgW, dlgH];
+            end
+        end
+
+        function startVideoDialogFollowTimer(app)
+            try
+                if ~isempty(app.VideoDialogFollowTimer) && isvalid(app.VideoDialogFollowTimer)
+                    if ~strcmpi(app.VideoDialogFollowTimer.Running, 'on')
+                        start(app.VideoDialogFollowTimer);
+                    end
+                    return;
+                end
+                app.VideoDialogFollowTimer = timer( ...
+                    'ExecutionMode', 'fixedSpacing', ...
+                    'Period', 0.18, ...
+                    'BusyMode', 'drop', ...
+                    'Name', 'FlightDashboardVideoDialogFollow', ...
+                    'TimerFcn', @(~,~) app.pollVideoDialogFollower());
+                start(app.VideoDialogFollowTimer);
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoDialogFollow:start');
+            end
+        end
+
+        function stopVideoDialogFollowTimer(app)
+            try
+                if ~isempty(app.VideoDialogFollowTimer) && isvalid(app.VideoDialogFollowTimer)
+                    stop(app.VideoDialogFollowTimer);
+                    delete(app.VideoDialogFollowTimer);
+                end
+            catch
+            end
+            app.VideoDialogFollowTimer = [];
+            app.VideoDialogLastViewerPos = {[], []};
+        end
+
+        function updateVideoDialogFollowState(app, fIdx)
+            try
+                if app.areVideoDialogsVisible(fIdx)
+                    app.VideoDialogLastViewerPos{fIdx} = app.UI(fIdx).vidViewerDialog.Position;
+                    app.startVideoDialogFollowTimer();
+                else
+                    app.VideoDialogLastViewerPos{fIdx} = [];
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoDialogFollow:update');
+            end
+        end
+
+        function tf = areVideoDialogsVisible(app, fIdx)
+            tf = false;
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                viewer = app.UI(fIdx).vidViewerDialog;
+                control = app.UI(fIdx).vidControlDialog;
+                tf = ~isempty(viewer) && isvalid(viewer) && strcmpi(char(viewer.Visible), 'on') && ...
+                     ~isempty(control) && isvalid(control) && strcmpi(char(control.Visible), 'on');
+            catch
+                tf = false;
+            end
+        end
+
+        function pollVideoDialogFollower(app)
+            if app.IsDeleting, return; end
+            anyVisible = false;
+            try
+                for fIdx = 1:2
+                    if ~app.areVideoDialogsVisible(fIdx)
+                        app.VideoDialogLastViewerPos{fIdx} = [];
+                        continue;
+                    end
+                    anyVisible = true;
+                    viewer = app.UI(fIdx).vidViewerDialog;
+                    control = app.UI(fIdx).vidControlDialog;
+                    pos = viewer.Position;
+                    lastPos = app.VideoDialogLastViewerPos{fIdx};
+                    if isempty(lastPos) || numel(lastPos) < 4
+                        app.VideoDialogLastViewerPos{fIdx} = pos;
+                        continue;
+                    end
+                    delta = pos(1:2) - lastPos(1:2);
+                    if any(abs(delta) >= 1)
+                        ctrlPos = control.Position;
+                        ctrlPos(1:2) = ctrlPos(1:2) + delta;
+                        control.Position = ctrlPos;
+                    end
+                    app.VideoDialogLastViewerPos{fIdx} = pos;
+                end
+                if ~anyVisible
+                    try
+                        if ~isempty(app.VideoDialogFollowTimer) && isvalid(app.VideoDialogFollowTimer) && ...
+                                strcmpi(app.VideoDialogFollowTimer.Running, 'on')
+                            stop(app.VideoDialogFollowTimer);
+                        end
+                    catch
+                    end
+                    app.VideoDialogLastViewerPos = {[], []};
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoDialogFollow:poll');
             end
         end
 
@@ -7669,12 +7807,15 @@
                     if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
                         app.UI(fIdx).btnVid.Text = '비디오 창 닫기';
                     end
+                    app.updateVideoDialogFollowState(fIdx);
                 else
+                    app.hideVideoControlDialog(fIdx);
                     dlg.Visible = 'off';
                     app.UI(fIdx).PanelVisible.video = false;
                     if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
                         app.UI(fIdx).btnVid.Text = '비디오 ▸';
                     end
+                    app.updateVideoDialogFollowState(fIdx);
                 end
                 if doReflow
                     app.reflowBoardColumns(fIdx);
@@ -7704,9 +7845,28 @@
                     return;
                 end
                 sizePx = app.getSelectedVideoDisplaySize(fIdx);
-                pad = 8;
+                pad = 0;
+                if isfield(app.UI(fIdx), 'vidContainer') && ~isempty(app.UI(fIdx).vidContainer) && ...
+                        isvalid(app.UI(fIdx).vidContainer)
+                    app.UI(fIdx).vidContainer.BackgroundColor = [0 0 0];
+                end
                 app.UI(fIdx).vidAxes.Units = 'pixels';
                 app.UI(fIdx).vidAxes.Position = [pad, pad, sizePx(1), sizePx(2)];
+                app.UI(fIdx).vidAxes.Color = [0 0 0];
+                app.UI(fIdx).vidAxes.XColor = 'none';
+                app.UI(fIdx).vidAxes.YColor = 'none';
+                try
+                    app.UI(fIdx).vidAxes.ActivePositionProperty = 'position';
+                catch
+                end
+                try
+                    app.UI(fIdx).vidAxes.InnerPosition = [pad, pad, sizePx(1), sizePx(2)];
+                catch
+                end
+                try
+                    app.UI(fIdx).vidAxes.LooseInset = [0 0 0 0];
+                catch
+                end
             catch ME_silent
                 app.logCaught(ME_silent, 'videoDisplaySize');
             end
@@ -7770,12 +7930,11 @@
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 dlg = app.UI(fIdx).vidControlDialog;
                 if isempty(dlg) || ~isvalid(dlg), return; end
-                if strcmpi(dlg.Visible, 'on')
+                if strcmpi(char(dlg.Visible), 'on')
                     app.hideVideoControlDialog(fIdx);
                 else
                     try
-                        figPos = app.UIFigure.Position;
-                        dlg.Position(1:2) = [figPos(1) + 80, max(40, figPos(2) + figPos(4) - dlg.Position(4) - 80)];
+                        dlg.Position = app.getVideoControlDialogPosition(fIdx);
                     catch ME_inner
                         app.logCaught(ME_inner, 'openVideoControlDialog:position');
                     end
@@ -7784,6 +7943,7 @@
                     if isfield(app.UI(fIdx), 'vidControlBtn') && ~isempty(app.UI(fIdx).vidControlBtn) && isvalid(app.UI(fIdx).vidControlBtn)
                         app.UI(fIdx).vidControlBtn.Text = '제어창 닫기';
                     end
+                    app.updateVideoDialogFollowState(fIdx);
                 end
             catch ME_silent
                 app.logCaught(ME_silent, 'videoControlToggle');
@@ -7801,6 +7961,7 @@
                    isvalid(app.UI(fIdx).vidControlBtn)
                     app.UI(fIdx).vidControlBtn.Text = '제어창';
                 end
+                app.updateVideoDialogFollowState(fIdx);
             catch ME_silent
                 app.logCaught(ME_silent, 'videoControlHide');
             end
@@ -7808,42 +7969,44 @@
 
         function ctrl = createVideoControlDialog(app, fIdx)
             ctrl = struct();
+            ctrlFont = 14;
+            ctrlSmallFont = 13;
             dlg = uifigure('Name', sprintf('AVI 제어 - Flight Data %d', fIdx), ...
-                'Visible', 'off', 'Position', [120, 120, 680, 340], ...
+                'Visible', 'off', 'Position', [120, 120, 760, 300], ...
                 'Color', [0.94 0.94 0.96], ...
                 'CloseRequestFcn', @(~,~) app.hideVideoControlDialog(fIdx));
             root = uigridlayout(dlg, [3 1]);
-            root.RowHeight = {58, '1x', 44};
-            root.Padding = [8 8 8 8];
-            root.RowSpacing = 8;
+            root.RowHeight = {64, 132, 46};
+            root.Padding = [6 6 6 6];
+            root.RowSpacing = 5;
 
-            syncPnl = uipanel(root, 'Title', '동기 설정', 'BackgroundColor', 'w');
+            syncPnl = uipanel(root, 'Title', '동기 설정', 'BackgroundColor', 'w', 'FontSize', ctrlSmallFont);
             glSync = uigridlayout(syncPnl, [1 6], ...
-                'ColumnWidth', {55, 90, 60, 105, '1x', 90}, ...
+                'ColumnWidth', {70, 105, 74, 120, '1x', 100}, ...
                 'Padding', [6 4 6 4], 'ColumnSpacing', 6);
-            uilabel(glSync, 'Text', 'Frame:', 'FontSize', 11, 'FontWeight', 'bold');
+            uilabel(glSync, 'Text', 'Frame:', 'FontSize', ctrlFont, 'FontWeight', 'bold');
             ctrl.vidSyncFrameInput = uispinner(glSync, 'Value', 1, 'Step', 1, ...
-                'Limits', [1 1e9], 'ValueDisplayFormat', '%d', 'FontSize', 11);
-            uilabel(glSync, 'Text', 'Time(s):', 'FontSize', 11, 'FontWeight', 'bold');
+                'Limits', [1 1e9], 'ValueDisplayFormat', '%d', 'FontSize', ctrlFont);
+            uilabel(glSync, 'Text', 'Time(s):', 'FontSize', ctrlFont, 'FontWeight', 'bold');
             ctrl.vidSyncTimeInput = uispinner(glSync, 'Value', 0, 'Step', 0.1, ...
-                'ValueDisplayFormat', '%.3f', 'FontSize', 11);
+                'ValueDisplayFormat', '%.3f', 'FontSize', ctrlFont);
             uilabel(glSync, 'Text', '');
             ctrl.vidSyncBtn = uibutton(glSync, 'Text', '동기', ...
                 'BackgroundColor', [0.58 0.0 0.83], 'FontColor', 'w', ...
-                'FontSize', 11, 'FontWeight', 'bold', ...
+                'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.applyVideoSync(fIdx));
 
             vdubGroupPnl = uipanel(root, 'Title', 'Frame Navigator', ...
-                'FontSize', 10, 'FontWeight', 'bold', ...
+                'FontSize', ctrlSmallFont, 'FontWeight', 'bold', ...
                 'BackgroundColor', [0.97 0.97 0.99], ...
                 'BorderType', 'line', 'ForegroundColor', [0.1 0.2 0.5]);
             vdubGrid = uigridlayout(vdubGroupPnl, [3 1]);
-            vdubGrid.RowHeight = {22, 50, 34};
-            vdubGrid.Padding = [8 4 8 4];
-            vdubGrid.RowSpacing = 4;
+            vdubGrid.RowHeight = {24, 48, 36};
+            vdubGrid.Padding = [8 3 8 2];
+            vdubGrid.RowSpacing = 2;
             ctrl.vidVdubLabel = uilabel(vdubGrid, ...
                 'Text', 'Frame 1 / 1  (00:00:00.000)', ...
-                'FontSize', 11, 'FontWeight', 'bold', ...
+                'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'FontName', 'Consolas', 'FontColor', [0.1 0.2 0.5], ...
                 'HorizontalAlignment', 'center');
             ctrl.vidVdubSlider = uislider(vdubGrid, ...
@@ -7855,47 +8018,47 @@
             navPnl = uipanel(vdubGrid, 'BorderType', 'none', 'BackgroundColor', [0.97 0.97 0.99]);
             glNav = uigridlayout(navPnl, [1 4], ...
                 'ColumnWidth', {'1x', '1x', '1x', '1x'}, ...
-                'Padding', [0 0 0 0], 'ColumnSpacing', 10);
-            uibutton(glNav, 'Text', '◄◄', 'FontSize', 11, 'FontWeight', 'bold', ...
+                'Padding', [0 0 0 0], 'ColumnSpacing', 8);
+            uibutton(glNav, 'Text', '◄◄', 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'Tooltip', '10 프레임 뒤로 (-10)', ...
                 'ButtonPushedFcn', @(~,~) app.onVdubNav(fIdx, 'first'));
-            uibutton(glNav, 'Text', '◄', 'FontSize', 11, 'FontWeight', 'bold', ...
+            uibutton(glNav, 'Text', '◄', 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'Tooltip', '이전 frame (-1)', ...
                 'ButtonPushedFcn', @(~,~) app.onVdubNav(fIdx, 'prev'));
-            uibutton(glNav, 'Text', '►', 'FontSize', 11, 'FontWeight', 'bold', ...
+            uibutton(glNav, 'Text', '►', 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'Tooltip', '다음 frame (+1)', ...
                 'ButtonPushedFcn', @(~,~) app.onVdubNav(fIdx, 'next'));
-            uibutton(glNav, 'Text', '►►', 'FontSize', 11, 'FontWeight', 'bold', ...
+            uibutton(glNav, 'Text', '►►', 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'Tooltip', '10 프레임 앞으로 (+10)', ...
                 'ButtonPushedFcn', @(~,~) app.onVdubNav(fIdx, 'last'));
 
             hzPnl = uipanel(root, 'BackgroundColor', 'w', 'BorderType', 'line');
             glHz = uigridlayout(hzPnl, [1 12], ...
-                'ColumnWidth', {65, 24, 50, 24, 12, 55, 24, 50, 24, 16, 50, 90}, ...
+                'ColumnWidth', {80, 30, 56, 30, 12, 68, 30, 56, 30, 12, 60, 100}, ...
                 'Padding', [6 4 6 4], 'ColumnSpacing', 4);
-            uilabel(glHz, 'Text', 'Video FPS:', 'FontSize', 10, 'FontWeight', 'bold');
-            uibutton(glHz, 'Text', '◄', 'FontSize', 10, ...
+            uilabel(glHz, 'Text', 'Video FPS:', 'FontSize', ctrlSmallFont, 'FontWeight', 'bold');
+            uibutton(glHz, 'Text', '◄', 'FontSize', ctrlSmallFont, ...
                 'ButtonPushedFcn', @(~,~) app.adjustHzValue(fIdx, 'video', -1));
             ctrl.vidVideoFpsInput = uispinner(glHz, 'Value', 15, 'Step', 1, ...
-                'Limits', [1 1000], 'ValueDisplayFormat', '%d', 'FontSize', 10, ...
+                'Limits', [1 1000], 'ValueDisplayFormat', '%d', 'FontSize', ctrlSmallFont, ...
                 'ValueChangedFcn', @(src,~) app.onHzInputChanged(fIdx, 'video', src.Value));
-            uibutton(glHz, 'Text', '►', 'FontSize', 10, ...
+            uibutton(glHz, 'Text', '►', 'FontSize', ctrlSmallFont, ...
                 'ButtonPushedFcn', @(~,~) app.adjustHzValue(fIdx, 'video', 1));
             uilabel(glHz, 'Text', '');
-            uilabel(glHz, 'Text', 'Data Hz:', 'FontSize', 10, 'FontWeight', 'bold');
-            uibutton(glHz, 'Text', '◄', 'FontSize', 10, ...
+            uilabel(glHz, 'Text', 'Data Hz:', 'FontSize', ctrlSmallFont, 'FontWeight', 'bold');
+            uibutton(glHz, 'Text', '◄', 'FontSize', ctrlSmallFont, ...
                 'ButtonPushedFcn', @(~,~) app.adjustHzValue(fIdx, 'data', -1));
             ctrl.vidDataFpsInput = uispinner(glHz, 'Value', 50, 'Step', 1, ...
-                'Limits', [1 1000], 'ValueDisplayFormat', '%d', 'FontSize', 10, ...
+                'Limits', [1 1000], 'ValueDisplayFormat', '%d', 'FontSize', ctrlSmallFont, ...
                 'ValueChangedFcn', @(src,~) app.onHzInputChanged(fIdx, 'data', src.Value));
-            uibutton(glHz, 'Text', '►', 'FontSize', 10, ...
+            uibutton(glHz, 'Text', '►', 'FontSize', ctrlSmallFont, ...
                 'ButtonPushedFcn', @(~,~) app.adjustHzValue(fIdx, 'data', 1));
             uilabel(glHz, 'Text', '');
-            uilabel(glHz, 'Text', 'Cache:', 'FontSize', 10, 'FontWeight', 'bold');
+            uilabel(glHz, 'Text', 'Cache:', 'FontSize', ctrlSmallFont, 'FontWeight', 'bold');
             ctrl.vidCacheBudget = uidropdown(glHz, ...
                 'Items', {'30 MB', '50 MB', '100 MB'}, ...
                 'ItemsData', [30, 50, 100], ...
-                'Value', 30, 'FontSize', 10, ...
+                'Value', 30, 'FontSize', ctrlSmallFont, ...
                 'ValueChangedFcn', @(src,~) app.setCacheBudget(src.Value));
 
             ctrl.vidControlDialog = dlg;
@@ -8818,15 +8981,15 @@
                     app.logCaught(ME_silent, 'videoViewer:auto-resize');
                 end
                 viewerRoot = uigridlayout(UI_temp(fIdx).vidViewerDialog, [1 1], ...
-                    'Padding', [6 6 6 6], 'RowHeight', {'1x'}, 'ColumnWidth', {'1x'});
+                    'Padding', [2 2 2 2], 'RowHeight', {'1x'}, 'ColumnWidth', {'1x'});
                 UI_temp(fIdx).panelVideo = uipanel(viewerRoot, 'Title', 'Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
                 UI_temp(fIdx).panelVideo.Layout.Row = 1;
                 UI_temp(fIdx).panelVideo.Layout.Column = 1;
                 % 영상 표시 우선: 제어 기능은 별도 다이얼로그로 분리
                 iGrid2 = uigridlayout(UI_temp(fIdx).panelVideo, [2 1]);
                 iGrid2.RowHeight = {34, '1x'};
-                iGrid2.Padding = [2 2 2 2];
-                iGrid2.RowSpacing = 4;
+                iGrid2.Padding = [0 0 0 0];
+                iGrid2.RowSpacing = 2;
 
                 % Row 1: AVI 파일 열기 + 표시 해상도 + 제어창 버튼 + 동기 상태
                 vBtnPnl = uipanel(iGrid2, 'BorderType', 'none', 'BackgroundColor', 'w');
@@ -8848,10 +9011,17 @@
 
                 % Row 2: 고정 표시 해상도 영상 영역(컨테이너 스크롤 가능)
                 UI_temp(fIdx).vidContainer = uipanel(iGrid2, 'BorderType', 'none', ...
-                    'Scrollable', 'on', 'BackgroundColor', [0.94 0.94 0.94]);
+                    'Scrollable', 'on', 'BackgroundColor', [0 0 0]);
                 UI_temp(fIdx).vidContainer.Layout.Row = 2;
                 UI_temp(fIdx).vidAxes = uiaxes(UI_temp(fIdx).vidContainer, ...
-                    'Units', 'pixels', 'Position', [8 8 720 512]);
+                    'Units', 'pixels', 'Position', [0 0 720 512]);
+                UI_temp(fIdx).vidAxes.Color = [0 0 0];
+                UI_temp(fIdx).vidAxes.XColor = 'none';
+                UI_temp(fIdx).vidAxes.YColor = 'none';
+                try
+                    UI_temp(fIdx).vidAxes.ActivePositionProperty = 'position';
+                catch
+                end
                 axis(UI_temp(fIdx).vidAxes, 'image');
                 axis(UI_temp(fIdx).vidAxes, 'off');
                 disableDefaultInteractivity(UI_temp(fIdx).vidAxes);
