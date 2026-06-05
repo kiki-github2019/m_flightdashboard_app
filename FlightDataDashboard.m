@@ -1865,7 +1865,7 @@
                 % ring buffer 자체가 실패해도 절대 throw 안 함
             end
 
-            if ~app.DebugMode || suppressConsole, return; end
+            if suppressConsole || ~app.DebugMode, return; end
             % silent 태그는 buffer만 남기고 콘솔에는 안 찍음 (기존 동작 유지)
             if strcmpi(tag, 'silent'), return; end
             fprintf('[%s] %s: %s\n', tag, ME.identifier, ME.message);
