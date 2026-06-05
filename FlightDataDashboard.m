@@ -3296,6 +3296,7 @@
                 if isfield(app.UI(fIdx), 'hdgLabel') && ~isempty(app.UI(fIdx).hdgLabel) && isvalid(app.UI(fIdx).hdgLabel)
                     app.UI(fIdx).hdgLabel.Text = sprintf('Heading %+.3f°', hdg);
                 end
+                app.setAttitudeValueText(fIdx, pitch, roll, hdg);
 
                 if isfield(app.UI(fIdx), 'hgPitch') && ~isempty(app.UI(fIdx).hgPitch) && isvalid(app.UI(fIdx).hgPitch)
                     set(app.UI(fIdx).hgPitch, 'Matrix', makehgtform('zrotate', -pitch * pi / 180));
@@ -7317,11 +7318,11 @@
             angles = 0:30:330;
             for gaugeType = 1:3
                 if gaugeType == 1
-                    ax = app.UI(fIdx).pitchAxes; cla(ax); app.UI(fIdx).hgPitch = hgtransform('Parent', ax); hg = app.UI(fIdx).hgPitch; offsetDeg = 180; bgColor = [0.15 0.25 0.35];
+                    ax = app.UI(fIdx).pitchAxes; cla(ax); app.UI(fIdx).hgPitch = hgtransform('Parent', ax); hg = app.UI(fIdx).hgPitch; offsetDeg = 180; bgColor = [0.15 0.25 0.35]; valueField = 'pitchValueText'; valueText = 'P +0.00°';
                 elseif gaugeType == 2
-                    ax = app.UI(fIdx).rollAxes; cla(ax); app.UI(fIdx).hgRoll = hgtransform('Parent', ax); hg = app.UI(fIdx).hgRoll; offsetDeg = 90; bgColor = [0.35 0.20 0.20];
+                    ax = app.UI(fIdx).rollAxes; cla(ax); app.UI(fIdx).hgRoll = hgtransform('Parent', ax); hg = app.UI(fIdx).hgRoll; offsetDeg = 90; bgColor = [0.35 0.20 0.20]; valueField = 'rollValueText'; valueText = 'R +0.00°';
                 else
-                    ax = app.UI(fIdx).hdgAxes; cla(ax); app.UI(fIdx).hgHdg = hgtransform('Parent', ax); hg = app.UI(fIdx).hgHdg; offsetDeg = 90; bgColor = [0.20 0.35 0.20];
+                    ax = app.UI(fIdx).hdgAxes; cla(ax); app.UI(fIdx).hgHdg = hgtransform('Parent', ax); hg = app.UI(fIdx).hgHdg; offsetDeg = 90; bgColor = [0.20 0.35 0.20]; valueField = 'hdgValueText'; valueText = 'H +0.00°';
                 end
 
                 patch(ax, cos(theta), sin(theta), bgColor, 'EdgeColor', 'k', 'LineWidth', 2);
@@ -7354,6 +7355,11 @@
                     plot(hg, [-0.3 0.3], [0.1 0.1], 'y', 'LineWidth', 3);
                     plot(hg, [-0.15 0.15], [-0.3 -0.3], 'y', 'LineWidth', 2);
                 end
+                app.UI(fIdx).(valueField) = text(ax, 0, -1.12, valueText, ...
+                    'Color', 'w', 'BackgroundColor', [0.02 0.02 0.02], ...
+                    'EdgeColor', [0.85 0.85 0.85], 'Margin', 1, ...
+                    'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', ...
+                    'FontWeight', 'bold', 'FontSize', 12, 'HitTest', 'off');
                 axis(ax, 'equal'); axis(ax, [-1.35 1.35 -1.35 1.35]); axis(ax, 'off');
             end
         end
@@ -7406,6 +7412,7 @@
             app.UI(fIdx).pitchLabel.Text = sprintf('Pitch %+.3f°', pitch);
             app.UI(fIdx).rollLabel.Text  = sprintf('Roll %+.3f°', roll);
             app.UI(fIdx).hdgLabel.Text   = sprintf('Heading %+.3f°', hdg);
+            app.setAttitudeValueText(fIdx, pitch, roll, hdg);
 
             set(app.UI(fIdx).hgPitch, 'Matrix', makehgtform('zrotate', -pitch * pi / 180));
             set(app.UI(fIdx).hgRoll,  'Matrix', makehgtform('zrotate', -roll * pi / 180));
@@ -8449,6 +8456,37 @@
                     app.logCaught(ME_silent, 'attitudeReflow:label');
                 end
             end
+            valueTexts = {'pitchValueText', 'rollValueText', 'hdgValueText'};
+            valueFontSz = max(12, fontSz + 1);
+            for i = 1:numel(valueTexts)
+                try
+                    if isfield(app.UI(fIdx), valueTexts{i})
+                        h = app.UI(fIdx).(valueTexts{i});
+                        if ~isempty(h) && isvalid(h)
+                            h.FontSize = valueFontSz;
+                        end
+                    end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'attitudeReflow:valueText');
+                end
+            end
+        end
+
+        function setAttitudeValueText(app, fIdx, pitch, roll, hdg)
+            fields = {'pitchValueText', 'rollValueText', 'hdgValueText'};
+            values = {sprintf('P %+.2f°', pitch), sprintf('R %+.2f°', roll), sprintf('H %+.2f°', hdg)};
+            for i = 1:numel(fields)
+                try
+                    if isfield(app.UI(fIdx), fields{i})
+                        h = app.UI(fIdx).(fields{i});
+                        if ~isempty(h) && isvalid(h)
+                            h.String = values{i};
+                        end
+                    end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'attitudeValueText');
+                end
+            end
         end
 
         function updateBoardToggleButtons(app)
@@ -9160,6 +9198,7 @@
             UI_temp = struct('panel', {}, 'dataTable', {}, 'spinner', {}, 'currentTimeLabel', {}, 'fileNameLabel', {}, ...
                         'mapAxes', {}, 'altAxes', {}, 'pitchAxes', {}, 'rollAxes', {}, 'hdgAxes', {}, ...
                         'pitchLabel', {}, 'rollLabel', {}, 'hdgLabel', {}, ...
+                        'pitchValueText', {}, 'rollValueText', {}, 'hdgValueText', {}, ...
                         'hMapPath', {}, 'hgMapPlane', {}, 'hAltPath', {}, 'hAltMarker', {}, 'timeLine', {}, ...
                         'hgPitch', {}, 'hgRoll', {}, 'hgHdg', {}, ...
                         'tabGroup', {}, 'plotTabs', {}, 'plotLayouts', {}, 'plotAxes', {}, ...
@@ -9446,9 +9485,9 @@
                 % 자세(Attitude) 그룹
                 grp.attitude = struct( ...
                     'panel',      u.panelAttitude, ...
-                    'pitchAxes',  u.pitchAxes,  'pitchLabel', u.pitchLabel, 'hgPitch', u.hgPitch, ...
-                    'rollAxes',   u.rollAxes,   'rollLabel',  u.rollLabel,  'hgRoll',  u.hgRoll, ...
-                    'hdgAxes',    u.hdgAxes,    'hdgLabel',   u.hdgLabel,   'hgHdg',   u.hgHdg);
+                    'pitchAxes',  u.pitchAxes,  'pitchLabel', u.pitchLabel, 'pitchValueText', u.pitchValueText, 'hgPitch', u.hgPitch, ...
+                    'rollAxes',   u.rollAxes,   'rollLabel',  u.rollLabel,  'rollValueText',  u.rollValueText,  'hgRoll',  u.hgRoll, ...
+                    'hdgAxes',    u.hdgAxes,    'hdgLabel',   u.hdgLabel,   'hdgValueText',   u.hdgValueText,   'hgHdg',   u.hgHdg);
 
                 % 지도/고도(MapAlt) 그룹
                 grp.map = struct( ...
