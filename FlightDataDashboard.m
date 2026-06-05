@@ -8334,9 +8334,97 @@
                 end
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 app.UI(fIdx).dataGrid.Scrollable = 'on';
+                app.reflowAttitudePanel(fIdx);
                 app.setVideoDisplaySize(fIdx);
             catch ME
                 app.logCaught(ME, 'boardReflowColumns');
+            end
+        end
+
+        function reflowAttitudePanel(app, fIdx)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ...
+                        ~isfield(app.UI(fIdx), 'panelAttitudeGrid') || isempty(app.UI(fIdx).panelAttitudeGrid) || ...
+                        ~isvalid(app.UI(fIdx).panelAttitudeGrid) || ...
+                        ~isfield(app.UI(fIdx), 'PanelVisible') || ~app.UI(fIdx).PanelVisible.attitude
+                    return;
+                end
+                grids = {app.UI(fIdx).pitchGaugeGrid, app.UI(fIdx).rollGaugeGrid, app.UI(fIdx).hdgGaugeGrid};
+                if any(cellfun(@(h) isempty(h) || ~isvalid(h), grids))
+                    return;
+                end
+
+                w = app.getAttitudePanelPixelWidth(fIdx);
+                g = app.UI(fIdx).panelAttitudeGrid;
+                if w >= 440
+                    g.RowHeight = {'1x'};
+                    g.ColumnWidth = {'1x', '1x', '1x'};
+                    layoutRC = [1 1; 1 2; 1 3];
+                    fontSz = 16;
+                elseif w >= 220
+                    g.RowHeight = {'1x', '1x'};
+                    g.ColumnWidth = {'1x', '1x'};
+                    layoutRC = [1 1; 1 2; 2 1];
+                    fontSz = 14;
+                else
+                    g.RowHeight = {'1x', '1x', '1x'};
+                    g.ColumnWidth = {'1x'};
+                    layoutRC = [1 1; 2 1; 3 1];
+                    fontSz = 12;
+                end
+
+                for k = 1:3
+                    grids{k}.Layout.Row = layoutRC(k, 1);
+                    grids{k}.Layout.Column = layoutRC(k, 2);
+                end
+                app.setAttitudeLabelFont(fIdx, fontSz);
+            catch ME
+                app.logCaught(ME, 'attitudeReflow');
+            end
+        end
+
+        function w = getAttitudePanelPixelWidth(app, fIdx)
+            w = 0;
+            try
+                if isfield(app.UI(fIdx), 'panelAttitude') && ~isempty(app.UI(fIdx).panelAttitude) && ...
+                        isvalid(app.UI(fIdx).panelAttitude)
+                    w = double(app.UI(fIdx).panelAttitude.Position(3));
+                end
+            catch
+                w = 0;
+            end
+            if w > 1
+                return;
+            end
+            try
+                widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                if ~isempty(widths)
+                    v = widths{1};
+                    if isnumeric(v) && isscalar(v)
+                        w = double(v);
+                    elseif ischar(v) || isstring(v)
+                        w = max(440, app.getFigurePixelWidth() - sum(app.getResponsivePanelWidths()) - 40);
+                    end
+                end
+            catch
+                w = 160;
+            end
+            if w <= 1
+                w = 160;
+            end
+        end
+
+        function setAttitudeLabelFont(app, fIdx, fontSz)
+            labels = {'pitchLabel', 'rollLabel', 'hdgLabel'};
+            for i = 1:numel(labels)
+                try
+                    h = app.UI(fIdx).(labels{i});
+                    if ~isempty(h) && isvalid(h)
+                        h.FontSize = fontSz;
+                    end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'attitudeReflow:label');
+                end
             end
         end
 
@@ -8913,7 +9001,9 @@
                         'hgPitch', {}, 'hgRoll', {}, 'hgHdg', {}, ...
                         'tabGroup', {}, 'plotTabs', {}, 'plotLayouts', {}, 'plotAxes', {}, ...
                         'timeLines', {}, 'timeMarkers', {}, 'plotData', {}, 'xLimListeners', {}, 'altXLimListener', {}, 'vidAxes', {}, 'vidImageHandle', {}, ...
-                        'dataGrid', {}, 'panelAttitude', {}, 'panelMapAlt', {}, 'panelVideo', {}, ...
+                        'dataGrid', {}, 'panelAttitude', {}, 'panelAttitudeGrid', {}, ...
+                        'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
+                        'panelMapAlt', {}, 'panelVideo', {}, ...
                         'btnAtt', {}, 'btnMap', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
@@ -8987,10 +9077,11 @@
                 gGrid.RowHeight = {'1x', '1x', '1x'};
                 gGrid.Padding = [2 2 2 2];
                 gGrid.RowSpacing = 2;
+                UI_temp(fIdx).panelAttitudeGrid = gGrid;
 
-                [UI_temp(fIdx).pitchAxes, UI_temp(fIdx).pitchLabel] = app.createGaugePanel(gGrid, 'Pitch');
-                [UI_temp(fIdx).rollAxes, UI_temp(fIdx).rollLabel]   = app.createGaugePanel(gGrid, 'Roll');
-                [UI_temp(fIdx).hdgAxes, UI_temp(fIdx).hdgLabel]     = app.createGaugePanel(gGrid, 'Heading');
+                [UI_temp(fIdx).pitchAxes, UI_temp(fIdx).pitchLabel, UI_temp(fIdx).pitchGaugeGrid] = app.createGaugePanel(gGrid, 'Pitch');
+                [UI_temp(fIdx).rollAxes, UI_temp(fIdx).rollLabel, UI_temp(fIdx).rollGaugeGrid]   = app.createGaugePanel(gGrid, 'Roll');
+                [UI_temp(fIdx).hdgAxes, UI_temp(fIdx).hdgLabel, UI_temp(fIdx).hdgGaugeGrid]     = app.createGaugePanel(gGrid, 'Heading');
 
                 % --- (c) Col 2: Map (위) + Altitude (아래) ---
                 UI_temp(fIdx).panelMapAlt = uipanel(UI_temp(fIdx).dataGrid, 'BorderType', 'none', 'BackgroundColor', panelColors{fIdx});
@@ -9350,7 +9441,7 @@
             app.refreshGlobalSyncControls();
         end
 
-        function [ax, lbl] = createGaugePanel(~, parentPnl, titleStr)
+        function [ax, lbl, grid] = createGaugePanel(~, parentPnl, titleStr)
             grid = uigridlayout(parentPnl, [2 1]);
             grid.RowHeight = {20, '1x'};
             grid.Padding = [0 0 0 0];
