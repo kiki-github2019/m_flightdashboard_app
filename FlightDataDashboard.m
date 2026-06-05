@@ -78,6 +78,7 @@
         WindowMaxBtn
         BoardToggleButtons
         LayoutPresetButtons
+        HeaderLayoutPresetDD
 
         CoastlineData
         FixedAreaBounds
@@ -166,7 +167,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.95)
+        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~1.0)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -496,8 +497,9 @@
                     st = app.collectCurrentProjectState();
                     app.applyProjectState(st, []);
                     afterState = app.getTestState();
+                    [ok, issues] = app.compareRoundTripLayoutState(beforeState, afterState);
                     varargout{1} = struct('Before', beforeState, 'After', afterState, ...
-                                          'ProjectState', st, 'Ok', true);
+                                          'ProjectState', st, 'Ok', ok, 'Issues', {issues});
                 case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
                 case 'boardOffClearCurrentTab',       app.boardOffClearCurrentTab(varargin{:});
                 case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
@@ -822,6 +824,85 @@
                 end
             catch
                 tf = false;
+            end
+        end
+
+        function [ok, issues] = compareRoundTripLayoutState(app, beforeState, afterState)
+            issues = {};
+            try
+                if ~isequal(logical(beforeState.BoardOffState), logical(afterState.BoardOffState))
+                    issues{end + 1} = 'BoardOffState mismatch';
+                end
+                if abs(double(beforeState.BodyRowSplitRatio) - double(afterState.BodyRowSplitRatio)) > 1e-6
+                    issues{end + 1} = 'BodyRowSplitRatio mismatch';
+                end
+                if ~app.layoutSpecCellsEqual(beforeState.BodyRowHeight, afterState.BodyRowHeight)
+                    issues{end + 1} = 'BodyRowHeight mismatch';
+                end
+                if ~strcmp(char(beforeState.CurrentLayoutPreset), char(afterState.CurrentLayoutPreset))
+                    issues{end + 1} = 'CurrentLayoutPreset mismatch';
+                end
+                if double(beforeState.UserLayoutPresetCount) ~= double(afterState.UserLayoutPresetCount)
+                    issues{end + 1} = 'UserLayoutPresetCount mismatch';
+                end
+                for fIdx = 1:2
+                    fields = {'attitude', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
+                    for k = 1:numel(fields)
+                        nm = fields{k};
+                        try
+                            if logical(beforeState.boards(fIdx).PanelVisible.(nm)) ~= ...
+                                    logical(afterState.boards(fIdx).PanelVisible.(nm))
+                                issues{end + 1} = sprintf('Flight %d PanelVisible.%s mismatch', fIdx, nm);
+                            end
+                        catch
+                            issues{end + 1} = sprintf('Flight %d PanelVisible.%s missing', fIdx, nm);
+                        end
+                    end
+                    if ~app.layoutSpecCellsEqual(beforeState.boards(fIdx).dataGridColumnWidth, ...
+                            afterState.boards(fIdx).dataGridColumnWidth)
+                        issues{end + 1} = sprintf('Flight %d ColumnWidth mismatch', fIdx);
+                    end
+                end
+            catch ME
+                issues{end + 1} = sprintf('roundTrip compare failed: %s', ME.message);
+            end
+            ok = isempty(issues);
+        end
+
+        function tf = layoutSpecCellsEqual(app, a, b)
+            tf = isequal(app.normalizeLayoutSpecCellsForCompare(a), ...
+                         app.normalizeLayoutSpecCellsForCompare(b));
+        end
+
+        function out = normalizeLayoutSpecCellsForCompare(~, in)
+            if isempty(in)
+                out = {};
+                return;
+            end
+            if isstring(in)
+                in = cellstr(in);
+            elseif ischar(in)
+                in = {in};
+            elseif isnumeric(in) || islogical(in)
+                in = num2cell(in);
+            end
+            if ~iscell(in)
+                out = {};
+                return;
+            end
+            in = reshape(in, 1, []);
+            out = cell(size(in));
+            for i = 1:numel(in)
+                v = in{i};
+                if isnumeric(v)
+                    out{i} = sprintf('%.9g', double(v(1)));
+                elseif islogical(v)
+                    out{i} = sprintf('%d', logical(v(1)));
+                elseif isstring(v) || ischar(v)
+                    out{i} = strtrim(char(v));
+                else
+                    out{i} = class(v);
+                end
             end
         end
     end
@@ -6319,6 +6400,7 @@
                 else
                     app.UserLayoutPresets(hit) = preset;
                 end
+                app.updateLayoutPresetButtons();
                 app.markProjectDirtyAndScheduleRefresh('layout-preset-save');
                 app.refreshProjectTab();
             catch ME
@@ -6351,6 +6433,7 @@
                 hit = find(strcmp(names, presetName), 1);
                 if isempty(hit), return; end
                 app.UserLayoutPresets(hit) = [];
+                app.updateLayoutPresetButtons();
                 app.markProjectDirtyAndScheduleRefresh('layout-preset-delete');
                 app.refreshProjectTab();
             catch ME
@@ -6377,6 +6460,7 @@
                 else
                     app.UserLayoutPresets(hit) = preset;
                 end
+                app.updateLayoutPresetButtons();
             catch ME
                 app.logCaught(ME, 'saveCurrentLayoutPresetForTest');
                 rethrow(ME);
@@ -6407,6 +6491,7 @@
                     error('FlightDataDashboard:LayoutPresetNotFound', 'Layout preset not found');
                 end
                 app.UserLayoutPresets(hit) = [];
+                app.updateLayoutPresetButtons();
             catch ME
                 app.logCaught(ME, 'deleteSavedLayoutPresetForTest');
                 rethrow(ME);
@@ -8488,14 +8573,18 @@
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
-                srcW = max(0.5, min(0.95, double(app.BoardOffSourceRatio)));
-                summaryW = 1 - srcW;
-                srcStr = sprintf('%dx', round(srcW * 100));
-                summaryStr = sprintf('%dx', round(summaryW * 100));
-                if activeOff == 1
-                    app.BodyGrid.RowHeight = {0, 0, srcStr, summaryStr};
+                srcW = max(0.5, min(1.0, double(app.BoardOffSourceRatio)));
+                summaryW = max(0, 1 - srcW);
+                srcStr = sprintf('%dx', max(1, round(srcW * 100)));
+                if summaryW <= eps
+                    summarySpec = 0;
                 else
-                    app.BodyGrid.RowHeight = {srcStr, summaryStr, 0, 0};
+                    summarySpec = sprintf('%dx', max(1, round(summaryW * 100)));
+                end
+                if activeOff == 1
+                    app.BodyGrid.RowHeight = {0, 0, srcStr, summarySpec};
+                else
+                    app.BodyGrid.RowHeight = {srcStr, summarySpec, 0, 0};
                 end
             catch ME
                 app.logCaught(ME, 'bodyGridRowHeights');
@@ -8594,7 +8683,9 @@
             try
                 try
                     if isprop(app.UIFigure, 'SelectionType') && strcmpi(char(app.UIFigure.SelectionType), 'open')
+                        app.resetUserColumnWidths(fIdx);
                         app.reflowBoardColumns(fIdx);
+                        app.refreshBoardOffSummaryPanel(fIdx, true);
                         return;
                     end
                 catch
@@ -8747,6 +8838,15 @@
                 app.UserColumnWidths{fIdx} = widths;
             catch ME
                 app.logCaught(ME, 'columnWidth:remember');
+            end
+        end
+
+        function resetUserColumnWidths(app, fIdx)
+            try
+                if fIdx < 1 || fIdx > numel(app.UserColumnWidths), return; end
+                app.UserColumnWidths{fIdx} = [];
+            catch ME
+                app.logCaught(ME, 'columnWidth:reset');
             end
         end
 
@@ -9254,21 +9354,23 @@
 
         function updateLayoutPresetButtons(app)
             try
-                if isempty(app.LayoutPresetButtons), return; end
                 names = app.getLayoutPresetNames();
                 icons = app.getLayoutPresetIcons();
-                for k = 1:min(numel(app.LayoutPresetButtons), numel(names))
-                    btn = app.LayoutPresetButtons(k);
-                    if isempty(btn) || ~isvalid(btn), continue; end
-                    if strcmp(app.CurrentLayoutPreset, names{k})
-                        btn.BackgroundColor = [0.80 0.18 0.18];
-                        btn.FontColor = [1 1 1];
-                    else
-                        btn.BackgroundColor = [0.97 0.97 0.97];
-                        btn.FontColor = [0.08 0.08 0.08];
+                if ~isempty(app.LayoutPresetButtons)
+                    for k = 1:min(numel(app.LayoutPresetButtons), numel(names))
+                        btn = app.LayoutPresetButtons(k);
+                        if isempty(btn) || ~isvalid(btn), continue; end
+                        if strcmp(app.CurrentLayoutPreset, names{k})
+                            btn.BackgroundColor = [0.80 0.18 0.18];
+                            btn.FontColor = [1 1 1];
+                        else
+                            btn.BackgroundColor = [0.97 0.97 0.97];
+                            btn.FontColor = [0.08 0.08 0.08];
+                        end
+                        btn.Text = icons{k};
                     end
-                    btn.Text = icons{k};
                 end
+                app.refreshHeaderLayoutPresetDropdown();
             catch ME
                 app.logCaught(ME, 'layoutPresetButtons');
             end
@@ -10264,7 +10366,7 @@
         function buildHeaderBar(app, mainLayout)
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', [0.94 0.94 0.94], 'BorderType', 'line');
             glHeader = uigridlayout(hHeaderPanel, [1 12]);
-            glHeader.ColumnWidth = {110, 110, 100, 104, 104, 318, '1x', 150, 120, 72, 72, 104};
+            glHeader.ColumnWidth = {110, 110, 100, 104, 104, 430, '1x', 150, 120, 72, 72, 104};
             glHeader.RowHeight = {'1x'};
             glHeader.Padding = [4 4 4 4];
             glHeader.ColumnSpacing = 4;
@@ -10302,8 +10404,8 @@
                 icons = app.getLayoutPresetIcons();
                 pnl = uipanel(parent, 'Title', 'Layout', ...
                     'BackgroundColor', [0.94 0.94 0.94], 'FontSize', 9, 'FontWeight', 'bold');
-                gl = uigridlayout(pnl, [1 numel(names)], ...
-                    'ColumnWidth', repmat({32}, 1, numel(names)), ...
+                gl = uigridlayout(pnl, [1 numel(names) + 1], ...
+                    'ColumnWidth', [repmat({32}, 1, numel(names)), {110}], ...
                     'RowHeight', {'1x'}, ...
                     'Padding', [2 1 2 1], 'ColumnSpacing', 2);
                 tips = {'상단 집중', '하단 집중', '상하 동일', '상단 3:1', '하단 3:1', ...
@@ -10319,8 +10421,53 @@
                     end
                     app.LayoutPresetButtons(k) = btn;
                 end
+                app.HeaderLayoutPresetDD = uidropdown(gl, ...
+                    'Items', {'사용자 프리셋'}, 'Value', '사용자 프리셋', ...
+                    'FontSize', 10, 'ValueChangedFcn', @(~,~) app.applyHeaderLayoutPreset());
+                app.HeaderLayoutPresetDD.Layout.Column = numel(names) + 1;
+                app.refreshHeaderLayoutPresetDropdown();
             catch ME
                 app.logCaught(ME, 'layoutPresetPicker');
+            end
+        end
+
+        function refreshHeaderLayoutPresetDropdown(app)
+            try
+                dd = app.HeaderLayoutPresetDD;
+                if isempty(dd) || ~isvalid(dd), return; end
+                items = {'사용자 프리셋'};
+                if ~isempty(app.UserLayoutPresets) && isstruct(app.UserLayoutPresets)
+                    names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                    items = [items, names];
+                end
+                dd.Value = '사용자 프리셋';
+                dd.Items = items;
+                cur = char(app.CurrentLayoutPreset);
+                if any(strcmp(cur, items))
+                    dd.Value = cur;
+                elseif ~any(strcmp(char(dd.Value), items))
+                    dd.Value = items{1};
+                end
+            catch ME
+                app.logCaught(ME, 'layoutPresetHeaderDropdown');
+            end
+        end
+
+        function applyHeaderLayoutPreset(app)
+            try
+                dd = app.HeaderLayoutPresetDD;
+                if isempty(dd) || ~isvalid(dd), return; end
+                presetName = char(dd.Value);
+                if strcmp(presetName, '사용자 프리셋'), return; end
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, presetName), 1);
+                if isempty(hit), return; end
+                app.applyLayoutUiState(app.UserLayoutPresets(hit).Layout);
+                app.CurrentLayoutPreset = presetName;
+                app.updateLayoutPresetButtons();
+                app.markProjectDirtyAndScheduleRefresh('layout-preset-header-apply');
+            catch ME
+                app.logCaught(ME, 'layoutPresetHeaderApply');
             end
         end
 
@@ -10593,7 +10740,7 @@
                 if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
                     app.UserLayoutPresets = layout.LayoutPresets;
                 end
-                app.BoardOffSourceRatio = max(0.5, min(0.95, double(layout.BoardOffSourceRatio)));
+                app.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
@@ -10666,7 +10813,7 @@
                 bos(2) = false;
             end
             layout.BoardOffState = bos;
-            layout.BoardOffSourceRatio = max(0.5, min(0.95, double(layout.BoardOffSourceRatio)));
+            layout.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
