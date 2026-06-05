@@ -1098,8 +1098,8 @@ function tf = i_buttonStateOk(btn, labelNeedle, enableValue)
 end
 
 function issues = i_validateBodyRows(st, exp, issues)
-    if ~isfield(st, 'BodyRowHeight') || numel(st.BodyRowHeight) ~= 3
-        issues{end + 1} = 'BodyGrid RowHeight is not a 3-row splitter layout';
+    if ~isfield(st, 'BodyRowHeight') || numel(st.BodyRowHeight) ~= 4
+        issues{end + 1} = 'BodyGrid RowHeight is not a 4-row board/summary layout';
         return;
     end
     activeOff = find(st.BoardOffState, 1);
@@ -1114,8 +1114,12 @@ function issues = i_validateBodyRows(st, exp, issues)
         midRow = i_rowWeight(st.BodyRowHeight{2});
         if midRow <= 0
             issues{end + 1} = 'row splitter row is collapsed while both boards are visible';
-        elseif midRow > 20
-            issues{end + 1} = 'row splitter height unexpectedly large';
+        elseif abs(midRow - 4) > 0.1
+            issues{end + 1} = sprintf('row splitter height expected=4 actual=%.3f', midRow);
+        end
+        summaryRow = i_rowWeight(st.BodyRowHeight{4});
+        if summaryRow ~= 0
+            issues{end + 1} = 'hidden summary row consumes height while both boards are visible';
         end
         return;
     end
@@ -1125,13 +1129,15 @@ function issues = i_validateBodyRows(st, exp, issues)
     row1 = i_rowWeight(st.BodyRowHeight{1});
     row2 = i_rowWeight(st.BodyRowHeight{2});
     row3 = i_rowWeight(st.BodyRowHeight{3});
-    if row2 ~= 0
-        issues{end + 1} = 'row splitter row consumes height during board-off';
-    end
-    if activeOff == 1 && row3 <= row1
-        issues{end + 1} = 'lower source board is not expanded when upper board is off';
-    elseif activeOff == 2 && row1 <= row3
-        issues{end + 1} = 'upper source board is not expanded when lower board is off';
+    row4 = i_rowWeight(st.BodyRowHeight{4});
+    if activeOff == 1
+        if row1 ~= 0 || row2 ~= 0 || row3 <= 0 || row4 <= 0
+            issues{end + 1} = sprintf('upper-off rows invalid: [%g %g %g %g]', row1, row2, row3, row4);
+        end
+    elseif activeOff == 2
+        if row1 <= 0 || row2 <= 0 || row3 ~= 0 || row4 ~= 0
+            issues{end + 1} = sprintf('lower-off rows invalid: [%g %g %g %g]', row1, row2, row3, row4);
+        end
     end
 end
 

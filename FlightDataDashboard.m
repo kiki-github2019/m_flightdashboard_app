@@ -45,6 +45,7 @@
         MAX_TABS          = 10
         MAX_PLOTS_PER_TAB = 12
         PLOT_ROW_HEIGHT   = 150     % H영역 내 각 플롯 패널 높이(px)
+        LAYOUT_SPLITTER_THICKNESS = 4
         MOCK_STEP_COUNT   = 200     % 모의 데이터 스텝 수
         VIDEO_THROTTLE_S  = 0.05    % 비디오 프레임 갱신 쓰로틀 간격(초)
         SLIDER_THROTTLE_S = 0.03    % [V3.15 항목 1] 슬라이더 갱신 최소 간격(초) - 33fps 상한
@@ -8452,7 +8453,7 @@
                 % 0-width columns visible as blank space.
                 app.reflowBoardColumns(fIdx);
                 app.reflowBoardColumns(sourceIdx);
-                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source 가 대부분의 height 사용.
+                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source/summary 별도 행 사용.
                 app.applyBodyGridRowHeights();
                 app.updateBoardToggleButtons();
                 drawnow;
@@ -8462,7 +8463,7 @@
         end
 
         function applyBodyGridRowHeights(app)
-            % [L1 C-1/L4] row splitter 포함 3-row bodyGrid.
+            % [L1 C-1/L4] row splitter/off-summary 포함 4-row bodyGrid.
             try
                 if isempty(app.BodyGrid) || ~isvalid(app.BodyGrid), return; end
                 activeOff = find(app.BoardOffState, 1);
@@ -8470,20 +8471,15 @@
                     app.setUiVisible(app.BodyRowSplitter, true);
                     topW = max(0.2, min(0.8, double(app.BodyRowSplitRatio)));
                     botW = 1 - topW;
-                    app.BodyGrid.RowHeight = {sprintf('%dx', round(topW * 100)), 5, sprintf('%dx', round(botW * 100))};
+                    app.BodyGrid.RowHeight = {sprintf('%dx', round(topW * 100)), ...
+                        app.LAYOUT_SPLITTER_THICKNESS, sprintf('%dx', round(botW * 100)), 0};
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
-                srcW = max(0.5, min(0.9, double(app.BoardOffSourceRatio)));
-                offW = 1 - srcW;
-                srcStr = sprintf('%dx', round(srcW * 10));
-                offStr = sprintf('%dx', round(offW * 10));
-                % activeOff == 1 → row 1 is off-summary, row 3 is source
-                % activeOff == 2 → row 1 is source,      row 3 is off-summary
                 if activeOff == 1
-                    app.BodyGrid.RowHeight = {offStr, 0, srcStr};
+                    app.BodyGrid.RowHeight = {0, 0, '1x', '1x'};
                 else
-                    app.BodyGrid.RowHeight = {srcStr, 0, offStr};
+                    app.BodyGrid.RowHeight = {'1x', '1x', 0, 0};
                 end
             catch ME
                 app.logCaught(ME, 'bodyGridRowHeights');
@@ -8498,6 +8494,13 @@
             row = 1;
             if fIdx == 2
                 row = 3;
+            end
+        end
+
+        function row = getBoardOffSummaryGridRow(~, fIdx)
+            row = 4;
+            if fIdx == 2
+                row = 2;
             end
         end
 
@@ -9627,7 +9630,7 @@
             pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
                 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', [0.98 0.98 0.98], ...
                 'Visible', 'off');
-            pnl.Layout.Row = app.getBodyGridRowForFlight(fIdx);
+            pnl.Layout.Row = app.getBoardOffSummaryGridRow(fIdx);
             pnl.Layout.Column = 1;
 
             root = uigridlayout(pnl, [1 2]);
@@ -9694,9 +9697,9 @@
 
             % --- Body (2 비행경로 vertical stack) ---
             scrollBody = uipanel(mainLayout, 'Scrollable', 'on', 'BorderType', 'none', 'BackgroundColor', [0.94 0.94 0.96]);
-            bodyGrid = uigridlayout(scrollBody, [3 1]);
+            bodyGrid = uigridlayout(scrollBody, [4 1]);
             bodyGrid.ColumnWidth = {'1x'};
-            bodyGrid.RowHeight = {'1x', 5, '1x'};
+            bodyGrid.RowHeight = {'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0};
             bodyGrid.Padding = [2 2 2 2];
             bodyGrid.RowSpacing = 2;
             app.BodyGrid = bodyGrid;   % [L1 C-1] retain for runtime RowHeight reflow
@@ -10266,7 +10269,7 @@
                 'BoardOffState', [false, false], ...
                 'BoardOffSourceRatio', 0.9, ...
                 'BodyRowSplitRatio', 0.5, ...
-                'BodyRowHeight', {{'1x', 5, '1x'}}, ...
+                'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
                 'PanelVisible', [panel, panel]);
             layout.ColumnWidth = cell(1, 2);
             layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
@@ -10593,9 +10596,10 @@
             panel = orderedPanel;
         end
 
-        function rows = normalizeBodyRowHeight(~, rows)
+        function rows = normalizeBodyRowHeight(app, rows)
+            defaultRows = {'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0};
             if nargin < 2 || isempty(rows)
-                rows = {'1x', 5, '1x'};
+                rows = defaultRows;
                 return;
             end
             if isstring(rows)
@@ -10606,16 +10610,18 @@
                 rows = num2cell(rows);
             end
             if ~iscell(rows)
-                rows = {'1x', 5, '1x'};
+                rows = defaultRows;
                 return;
             end
             if numel(rows) == 2
-                rows = {rows{1}, 5, rows{2}};
-            elseif numel(rows) ~= 3
-                rows = {'1x', 5, '1x'};
+                rows = {rows{1}, app.LAYOUT_SPLITTER_THICKNESS, rows{2}, 0};
+            elseif numel(rows) == 3
+                rows = {rows{1}, app.LAYOUT_SPLITTER_THICKNESS, rows{3}, 0};
+            elseif numel(rows) ~= 4
+                rows = defaultRows;
                 return;
             end
-            rows = reshape(rows, 1, 3);
+            rows = reshape(rows, 1, 4);
         end
 
         function allWidths = normalizeLayoutColumnWidth(app, allWidths)
