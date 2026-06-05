@@ -149,6 +149,8 @@
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
+        BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
+        BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
         % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
 
@@ -8108,10 +8110,38 @@
                 % 0-width columns visible as blank space.
                 app.reflowBoardColumns(fIdx);
                 app.reflowBoardColumns(sourceIdx);
+                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source 가 70%, summary 30%.
+                app.applyBodyGridRowHeights();
                 app.updateBoardToggleButtons();
                 drawnow;
             catch ME
                 app.logCaught(ME, 'boardToggle');
+            end
+        end
+
+        function applyBodyGridRowHeights(app)
+            % [L1 C-1] off 가 활성화된 경우 source 보드가 가용 height 의 BoardOffSourceRatio
+            % 만큼 차지하도록 RowHeight 비율을 동적으로 변경. off 없음 → {'1x','1x'} 평등.
+            try
+                if isempty(app.BodyGrid) || ~isvalid(app.BodyGrid), return; end
+                activeOff = find(app.BoardOffState, 1);
+                if isempty(activeOff)
+                    app.BodyGrid.RowHeight = {'1x', '1x'};
+                    return;
+                end
+                srcW = max(0.5, min(0.9, double(app.BoardOffSourceRatio)));
+                offW = 1 - srcW;
+                srcStr = sprintf('%dx', round(srcW * 10));
+                offStr = sprintf('%dx', round(offW * 10));
+                % activeOff == 1 → row 1 is off-summary, row 2 is source
+                % activeOff == 2 → row 1 is source,      row 2 is off-summary
+                if activeOff == 1
+                    app.BodyGrid.RowHeight = {offStr, srcStr};
+                else
+                    app.BodyGrid.RowHeight = {srcStr, offStr};
+                end
+            catch ME
+                app.logCaught(ME, 'bodyGridRowHeights');
             end
         end
 
@@ -8797,6 +8827,7 @@
             bodyGrid.RowHeight = {'1x', '1x'};
             bodyGrid.Padding = [2 2 2 2];
             bodyGrid.RowSpacing = 5;
+            app.BodyGrid = bodyGrid;   % [L1 C-1] retain for runtime RowHeight reflow
 
             titleStrs = {'Flight Data 1', 'Flight Data 2'};
             panelColors = {[0.98 0.98 0.98], [0.98 0.98 0.98]};
