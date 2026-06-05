@@ -165,7 +165,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
+        BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.7)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -8480,10 +8480,14 @@
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
+                srcW = max(0.5, min(0.7, double(app.BoardOffSourceRatio)));
+                summaryW = 1 - srcW;
+                srcStr = sprintf('%dx', round(srcW * 100));
+                summaryStr = sprintf('%dx', round(summaryW * 100));
                 if activeOff == 1
-                    app.BodyGrid.RowHeight = {0, 0, '1x', '1x'};
+                    app.BodyGrid.RowHeight = {0, 0, srcStr, summaryStr};
                 else
-                    app.BodyGrid.RowHeight = {'1x', '1x', 0, 0};
+                    app.BodyGrid.RowHeight = {srcStr, summaryStr, 0, 0};
                 end
             catch ME
                 app.logCaught(ME, 'bodyGridRowHeights');
@@ -9091,6 +9095,10 @@
                         app.setBoardOffDirect(0);
                         app.BodyRowSplitRatio = 0.75;
                         app.setBodyGridRowsDirect({'3x', '1x'});
+                    case 'dual-3:1-bot'
+                        app.setBoardOffDirect(0);
+                        app.BodyRowSplitRatio = 0.25;
+                        app.setBodyGridRowsDirect({'1x', '3x'});
                     case 'data-focus'
                         app.setBoardOffDirect(0);
                         for k = 1:2
@@ -9123,6 +9131,8 @@
                 app.applyBodyGridRowHeights();
                 if strcmp(presetName, 'dual-3:1-top')
                     app.setBodyGridRowsDirect({'3x', '1x'});
+                elseif strcmp(presetName, 'dual-3:1-bot')
+                    app.setBodyGridRowsDirect({'1x', '3x'});
                 end
                 app.updateBoardToggleButtons();
                 app.updateLayoutPresetButtons();
@@ -9207,11 +9217,11 @@
 
         function names = getLayoutPresetNames(~)
             names = {'single-top', 'single-bot', 'dual-equal', 'dual-3:1-top', ...
-                     'data-focus', 'gauges-only', 'map-focus', 'video-focus'};
+                     'dual-3:1-bot', 'data-focus', 'gauges-only', 'map-focus', 'video-focus'};
         end
 
         function icons = getLayoutPresetIcons(~)
-            icons = {'□↑', '□↓', '▣', '▥', 'D', 'G', 'M', 'V'};
+            icons = {'□↑', '□↓', '▣', '▥', '▧', 'D', 'G', 'M', 'V'};
         end
 
         function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
@@ -9831,7 +9841,9 @@
                     'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
                     'info', true, 'dataView', true);
 
-                % [Layout] 자세 | splitter | 지도/고도 | splitter | 정보 | splitter | plot 데이터 | legacy H/I
+                % [Layout dataGrid columns]
+                % 1 attitude | 2 splitter | 3 map/alt | 4 splitter |
+                % 5 info table | 6 splitter | 7 plot data | 8 reserved legacy H/I
                 UI_temp(fIdx).dataGrid = uigridlayout(fGrid, [1 8]);
                 UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, 0, 0, panelWidths(3), 4, '1x', 0};
                 UI_temp(fIdx).dataGrid.RowHeight = {'1x'};
@@ -10193,7 +10205,7 @@
         function buildHeaderBar(app, mainLayout)
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', [0.94 0.94 0.94], 'BorderType', 'line');
             glHeader = uigridlayout(hHeaderPanel, [1 12]);
-            glHeader.ColumnWidth = {110, 110, 100, 104, 104, 282, '1x', 150, 120, 72, 72, 104};
+            glHeader.ColumnWidth = {110, 110, 100, 104, 104, 318, '1x', 150, 120, 72, 72, 104};
             glHeader.RowHeight = {'1x'};
             glHeader.Padding = [4 4 4 4];
             glHeader.ColumnSpacing = 4;
@@ -10227,15 +10239,15 @@
 
         function buildLayoutPresetPicker(app, parent)
             try
-                pnl = uipanel(parent, 'Title', 'Layout', ...
-                    'BackgroundColor', [0.94 0.94 0.94], 'FontSize', 9, 'FontWeight', 'bold');
-                gl = uigridlayout(pnl, [1 8], ...
-                    'ColumnWidth', repmat({32}, 1, 8), ...
-                    'RowHeight', {'1x'}, ...
-                    'Padding', [2 1 2 1], 'ColumnSpacing', 2);
                 names = app.getLayoutPresetNames();
                 icons = app.getLayoutPresetIcons();
-                tips = {'상단 집중', '하단 집중', '상하 동일', '상단 3:1', ...
+                pnl = uipanel(parent, 'Title', 'Layout', ...
+                    'BackgroundColor', [0.94 0.94 0.94], 'FontSize', 9, 'FontWeight', 'bold');
+                gl = uigridlayout(pnl, [1 numel(names)], ...
+                    'ColumnWidth', repmat({32}, 1, numel(names)), ...
+                    'RowHeight', {'1x'}, ...
+                    'Padding', [2 1 2 1], 'ColumnSpacing', 2);
+                tips = {'상단 집중', '하단 집중', '상하 동일', '상단 3:1', '하단 3:1', ...
                         '데이터 집중', '자세 집중', '지도 집중', '비디오 집중'};
                 app.LayoutPresetButtons = gobjects(1, numel(names));
                 for k = 1:numel(names)
@@ -10312,7 +10324,7 @@
             layout = struct( ...
                 'CurrentLayoutPreset', 'custom', ...
                 'BoardOffState', [false, false], ...
-                'BoardOffSourceRatio', 0.9, ...
+                'BoardOffSourceRatio', 0.7, ...
                 'BodyRowSplitRatio', 0.5, ...
                 'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
                 'PanelVisible', [panel, panel]);
@@ -10515,7 +10527,7 @@
                 if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
                     app.UserLayoutPresets = layout.LayoutPresets;
                 end
-                app.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+                app.BoardOffSourceRatio = max(0.5, min(0.7, double(layout.BoardOffSourceRatio)));
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
@@ -10582,7 +10594,7 @@
                 bos(2) = false;
             end
             layout.BoardOffState = bos;
-            layout.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+            layout.BoardOffSourceRatio = max(0.5, min(0.7, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
