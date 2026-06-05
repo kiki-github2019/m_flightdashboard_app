@@ -281,7 +281,7 @@
                             delete(app.UI(fIdx).vidControlDialog);
                         end
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'delete:vid-control-dialog');
                     end
                     % VideoReader 정리
                     try
@@ -290,7 +290,7 @@
                             delete(app.VideoState(fIdx).videoReader);
                         end
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'delete:video-reader');
                     end
                     % 진행 중 비동기 future 취소
                     try
@@ -312,7 +312,7 @@
                 app.AsyncGen = [0, 0];   % [V3.21 #1-A] generation reset
                 app.LastDisplayedFrame = [0, 0];   % [PATCH] 조기반환 키 리셋
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:cache-reset');
             end
 
             % [PATCH / V3.22 #6] 워커 persistent VR 명시 해제 → 파일락 즉시 반환
@@ -321,7 +321,7 @@
                     parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:worker-cache-cleanup');
             end
 
             % [Phase 1 D2] stop debounce + autosave timers before tearing down UI
@@ -335,7 +335,7 @@
                     app.EditApplyTimer = [];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:edit-apply-timer');
             end
             try
                 if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
@@ -347,7 +347,7 @@
                     app.AutosaveTimer = [];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:autosave-timer');
             end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
@@ -355,7 +355,7 @@
                     app.EditDialog = [];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:edit-dialog');
             end
 
             try
@@ -363,7 +363,7 @@
                     delete(app.UIFigure);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'delete:uifigure');
             end
         end
 
@@ -9606,11 +9606,12 @@ end
 
 function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
     % [PATCH] 다중 슬롯 LRU 캐시 (채널별 VR 독립 보유, 파일락/메모리누수 방지)
-    persistent cache   % struct array: .path, .vr, .lastUse
+    persistent cache   % struct array: .path, .sig, .vr, .lastUse
     img = [];
     if nargin < 4 || isempty(maxSlots) || maxSlots < 1
         maxSlots = 4;
     end
+    maxSlots = max(1, round(double(maxSlots)));
 
     % [PATCH] cleanup 분기: 모든 슬롯 VR delete 후 캐시 비우기
     if ischar(filePath) && strcmp(filePath, '__CLEANUP__')
@@ -9629,12 +9630,40 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
     end
 
     try
-        if isempty(cache), cache = struct('path',{},'vr',{},'lastUse',{}); end
+        fileSig = asyncDecodeFileSignature(filePath);
+        if isempty(fileSig), return; end
+        if isempty(cache), cache = struct('path',{},'sig',{},'vr',{},'lastUse',{}); end
+        if ~isempty(cache) && ~isfield(cache, 'sig')
+            for k = 1:numel(cache)
+                try
+                    if isfield(cache, 'vr') && ~isempty(cache(k).vr) && isvalid(cache(k).vr)
+                        delete(cache(k).vr);
+                    end
+                catch
+                end
+            end
+            cache = struct('path',{},'sig',{},'vr',{},'lastUse',{});
+        end
+
+        % Same path can point to a replaced AVI. Drop stale readers before
+        % the normal lookup so workers never decode from an old file handle.
+        for k = numel(cache):-1:1
+            if strcmp(cache(k).path, filePath) && ~strcmp(cache(k).sig, fileSig)
+                try
+                    if ~isempty(cache(k).vr) && isvalid(cache(k).vr)
+                        delete(cache(k).vr);
+                    end
+                catch
+                end
+                cache(k) = [];
+            end
+        end
 
         % 슬롯 탐색
         idx = 0;
         for k = 1:numel(cache)
-            if strcmp(cache(k).path, filePath) && ~isempty(cache(k).vr) && isvalid(cache(k).vr)
+            if strcmp(cache(k).path, filePath) && strcmp(cache(k).sig, fileSig) && ...
+                    ~isempty(cache(k).vr) && isvalid(cache(k).vr)
                 idx = k; break;
             end
         end
@@ -9657,7 +9686,8 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
                 end
                 cache(victim) = [];
             end
-            newSlot = struct('path', filePath, 'vr', VideoReader(filePath), 'lastUse', uint64(0));
+            newSlot = struct('path', filePath, 'sig', fileSig, ...
+                             'vr', VideoReader(filePath), 'lastUse', uint64(0));
             cache(end+1) = newSlot;
             idx = numel(cache);
         end
@@ -9674,6 +9704,22 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
         end
     catch
         img = [];
+    end
+end
+
+function sig = asyncDecodeFileSignature(filePath)
+    sig = '';
+    try
+        if isempty(filePath) || ~isfile(filePath)
+            return;
+        end
+        info = dir(filePath);
+        if isempty(info)
+            return;
+        end
+        sig = sprintf('%s|%d|%.17g', char(filePath), info(1).bytes, info(1).datenum);
+    catch
+        sig = char(filePath);
     end
 end
 
