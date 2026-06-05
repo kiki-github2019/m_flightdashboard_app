@@ -21,6 +21,10 @@
     %        → 향후 +flightdash 패키지 마이그레이션 옵션 확보
     %   - #7 createLayout 분해: buildHeaderBar 추출 + 비행경로 루프 섹션 가이드 추가
     %
+    %   [Layout Improvement L1~L4 Applied - 2026-06-06]
+    %   - board-off 4-row bodyGrid, 4px splitters, map/altitude independent toggles
+    %   - responsive attitude gauge reflow, layout preset picker, draggable splitters
+    %
     %   [V3.21 #1-A] Generation counter (AsyncGen): 매 startAsyncDecode 호출 시
     %     증가, future에 myGen 캡처 → onAsyncDecodeComplete에서 비교하여 stale
     %     결과 폐기. 같은 frame이라도 generation mismatch면 무시 → race 차단.
@@ -8552,6 +8556,7 @@
                 app.updateLayoutPresetButtons();
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(ratio)));
                 app.applyBodyGridRowHeights();
+                drawnow limitrate;
             catch ME
                 app.logCaught(ME, 'rowSplitter:setRatio');
             end
@@ -8637,6 +8642,7 @@
                 live{leftCol} = round(newLeft);
                 live{rightCol} = round(newRight);
                 dg.ColumnWidth = live;
+                app.refreshAfterColumnWidthChange(fIdx, false);
             catch ME
                 app.logCaught(ME, 'columnSplitter:motion');
             end
@@ -8644,11 +8650,17 @@
 
         function stopColumnSplitterDrag(app)
             try
+                fIdx = 0;
+                try
+                    fIdx = app.DraggedColumnSplitterInfo.fIdx;
+                catch
+                end
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     app.UIFigure.WindowButtonMotionFcn = '';
                     app.UIFigure.WindowButtonUpFcn = '';
                     if isprop(app.UIFigure, 'Pointer'), app.UIFigure.Pointer = 'arrow'; end
                 end
+                app.refreshAfterColumnWidthChange(fIdx, true);
                 app.IsDraggingColumnSplitter = false;
                 app.ColumnSplitterStartWidths = {};
             catch ME
@@ -8686,8 +8698,30 @@
                 cw{rightCol} = round(newRight);
                 dg.ColumnWidth = cw;
                 app.updateColumnSplitterVisibility(fIdx, cw);
+                app.refreshAfterColumnWidthChange(fIdx, true);
             catch ME
                 app.logCaught(ME, 'columnSplitter:testDelta');
+            end
+        end
+
+        function refreshAfterColumnWidthChange(app, fIdx, forceSummary)
+            if nargin < 3, forceSummary = false; end
+            try
+                if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI) || ...
+                        ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ...
+                        ~isvalid(app.UI(fIdx).dataGrid)
+                    return;
+                end
+                widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                app.updateColumnSplitterVisibility(fIdx, widths);
+                app.reflowAttitudePanel(fIdx);
+                activeOff = find(app.BoardOffState, 1);
+                if forceSummary && ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
+                    app.refreshBoardOffSummaryPanel(activeOff, true);
+                end
+                drawnow limitrate;
+            catch ME
+                app.logCaught(ME, 'columnSplitter:postReflow');
             end
         end
 
@@ -8926,6 +8960,17 @@
 
         function w = getAttitudePanelPixelWidth(app, fIdx)
             w = 0;
+            try
+                if app.IsDraggingColumnSplitter && app.DraggedColumnSplitterInfo.fIdx == fIdx
+                    widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                    if ~isempty(widths) && isnumeric(widths{1}) && isscalar(widths{1})
+                        w = double(widths{1});
+                        return;
+                    end
+                end
+            catch
+                w = 0;
+            end
             try
                 if isfield(app.UI(fIdx), 'panelAttitude') && ~isempty(app.UI(fIdx).panelAttitude) && ...
                         isvalid(app.UI(fIdx).panelAttitude)
