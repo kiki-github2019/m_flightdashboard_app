@@ -1831,12 +1831,14 @@
             % [V3.22 #1] silent/non-silent 모두 ring buffer에 보관
             % - DebugMode일 때만 콘솔 출력 (silent 태그는 콘솔 출력 생략)
             % - ring buffer는 항상 유지 → app.dumpErrorLog()로 사후 조사
-            % [Medium] delete 진행 중에는 콘솔 출력 강제 silent — handle invalid 잡음 차단.
+            % [Medium] delete 진행 중에는 콘솔만 억제하고, ring buffer 태그는 보존한다.
+            suppressConsole = false;
             try
                 if ~isempty(app) && isvalid(app) && app.IsDeleting
-                    tag = 'silent';
+                    suppressConsole = true;
                 end
             catch
+                suppressConsole = true;
             end
             try
                 % stack은 길이가 다른 struct array일 수 있어 cell로 wrap → 차원 불일치 회피
@@ -1863,7 +1865,7 @@
                 % ring buffer 자체가 실패해도 절대 throw 안 함
             end
 
-            if ~app.DebugMode, return; end
+            if ~app.DebugMode || suppressConsole, return; end
             % silent 태그는 buffer만 남기고 콘솔에는 안 찍음 (기존 동작 유지)
             if strcmpi(tag, 'silent'), return; end
             fprintf('[%s] %s: %s\n', tag, ME.identifier, ME.message);
