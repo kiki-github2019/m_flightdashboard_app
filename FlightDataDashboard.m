@@ -9620,17 +9620,8 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
 
     % [PATCH] cleanup 분기: 모든 슬롯 VR delete 후 캐시 비우기
     if ischar(filePath) && strcmp(filePath, '__CLEANUP__')
-        if ~isempty(cache)
-            for k = 1:numel(cache)
-                try
-                    if ~isempty(cache(k).vr) && isvalid(cache(k).vr)
-                        delete(cache(k).vr);
-                    end
-                catch
-                end
-            end
-        end
-        cache = [];
+        asyncClearDecodeCache(cache);
+        cache = struct('path',{},'sig',{},'vr',{},'lastUse',{});
         return;
     end
 
@@ -9639,14 +9630,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
         if isempty(fileSig), return; end
         if isempty(cache), cache = struct('path',{},'sig',{},'vr',{},'lastUse',{}); end
         if ~isempty(cache) && ~isfield(cache, 'sig')
-            for k = 1:numel(cache)
-                try
-                    if isfield(cache, 'vr') && ~isempty(cache(k).vr) && isvalid(cache(k).vr)
-                        delete(cache(k).vr);
-                    end
-                catch
-                end
-            end
+            asyncClearDecodeCache(cache);
             cache = struct('path',{},'sig',{},'vr',{},'lastUse',{});
         end
 
@@ -9654,12 +9638,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
         % the normal lookup so workers never decode from an old file handle.
         for k = numel(cache):-1:1
             if strcmp(cache(k).path, filePath) && ~strcmp(cache(k).sig, fileSig)
-                try
-                    if ~isempty(cache(k).vr) && isvalid(cache(k).vr)
-                        delete(cache(k).vr);
-                    end
-                catch
-                end
+                asyncDeleteVideoReaderQuietly(cache(k).vr);
                 cache(k) = [];
             end
         end
@@ -9685,10 +9664,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
                     end
                 end
                 [~, victim] = max(ages);
-                try
-                    delete(cache(victim).vr);
-                catch
-                end
+                asyncDeleteVideoReaderQuietly(cache(victim).vr);
                 cache(victim) = [];
             end
             newSlot = struct('path', filePath, 'sig', fileSig, ...
@@ -9709,6 +9685,24 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
         end
     catch
         img = [];
+    end
+end
+
+function asyncClearDecodeCache(cache)
+    if isempty(cache), return; end
+    for k = 1:numel(cache)
+        if isfield(cache, 'vr')
+            asyncDeleteVideoReaderQuietly(cache(k).vr);
+        end
+    end
+end
+
+function asyncDeleteVideoReaderQuietly(vr)
+    try
+        if ~isempty(vr) && isvalid(vr)
+            delete(vr);
+        end
+    catch
     end
 end
 
