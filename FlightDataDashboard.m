@@ -100,6 +100,15 @@
         IsDeleting          = false         % [Stabilization P2] delete/close 재진입 가드
         HISplitterFIdx      = 0             % [PATCH UX-3] H/I 경계 드래그 중인 채널
         IsDraggingSplitter  = false         % [PATCH UX-3b] splitter 드래그 상태 플래그
+        BodyRowSplitter     = []            % [Layout] upper/lower board row splitter
+        IsDraggingRowSplitter = false       % [Layout] row splitter drag state
+        BodyRowSplitRatio   = 0.5           % [Layout] top board ratio in normal mode
+        RowSplitterStartPoint = [0, 0]      % [Layout] drag start pointer
+        RowSplitterStartRatio = 0.5         % [Layout] ratio at drag start
+        IsDraggingColumnSplitter = false    % [Layout] general dashboard column splitter drag state
+        DraggedColumnSplitterInfo = struct('fIdx', 0, 'leftCol', 0, 'rightCol', 0)
+        ColumnSplitterStartPoint = [0, 0]
+        ColumnSplitterStartWidths = {}
         FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
         FrameCacheKeys      = {[], []}      % [V3.13 C-1] 비행경로별 캐시 키 순서 (LRU)
         DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
@@ -151,7 +160,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
+        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -167,6 +176,7 @@
         EDProjectConfirmCloseCB = []
         EDProjectLastSaveLbl = []
         EDProjectLayoutLbl   = []
+        EDProjectLayoutPresetDD = []
         EDFilesPathLbl       = struct()
         EDSyncF1Time         = []
         EDSyncF2Time         = []
@@ -280,6 +290,9 @@
             % [Stabilization P2] re-entry guard so partial cleanup cannot run twice
             if app.IsDeleting, return; end
             app.IsDeleting = true;
+            app.IsDraggingSplitter = false;
+            app.IsDraggingRowSplitter = false;
+            app.IsDraggingColumnSplitter = false;
             app.stopVideoDialogFollowTimer();
             app.disableAxesInteractionsBeforeDelete(app.UIFigure, 'delete:uifigure-axes');
             try
@@ -450,6 +463,8 @@
                         case 'attitude', btn = app.UI(fIdx).btnAtt;
                         case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;
                         case 'altonly',  btn = app.UI(fIdx).btnAlt;
+                        case 'info',     btn = app.UI(fIdx).btnInfo;
+                        case {'dataview', 'plot'}, btn = app.UI(fIdx).btnDataView;
                         case 'video',    btn = app.UI(fIdx).btnVid;
                         otherwise
                             error('FlightDataDashboard:UnknownPanelToggle', ...
@@ -465,6 +480,14 @@
                 case 'togglePanel',                   app.togglePanel(varargin{:});
                 case 'toggleBoardVisibility',         app.toggleBoardVisibility(varargin{:});
                 case 'applyLayoutPreset',             app.applyLayoutPreset(varargin{:});
+                case 'setBodyRowSplitRatio',          app.setBodyRowSplitRatio(varargin{:});
+                case 'simulateColumnSplitterDrag',     app.simulateColumnSplitterDrag(varargin{:});
+                case 'saveCurrentLayoutPreset',        app.saveCurrentLayoutPresetForTest(varargin{:});
+                case 'applySavedLayoutPreset',         app.applySavedLayoutPresetForTest(varargin{:});
+                case 'deleteSavedLayoutPreset',        app.deleteSavedLayoutPresetForTest(varargin{:});
+                case 'roundTripProjectLayoutState'
+                    st = app.collectCurrentProjectState();
+                    app.applyProjectState(st, []);
                 case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
                 case 'boardOffClearCurrentTab',       app.boardOffClearCurrentTab(varargin{:});
                 case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
@@ -496,10 +519,25 @@
             state.BoardOffState = logical(app.BoardOffState);
             state.CurrentLayoutPreset = char(app.CurrentLayoutPreset);
             state.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
+            state.BodyRowSplitRatio = double(app.BodyRowSplitRatio);
+            state.UserLayoutPresetCount = numel(app.UserLayoutPresets);
+            state.UserLayoutPresetNames = {};
+            if ~isempty(app.UserLayoutPresets) && isstruct(app.UserLayoutPresets)
+                try
+                    state.UserLayoutPresetNames = arrayfun(@(p) char(p.Name), ...
+                        app.UserLayoutPresets, 'UniformOutput', false);
+                catch ME
+                    app.logCaught(ME, 'test:get-layout-preset-names');
+                end
+            end
+            state.BodyRowSplitterVisible = false;
             state.BodyRowHeight = {};
             try
                 if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
                     state.BodyRowHeight = app.BodyGrid.RowHeight;
+                end
+                if ~isempty(app.BodyRowSplitter) && isvalid(app.BodyRowSplitter)
+                    state.BodyRowSplitterVisible = app.isUiVisible(app.BodyRowSplitter);
                 end
             catch ME
                 app.logCaught(ME, 'test:get-body-row-height');
@@ -544,6 +582,10 @@
                 'infoColumnHidden', false, ...
                 'plotColumnHidden', false, ...
                 'splitterColumnHidden', false, ...
+                'columnSplitterVisible', [], ...
+                'attitudeGridRows', 0, ...
+                'attitudeGridColumns', 0, ...
+                'attitudeLabelFontSize', NaN, ...
                 'plotTabCount', 0, ...
                 'selectedPlotTab', 0, ...
                 'plotCounts', [], ...
@@ -584,8 +626,20 @@
                 if isfield(app.UI(fIdx), 'panelMapAlt')
                     s.sideHandleVisible.map = app.isUiVisible(app.UI(fIdx).panelMapAlt);
                 end
-                if isfield(app.UI(fIdx), 'panelVideo')
+                if isfield(app.UI(fIdx), 'vidViewerDialog') && ~isempty(app.UI(fIdx).vidViewerDialog) ...
+                        && isvalid(app.UI(fIdx).vidViewerDialog)
+                    s.sideHandleVisible.video = app.isUiVisible(app.UI(fIdx).vidViewerDialog);
+                elseif isfield(app.UI(fIdx), 'panelVideo')
                     s.sideHandleVisible.video = app.isUiVisible(app.UI(fIdx).panelVideo);
+                end
+                if isfield(app.UI(fIdx), 'panelAttitudeGrid') && ~isempty(app.UI(fIdx).panelAttitudeGrid) ...
+                        && isvalid(app.UI(fIdx).panelAttitudeGrid)
+                    s.attitudeGridRows = numel(app.UI(fIdx).panelAttitudeGrid.RowHeight);
+                    s.attitudeGridColumns = numel(app.UI(fIdx).panelAttitudeGrid.ColumnWidth);
+                end
+                if isfield(app.UI(fIdx), 'pitchLabel') && ~isempty(app.UI(fIdx).pitchLabel) ...
+                        && isvalid(app.UI(fIdx).pitchLabel)
+                    s.attitudeLabelFontSize = double(app.UI(fIdx).pitchLabel.FontSize);
                 end
 
                 s.dataLoaded = ~isempty(app.Models(fIdx).rawData);
@@ -611,10 +665,23 @@
                 if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
                     widths = app.UI(fIdx).dataGrid.ColumnWidth;
                     s.dataGridColumnWidth = widths;
-                    if numel(widths) >= 5
+                    if numel(widths) >= 7
+                        s.infoColumnHidden = app.isTestWidthZero(widths{5});
+                        s.plotColumnHidden = app.isTestWidthZero(widths{7});
+                        s.splitterColumnHidden = app.isTestWidthZero(widths{4}) && app.isTestWidthZero(widths{6});
+                    elseif numel(widths) >= 5
                         s.infoColumnHidden = app.isTestWidthZero(widths{3});
                         s.plotColumnHidden = app.isTestWidthZero(widths{4});
                         s.splitterColumnHidden = app.isTestWidthZero(widths{5});
+                    end
+                end
+                if isfield(app.UI(fIdx), 'colSplitters') && ~isempty(app.UI(fIdx).colSplitters)
+                    s.columnSplitterVisible = false(1, numel(app.UI(fIdx).colSplitters));
+                    for sIdx = 1:numel(app.UI(fIdx).colSplitters)
+                        sp = app.UI(fIdx).colSplitters(sIdx);
+                        if ~isempty(sp) && isvalid(sp)
+                            s.columnSplitterVisible(sIdx) = app.isUiVisible(sp);
+                        end
                     end
                 end
 
@@ -1061,6 +1128,9 @@
                     app.UIFigure.WindowButtonMotionFcn = '';
                     app.UIFigure.WindowButtonUpFcn = '';
                 end
+                app.IsDraggingSplitter = false;
+                app.IsDraggingRowSplitter = false;
+                app.IsDraggingColumnSplitter = false;
             catch ME_silent
                 app.logCaught(ME_silent, 'close-request:clear-window-callbacks');
             end
@@ -1119,6 +1189,8 @@
                     widths{5} = 0;
                     widths{6} = 0;
                 end
+            elseif strcmp(pnlName, 'info') || strcmp(pnlName, 'dataView')
+                app.refreshPanelToggleButtons(fIdx);
             end
             app.UI(fIdx).dataGrid.ColumnWidth = widths;
             app.reflowBoardColumns(fIdx);
@@ -1161,6 +1233,27 @@
                 end
             catch ME
                 app.logCaught(ME, 'applyMapAltVisibility');
+            end
+        end
+
+        function refreshPanelToggleButtons(app, fIdx)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ~isfield(app.UI(fIdx), 'PanelVisible')
+                    return;
+                end
+                pv = app.UI(fIdx).PanelVisible;
+                if isfield(app.UI(fIdx), 'btnAtt') && ~isempty(app.UI(fIdx).btnAtt) && isvalid(app.UI(fIdx).btnAtt)
+                    app.UI(fIdx).btnAtt.Text = ternary(pv.attitude, '자세 ▾', '자세 ▸');
+                end
+                if isfield(app.UI(fIdx), 'btnInfo') && ~isempty(app.UI(fIdx).btnInfo) && isvalid(app.UI(fIdx).btnInfo)
+                    app.UI(fIdx).btnInfo.Text = ternary(pv.info, '정보 ▾', '정보 ▸');
+                end
+                if isfield(app.UI(fIdx), 'btnDataView') && ~isempty(app.UI(fIdx).btnDataView) && isvalid(app.UI(fIdx).btnDataView)
+                    app.UI(fIdx).btnDataView.Text = ternary(pv.dataView, 'plot ▾', 'plot ▸');
+                end
+                app.applyMapAltVisibility(fIdx);
+            catch ME
+                app.logCaught(ME, 'refreshPanelToggleButtons');
             end
         end
 
@@ -3102,6 +3195,11 @@
         % [PATCH UX-3] H↔I 패널 경계 splitter 드래그 핸들러
         function startHISplitterDrag(app, fIdx)
             try
+                if fIdx >= 1 && fIdx <= numel(app.UI) && isfield(app.UI(fIdx), 'dataGrid') ...
+                        && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid) ...
+                        && numel(app.UI(fIdx).dataGrid.ColumnWidth) >= 8
+                    return;
+                end
                 app.HISplitterFIdx = fIdx;
                 app.IsDraggingSplitter = true;
                 app.UIFigure.WindowButtonMotionFcn = @(~,~) app.hiSplitterMotion();
@@ -5579,8 +5677,8 @@
         end
 
         function buildEditTabProject(app, parent)
-            gl = uigridlayout(parent, [8 4]);
-            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl = uigridlayout(parent, [9 4]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
             gl.ColumnWidth = {120, '1x', 100, 100};
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
@@ -5622,6 +5720,12 @@
             btn = uibutton(gl, 'Text', '현재 레이아웃 저장', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSaveLayoutPreset());
             btn.Layout.Column = [3 4];
+
+            uilabel(gl, 'Text', '저장된 preset:', 'FontWeight', 'bold');
+            app.EDProjectLayoutPresetDD = uidropdown(gl, 'Items', {'(없음)'}, 'Value', '(없음)');
+            app.EDProjectLayoutPresetDD.Layout.Column = 2;
+            uibutton(gl, 'Text', '적용', 'ButtonPushedFcn', @(~,~) app.editDialogApplySavedLayoutPreset());
+            uibutton(gl, 'Text', '삭제', 'ButtonPushedFcn', @(~,~) app.editDialogDeleteSavedLayoutPreset());
         end
 
         function buildEditTabFiles(app, parent)
@@ -5937,6 +6041,18 @@
                     app.EDProjectLayoutLbl.Text = sprintf('%d개 / %s', ...
                         numel(app.UserLayoutPresets), char(app.CurrentLayoutPreset));
                 end
+                if ~isempty(app.EDProjectLayoutPresetDD) && isvalid(app.EDProjectLayoutPresetDD)
+                    if isempty(app.UserLayoutPresets)
+                        app.EDProjectLayoutPresetDD.Items = {'(없음)'};
+                        app.EDProjectLayoutPresetDD.Value = '(없음)';
+                    else
+                        names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                        app.EDProjectLayoutPresetDD.Items = names;
+                        if ~any(strcmp(app.EDProjectLayoutPresetDD.Value, names))
+                            app.EDProjectLayoutPresetDD.Value = names{1};
+                        end
+                    end
+                end
             catch
             end
         end
@@ -6179,6 +6295,13 @@
                 end
                 hit = find(strcmp(names, presetName), 1);
                 if isempty(hit)
+                    if numel(app.UserLayoutPresets) >= 5
+                        try
+                            uialert(app.EditDialog, '사용자 layout preset은 최대 5개까지 저장할 수 있습니다. 기존 preset을 삭제한 후 다시 저장하세요.', 'Layout preset');
+                        catch
+                        end
+                        return;
+                    end
                     app.UserLayoutPresets(end + 1) = preset;
                 else
                     app.UserLayoutPresets(hit) = preset;
@@ -6187,6 +6310,93 @@
                 app.refreshProjectTab();
             catch ME
                 app.logCaught(ME, 'editDialogSaveLayoutPreset');
+            end
+        end
+
+        function editDialogApplySavedLayoutPreset(app)
+            try
+                if isempty(app.EDProjectLayoutPresetDD) || ~isvalid(app.EDProjectLayoutPresetDD), return; end
+                presetName = char(app.EDProjectLayoutPresetDD.Value);
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, presetName), 1);
+                if isempty(hit), return; end
+                app.applyLayoutUiState(app.UserLayoutPresets(hit).Layout);
+                app.CurrentLayoutPreset = presetName;
+                app.updateLayoutPresetButtons();
+                app.markProjectDirtyAndScheduleRefresh('layout-preset-apply');
+                app.refreshProjectTab();
+            catch ME
+                app.logCaught(ME, 'editDialogApplySavedLayoutPreset');
+            end
+        end
+
+        function editDialogDeleteSavedLayoutPreset(app)
+            try
+                if isempty(app.EDProjectLayoutPresetDD) || ~isvalid(app.EDProjectLayoutPresetDD), return; end
+                presetName = char(app.EDProjectLayoutPresetDD.Value);
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, presetName), 1);
+                if isempty(hit), return; end
+                app.UserLayoutPresets(hit) = [];
+                app.markProjectDirtyAndScheduleRefresh('layout-preset-delete');
+                app.refreshProjectTab();
+            catch ME
+                app.logCaught(ME, 'editDialogDeleteSavedLayoutPreset');
+            end
+        end
+
+        function saveCurrentLayoutPresetForTest(app, presetName)
+            try
+                presetName = strtrim(char(presetName));
+                if isempty(presetName), presetName = 'test-layout'; end
+                layout = app.collectLayoutUiState();
+                layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
+                preset = struct('Name', presetName, ...
+                    'SavedAt', char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')), ...
+                    'Layout', layout);
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, presetName), 1);
+                if isempty(hit)
+                    if numel(app.UserLayoutPresets) >= 5
+                        error('FlightDataDashboard:LayoutPresetLimit', 'Layout preset slot limit reached');
+                    end
+                    app.UserLayoutPresets(end + 1) = preset;
+                else
+                    app.UserLayoutPresets(hit) = preset;
+                end
+            catch ME
+                app.logCaught(ME, 'saveCurrentLayoutPresetForTest');
+                rethrow(ME);
+            end
+        end
+
+        function applySavedLayoutPresetForTest(app, presetName)
+            try
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, char(presetName)), 1);
+                if isempty(hit)
+                    error('FlightDataDashboard:LayoutPresetNotFound', 'Layout preset not found');
+                end
+                app.applyLayoutUiState(app.UserLayoutPresets(hit).Layout);
+                app.CurrentLayoutPreset = char(presetName);
+                app.updateLayoutPresetButtons();
+            catch ME
+                app.logCaught(ME, 'applySavedLayoutPresetForTest');
+                rethrow(ME);
+            end
+        end
+
+        function deleteSavedLayoutPresetForTest(app, presetName)
+            try
+                names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                hit = find(strcmp(names, char(presetName)), 1);
+                if isempty(hit)
+                    error('FlightDataDashboard:LayoutPresetNotFound', 'Layout preset not found');
+                end
+                app.UserLayoutPresets(hit) = [];
+            catch ME
+                app.logCaught(ME, 'deleteSavedLayoutPresetForTest');
+                rethrow(ME);
             end
         end
 
@@ -8242,7 +8452,7 @@
                 % 0-width columns visible as blank space.
                 app.reflowBoardColumns(fIdx);
                 app.reflowBoardColumns(sourceIdx);
-                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source 가 70%, summary 30%.
+                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source 가 대부분의 height 사용.
                 app.applyBodyGridRowHeights();
                 app.updateBoardToggleButtons();
                 drawnow;
@@ -8252,25 +8462,28 @@
         end
 
         function applyBodyGridRowHeights(app)
-            % [L1 C-1] off 가 활성화된 경우 source 보드가 가용 height 의 BoardOffSourceRatio
-            % 만큼 차지하도록 RowHeight 비율을 동적으로 변경. off 없음 → {'1x','1x'} 평등.
+            % [L1 C-1/L4] row splitter 포함 3-row bodyGrid.
             try
                 if isempty(app.BodyGrid) || ~isvalid(app.BodyGrid), return; end
                 activeOff = find(app.BoardOffState, 1);
                 if isempty(activeOff)
-                    app.BodyGrid.RowHeight = {'1x', '1x'};
+                    app.setUiVisible(app.BodyRowSplitter, true);
+                    topW = max(0.2, min(0.8, double(app.BodyRowSplitRatio)));
+                    botW = 1 - topW;
+                    app.BodyGrid.RowHeight = {sprintf('%dx', round(topW * 100)), 5, sprintf('%dx', round(botW * 100))};
                     return;
                 end
+                app.setUiVisible(app.BodyRowSplitter, false);
                 srcW = max(0.5, min(0.9, double(app.BoardOffSourceRatio)));
                 offW = 1 - srcW;
                 srcStr = sprintf('%dx', round(srcW * 10));
                 offStr = sprintf('%dx', round(offW * 10));
-                % activeOff == 1 → row 1 is off-summary, row 2 is source
-                % activeOff == 2 → row 1 is source,      row 2 is off-summary
+                % activeOff == 1 → row 1 is off-summary, row 3 is source
+                % activeOff == 2 → row 1 is source,      row 3 is off-summary
                 if activeOff == 1
-                    app.BodyGrid.RowHeight = {offStr, srcStr};
+                    app.BodyGrid.RowHeight = {offStr, 0, srcStr};
                 else
-                    app.BodyGrid.RowHeight = {srcStr, offStr};
+                    app.BodyGrid.RowHeight = {srcStr, 0, offStr};
                 end
             catch ME
                 app.logCaught(ME, 'bodyGridRowHeights');
@@ -8279,6 +8492,220 @@
 
         function sourceIdx = getBoardOffSourceIdx(~, offIdx)
             sourceIdx = 3 - offIdx;
+        end
+
+        function row = getBodyGridRowForFlight(~, fIdx)
+            row = 1;
+            if fIdx == 2
+                row = 3;
+            end
+        end
+
+        function startBodyRowSplitterDrag(app)
+            try
+                if any(app.BoardOffState) || app.IsDraggingMarker || app.IsDraggingSplitter || ...
+                        app.IsDraggingRowSplitter || app.IsDraggingColumnSplitter
+                    return;
+                end
+                app.IsDraggingRowSplitter = true;
+                app.RowSplitterStartPoint = app.UIFigure.CurrentPoint;
+                app.RowSplitterStartRatio = app.BodyRowSplitRatio;
+                app.UIFigure.WindowButtonMotionFcn = @(~,~) app.bodyRowSplitterMotion();
+                app.UIFigure.WindowButtonUpFcn = @(~,~) app.stopBodyRowSplitterDrag();
+            catch ME
+                app.logCaught(ME, 'rowSplitter:start');
+            end
+        end
+
+        function bodyRowSplitterMotion(app)
+            try
+                if ~app.IsDraggingRowSplitter || isempty(app.UIFigure) || ~isvalid(app.UIFigure)
+                    return;
+                end
+                pt = app.UIFigure.CurrentPoint;
+                figH = max(1, app.UIFigure.Position(4));
+                dy = double(pt(2) - app.RowSplitterStartPoint(2));
+                app.setBodyRowSplitRatio(app.RowSplitterStartRatio + dy / figH);
+            catch ME
+                app.logCaught(ME, 'rowSplitter:motion');
+            end
+        end
+
+        function stopBodyRowSplitterDrag(app)
+            try
+                if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+                    app.UIFigure.WindowButtonMotionFcn = '';
+                    app.UIFigure.WindowButtonUpFcn = '';
+                end
+                app.IsDraggingRowSplitter = false;
+            catch ME
+                app.logCaught(ME, 'rowSplitter:stop');
+            end
+        end
+
+        function setBodyRowSplitRatio(app, ratio)
+            try
+                app.CurrentLayoutPreset = 'custom';
+                app.updateLayoutPresetButtons();
+                app.BodyRowSplitRatio = max(0.2, min(0.8, double(ratio)));
+                app.applyBodyGridRowHeights();
+            catch ME
+                app.logCaught(ME, 'rowSplitter:setRatio');
+            end
+        end
+
+        function updateColumnSplitterVisibility(app, fIdx, widths)
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI) || ~isfield(app.UI(fIdx), 'colSplitters')
+                    return;
+                end
+                splitCols = [2, 4, 6];
+                for sIdx = 1:min(numel(splitCols), numel(app.UI(fIdx).colSplitters))
+                    sp = app.UI(fIdx).colSplitters(sIdx);
+                    if isempty(sp) || ~isvalid(sp), continue; end
+                    app.setUiVisible(sp, ~app.isTestWidthZero(widths{splitCols(sIdx)}));
+                end
+            catch ME
+                app.logCaught(ME, 'columnSplitter:visibility');
+            end
+        end
+
+        function startColumnSplitterDrag(app, fIdx, splitterIdx, ~)
+            try
+                try
+                    if isprop(app.UIFigure, 'SelectionType') && strcmpi(char(app.UIFigure.SelectionType), 'open')
+                        app.reflowBoardColumns(fIdx);
+                        return;
+                    end
+                catch
+                end
+                if app.IsDraggingMarker || app.IsDraggingSplitter || app.IsDraggingRowSplitter || app.IsDraggingColumnSplitter
+                    return;
+                end
+                pairs = [1 3; 3 5; 5 7];
+                if fIdx < 1 || fIdx > 2 || splitterIdx < 1 || splitterIdx > size(pairs, 1)
+                    return;
+                end
+                dg = app.UI(fIdx).dataGrid;
+                if isempty(dg) || ~isvalid(dg), return; end
+                cw = dg.ColumnWidth;
+                leftCol = pairs(splitterIdx, 1);
+                rightCol = pairs(splitterIdx, 2);
+                if numel(cw) < rightCol || app.isTestWidthZero(cw{leftCol}) || app.isTestWidthZero(cw{rightCol})
+                    return;
+                end
+                app.CurrentLayoutPreset = 'custom';
+                app.updateLayoutPresetButtons();
+                app.IsDraggingColumnSplitter = true;
+                app.DraggedColumnSplitterInfo = struct('fIdx', fIdx, 'leftCol', leftCol, 'rightCol', rightCol);
+                app.ColumnSplitterStartPoint = app.UIFigure.CurrentPoint;
+                app.ColumnSplitterStartWidths = cw;
+                app.UIFigure.WindowButtonMotionFcn = @(~,~) app.columnSplitterMotion();
+                app.UIFigure.WindowButtonUpFcn = @(~,~) app.stopColumnSplitterDrag();
+                if isprop(app.UIFigure, 'Pointer'), app.UIFigure.Pointer = 'left-right'; end
+            catch ME
+                app.logCaught(ME, 'columnSplitter:start');
+            end
+        end
+
+        function columnSplitterMotion(app)
+            try
+                if ~app.IsDraggingColumnSplitter, return; end
+                info = app.DraggedColumnSplitterInfo;
+                fIdx = info.fIdx;
+                dg = app.UI(fIdx).dataGrid;
+                if isempty(dg) || ~isvalid(dg), return; end
+                dx = double(app.UIFigure.CurrentPoint(1) - app.ColumnSplitterStartPoint(1));
+                cw = app.ColumnSplitterStartWidths;
+                leftCol = info.leftCol;
+                rightCol = info.rightCol;
+                leftW = app.widthSpecToPixels(cw{leftCol}, dg);
+                rightW = app.widthSpecToPixels(cw{rightCol}, dg);
+                minW = 80;
+                newLeft = max(minW, leftW + dx);
+                newRight = max(minW, rightW - dx);
+                total = max(minW * 2, leftW + rightW);
+                if newLeft + newRight > total
+                    over = newLeft + newRight - total;
+                    newLeft = max(minW, newLeft - over / 2);
+                    newRight = max(minW, total - newLeft);
+                end
+                live = dg.ColumnWidth;
+                live{leftCol} = round(newLeft);
+                live{rightCol} = round(newRight);
+                dg.ColumnWidth = live;
+            catch ME
+                app.logCaught(ME, 'columnSplitter:motion');
+            end
+        end
+
+        function stopColumnSplitterDrag(app)
+            try
+                if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+                    app.UIFigure.WindowButtonMotionFcn = '';
+                    app.UIFigure.WindowButtonUpFcn = '';
+                    if isprop(app.UIFigure, 'Pointer'), app.UIFigure.Pointer = 'arrow'; end
+                end
+                app.IsDraggingColumnSplitter = false;
+                app.ColumnSplitterStartWidths = {};
+            catch ME
+                app.logCaught(ME, 'columnSplitter:stop');
+            end
+        end
+
+        function simulateColumnSplitterDrag(app, fIdx, splitterIdx, dx)
+            try
+                pairs = [1 3; 3 5; 5 7];
+                if fIdx < 1 || fIdx > 2 || splitterIdx < 1 || splitterIdx > size(pairs, 1)
+                    return;
+                end
+                dg = app.UI(fIdx).dataGrid;
+                if isempty(dg) || ~isvalid(dg), return; end
+                cw = dg.ColumnWidth;
+                leftCol = pairs(splitterIdx, 1);
+                rightCol = pairs(splitterIdx, 2);
+                if numel(cw) < rightCol || app.isTestWidthZero(cw{leftCol}) || app.isTestWidthZero(cw{rightCol})
+                    return;
+                end
+                app.CurrentLayoutPreset = 'custom';
+                app.updateLayoutPresetButtons();
+                leftW = app.widthSpecToPixels(cw{leftCol}, dg);
+                rightW = app.widthSpecToPixels(cw{rightCol}, dg);
+                minW = 80;
+                newLeft = max(minW, leftW + double(dx));
+                newRight = max(minW, rightW - double(dx));
+                total = max(minW * 2, leftW + rightW);
+                if newLeft + newRight > total
+                    newLeft = max(minW, min(total - minW, newLeft));
+                    newRight = max(minW, total - newLeft);
+                end
+                cw{leftCol} = round(newLeft);
+                cw{rightCol} = round(newRight);
+                dg.ColumnWidth = cw;
+                app.updateColumnSplitterVisibility(fIdx, cw);
+            catch ME
+                app.logCaught(ME, 'columnSplitter:testDelta');
+            end
+        end
+
+        function px = widthSpecToPixels(~, spec, gridHandle)
+            px = 120;
+            try
+                if isnumeric(spec)
+                    px = max(0, double(spec(1)));
+                elseif ischar(spec) || isstring(spec)
+                    txt = strtrim(char(spec));
+                    if endsWith(txt, 'x')
+                        gp = getpixelposition(gridHandle, true);
+                        px = max(80, gp(3) * 0.35);
+                    else
+                        v = str2double(txt);
+                        if isfinite(v), px = max(0, v); end
+                    end
+                end
+            catch
+                px = 120;
+            end
         end
 
         % [Q-03] captureBoardPanelState 함수 삭제 — 더 이상 호출되지 않음.
@@ -8323,14 +8750,18 @@
                     return;
                 end
                 widths = app.UI(fIdx).dataGrid.ColumnWidth;
-                if numel(widths) >= 5
-                    widths{3} = 0;  % current flight info
-                    widths{4} = 0;  % H data-view panel
-                    widths{5} = 0;  % H/I splitter
+                if numel(widths) >= 7
+                    widths{4} = 0;  % map/info splitter
+                    widths{5} = 0;  % current flight info
+                    widths{6} = 0;  % info/plot splitter
+                    widths{7} = 0;  % plot data panel
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         st = app.UI(fIdx).PanelVisible;
-                        if isfield(st, 'map') && st.map
-                            widths{2} = '1x';
+                        mapOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
+                                (isfield(st, 'altOnly') && st.altOnly) || ...
+                                (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
+                        if mapOn
+                            widths{3} = '1x';
                         elseif isfield(st, 'attitude') && st.attitude
                             widths{1} = '1x';
                         end
@@ -8385,7 +8816,7 @@
                 end
                 app.syncBoardPanelHandles(fIdx);
                 panelWidths = app.getResponsivePanelWidths();
-                widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 0, 0};
+                widths = {panelWidths(1), 0, panelWidths(2), 0, panelWidths(3), 0, '1x', 0};
                 infoOn = true;
                 dataViewOn = true;
                 if isfield(app.UI(fIdx), 'PanelVisible')
@@ -8395,35 +8826,40 @@
                     mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
                                (isfield(st, 'altOnly') && st.altOnly) || ...
                                (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
-                    if ~mapColOn, widths{2} = 0; end
+                    if ~mapColOn, widths{3} = 0; end
                     if isfield(st, 'info'), infoOn = logical(st.info); end
                     if isfield(st, 'dataView'), dataViewOn = logical(st.dataView); end
-                    if ~infoOn, widths{3} = 0; end
-                    if ~dataViewOn, widths{4} = 0; end
+                    if ~infoOn, widths{5} = 0; end
+                    if ~dataViewOn, widths{7} = 0; end
+                    if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
+                    if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
+                    if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = 4; end
                     if ~infoOn && ~dataViewOn
                         attOn = isfield(st, 'attitude') && st.attitude;
                         if attOn && mapColOn
                             widths{1} = '1x';
-                            widths{2} = '1x';
+                            widths{3} = '1x';
                         elseif attOn
                             widths{1} = '1x';
                         elseif mapColOn
-                            widths{2} = '1x';
+                            widths{3} = '1x';
                         end
                     end
                 end
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
-                    widths{3} = 0;
                     widths{4} = 0;
                     widths{5} = 0;
+                    widths{6} = 0;
+                    widths{7} = 0;
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         st = app.UI(fIdx).PanelVisible;
                         mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
                                    (isfield(st, 'altOnly') && st.altOnly) || ...
                                    (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
                         if mapColOn
-                            widths{2} = '1x';
+                            widths{3} = '1x';
+                            if ~app.isTestWidthZero(widths{1}), widths{2} = 4; end
                         elseif isfield(st, 'attitude') && st.attitude
                             widths{1} = '1x';
                         end
@@ -8431,6 +8867,11 @@
                 end
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 app.UI(fIdx).dataGrid.Scrollable = 'on';
+                app.updateColumnSplitterVisibility(fIdx, widths);
+                if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
+                    app.setUiVisible(app.UI(fIdx).hiSplitter, numel(widths) >= 8 && ~app.isTestWidthZero(widths{8}));
+                end
+                app.refreshPanelToggleButtons(fIdx);
                 app.reflowAttitudePanel(fIdx);
                 app.setVideoDisplaySize(fIdx);
             catch ME
@@ -8596,9 +9037,11 @@
                         app.setFlightPanelVisiblePreset(2, true, true, true, true, true, true);
                     case 'dual-equal'
                         app.setBoardOffDirect(0);
+                        app.BodyRowSplitRatio = 0.5;
                         app.setBodyGridRowsDirect({'1x', '1x'});
                     case 'dual-3:1-top'
                         app.setBoardOffDirect(0);
+                        app.BodyRowSplitRatio = 0.75;
                         app.setBodyGridRowsDirect({'3x', '1x'});
                     case 'data-focus'
                         app.setBoardOffDirect(0);
@@ -8669,7 +9112,7 @@
         function setBodyGridRowsDirect(app, rows)
             try
                 if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
-                    app.BodyGrid.RowHeight = rows;
+                    app.BodyGrid.RowHeight = app.normalizeBodyRowHeight(rows);
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:rows');
@@ -9184,7 +9627,7 @@
             pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
                 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', [0.98 0.98 0.98], ...
                 'Visible', 'off');
-            pnl.Layout.Row = fIdx;
+            pnl.Layout.Row = app.getBodyGridRowForFlight(fIdx);
             pnl.Layout.Column = 1;
 
             root = uigridlayout(pnl, [1 2]);
@@ -9251,12 +9694,17 @@
 
             % --- Body (2 비행경로 vertical stack) ---
             scrollBody = uipanel(mainLayout, 'Scrollable', 'on', 'BorderType', 'none', 'BackgroundColor', [0.94 0.94 0.96]);
-            bodyGrid = uigridlayout(scrollBody, [2 1]);
+            bodyGrid = uigridlayout(scrollBody, [3 1]);
             bodyGrid.ColumnWidth = {'1x'};
-            bodyGrid.RowHeight = {'1x', '1x'};
+            bodyGrid.RowHeight = {'1x', 5, '1x'};
             bodyGrid.Padding = [2 2 2 2];
-            bodyGrid.RowSpacing = 5;
+            bodyGrid.RowSpacing = 2;
             app.BodyGrid = bodyGrid;   % [L1 C-1] retain for runtime RowHeight reflow
+            app.BodyRowSplitter = uipanel(bodyGrid, 'BackgroundColor', [0.55 0.55 0.58], ...
+                'BorderType', 'none');
+            app.BodyRowSplitter.Layout.Row = 2;
+            app.BodyRowSplitter.Layout.Column = 1;
+            app.BodyRowSplitter.ButtonDownFcn = @(~,~) app.startBodyRowSplitterDrag();
 
             titleStrs = {'Flight Data 1', 'Flight Data 2'};
             panelColors = {[0.98 0.98 0.98], [0.98 0.98 0.98]};
@@ -9272,8 +9720,8 @@
                         'timeLines', {}, 'timeMarkers', {}, 'plotData', {}, 'xLimListeners', {}, 'altXLimListener', {}, 'vidAxes', {}, 'vidImageHandle', {}, ...
                         'dataGrid', {}, 'panelAttitude', {}, 'panelAttitudeGrid', {}, ...
                         'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
-                        'panelMapAlt', {}, 'panelVideo', {}, ...
-                        'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnVid', {}, 'PanelVisible', {}, ...
+                        'panelMapAlt', {}, 'panelVideo', {}, 'colSplitters', {}, ...
+                        'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnInfo', {}, 'btnDataView', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
                         'vidVideoFpsInput', {}, 'vidDataFpsInput', {}, ...
@@ -9296,7 +9744,7 @@
 
                 % --- (a) 메인 패널 + 컨트롤바 ---
                 UI_temp(fIdx).panel = uipanel(bodyGrid, 'Title', titleStrs{fIdx}, 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', panelColors{fIdx});
-                UI_temp(fIdx).panel.Layout.Row = fIdx;
+                UI_temp(fIdx).panel.Layout.Row = app.getBodyGridRowForFlight(fIdx);
                 UI_temp(fIdx).panel.Layout.Column = 1;
                 fGrid = uigridlayout(UI_temp(fIdx).panel, [2 1]);
                 fGrid.ColumnWidth = {'1x'};
@@ -9305,9 +9753,9 @@
                 fGrid.RowSpacing = 2;
 
                 controlPanel = uipanel(fGrid, 'BackgroundColor', 'w', 'BorderType', 'line');
-                % [L1 B-1] 지도/고도 분리: 컬럼 1개 늘려 [1 9]. 새 btnAlt 가 column 8 차지.
-                glCtrl = uigridlayout(controlPanel, [1 9]);
-                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
+                % [L1 B-1/L2] 지도/고도/정보/plot/비디오 독립 토글.
+                glCtrl = uigridlayout(controlPanel, [1 11]);
+                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70, 78, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
 
@@ -9325,20 +9773,32 @@
                 UI_temp(fIdx).btnMap.Layout.Column = 7;
                 UI_temp(fIdx).btnAlt = uibutton(glCtrl, 'Text', '고도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
+                UI_temp(fIdx).btnInfo = uibutton(glCtrl, 'Text', '정보 ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'info'));
+                UI_temp(fIdx).btnInfo.Layout.Column = 9;
+                UI_temp(fIdx).btnDataView = uibutton(glCtrl, 'Text', 'plot ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'dataView'));
+                UI_temp(fIdx).btnDataView.Layout.Column = 10;
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
-                UI_temp(fIdx).btnVid.Layout.Column = 9;
+                UI_temp(fIdx).btnVid.Layout.Column = 11;
                 UI_temp(fIdx).PanelVisible = struct( ...
                     'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
                     'info', true, 'dataView', true);
 
-                % [레이아웃 순서 확정 및 폭 최적화] 자세(200) -> 지도/고도(500) -> 정보(250) -> H패널(1x) -> splitter(6) -> 비디오(500)
-                % [PATCH UX-3] H↔I 경계 splitter 컬럼 추가
-                UI_temp(fIdx).dataGrid = uigridlayout(fGrid, [1 6]);
-                UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, panelWidths(3), '1x', 0, 0};
+                % [Layout] 자세 | splitter | 지도/고도 | splitter | 정보 | splitter | plot 데이터 | legacy H/I
+                UI_temp(fIdx).dataGrid = uigridlayout(fGrid, [1 8]);
+                UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, 0, 0, panelWidths(3), 4, '1x', 0};
                 UI_temp(fIdx).dataGrid.RowHeight = {'1x'};
                 UI_temp(fIdx).dataGrid.Padding = [0 0 0 0];
                 UI_temp(fIdx).dataGrid.ColumnSpacing = 3;   % splitter 가시성
                 UI_temp(fIdx).dataGrid.Scrollable = 'on';
+
+                UI_temp(fIdx).colSplitters = gobjects(1, 3);
+                splitCols = [2, 4, 6];
+                for sIdx = 1:numel(splitCols)
+                    sp = uipanel(UI_temp(fIdx).dataGrid, 'BackgroundColor', [0.50 0.50 0.54], 'BorderType', 'none');
+                    sp.Layout.Column = splitCols(sIdx);
+                    sp.ButtonDownFcn = @(~,event) app.startColumnSplitterDrag(fIdx, sIdx, event);
+                    UI_temp(fIdx).colSplitters(sIdx) = sp;
+                end
 
                 % --- (b) Col 1: 비행 자세 (Pitch / Roll / Heading 게이지) ---
                 UI_temp(fIdx).panelAttitude = uipanel(UI_temp(fIdx).dataGrid, 'Title', '비행 자세', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
@@ -9356,7 +9816,7 @@
 
                 % --- (c) Col 2: Map (위) + Altitude (아래) ---
                 UI_temp(fIdx).panelMapAlt = uipanel(UI_temp(fIdx).dataGrid, 'BorderType', 'none', 'BackgroundColor', panelColors{fIdx});
-                UI_temp(fIdx).panelMapAlt.Layout.Column = 2;
+                UI_temp(fIdx).panelMapAlt.Layout.Column = 3;
                 UI_temp(fIdx).panelMapAlt.Visible = 'off';
                 pGrid = uigridlayout(UI_temp(fIdx).panelMapAlt, [2 1]);
                 pGrid.RowHeight = {'1.5x', '1x'};
@@ -9394,7 +9854,7 @@
 
                 % --- (d) Col 3: 현재 비행 정보 (데이터 테이블) ---
                 infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
-                infoPanel.Layout.Column = 3;
+                infoPanel.Layout.Column = 5;
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
                 tblBgColor = app.getFlightTableBgColor(fIdx);
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
@@ -9407,7 +9867,7 @@
 
                 % --- (e) Col 4: H 패널 (플롯 tabGroup) ---
                 hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-                hPnl.Layout.Column = 4;
+                hPnl.Layout.Column = 7;
                 hGrid2 = uigridlayout(hPnl, [2 1]);
                 hGrid2.RowHeight = {30, '1x'};
                 hGrid2.Padding = [2 2 2 2];
@@ -9439,7 +9899,7 @@
                     'BorderColor', [0.45 0.45 0.55], ...
                     'Tooltip', '드래그하여 비디오 패널 너비 조절 (H ↔ I)', ...
                     'HitTest', 'on');
-                UI_temp(fIdx).hiSplitter.Layout.Column = 5;
+                UI_temp(fIdx).hiSplitter.Layout.Column = 8;
                 UI_temp(fIdx).hiSplitter.ButtonDownFcn = @(~,~) app.startHISplitterDrag(fIdx);
 
                 UI_temp(fIdx).vidViewerDialog = uifigure('Name', sprintf('Video Player - Flight Data %d', fIdx), ...
@@ -9610,6 +10070,9 @@
                     'fileNameLabel',    u.fileNameLabel, ...
                     'btnAtt',           u.btnAtt, ...
                     'btnMap',           u.btnMap, ...
+                    'btnAlt',           u.btnAlt, ...
+                    'btnInfo',          u.btnInfo, ...
+                    'btnDataView',      u.btnDataView, ...
                     'btnVid',           u.btnVid);
 
                 % 데이터 테이블 + 컨테이너
@@ -9801,9 +10264,11 @@
             layout = struct( ...
                 'CurrentLayoutPreset', 'custom', ...
                 'BoardOffState', [false, false], ...
-                'BoardOffSourceRatio', 0.7, ...
-                'BodyRowHeight', {{'1x', '1x'}}, ...
+                'BoardOffSourceRatio', 0.9, ...
+                'BodyRowSplitRatio', 0.5, ...
+                'BodyRowHeight', {{'1x', 5, '1x'}}, ...
                 'PanelVisible', [panel, panel]);
+            layout.ColumnWidth = cell(1, 2);
             layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
         end
 
@@ -9940,6 +10405,9 @@
                 end
                 try
                     if isfield(st.UiState, 'Layout') && ~isempty(st.UiState.Layout)
+                        if isfield(st.UiState.Layout, 'LayoutPresets')
+                            app.UserLayoutPresets = st.UiState.Layout.LayoutPresets;
+                        end
                         app.applyLayoutUiState(st.UiState.Layout);
                     end
                 catch ME
@@ -9968,6 +10436,7 @@
             layout.CurrentLayoutPreset = char(app.CurrentLayoutPreset);
             layout.BoardOffState = logical(app.BoardOffState);
             layout.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
+            layout.BodyRowSplitRatio = double(app.BodyRowSplitRatio);
             try
                 if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
                     layout.BodyRowHeight = app.BodyGrid.RowHeight;
@@ -9980,6 +10449,10 @@
                     if ~isempty(app.UI) && numel(app.UI) >= fIdx && isfield(app.UI(fIdx), 'PanelVisible')
                         layout.PanelVisible(fIdx) = app.normalizePanelVisibleState(app.UI(fIdx).PanelVisible);
                     end
+                    if ~isempty(app.UI) && numel(app.UI) >= fIdx && isfield(app.UI(fIdx), 'dataGrid') ...
+                            && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
+                        layout.ColumnWidth{fIdx} = app.UI(fIdx).dataGrid.ColumnWidth;
+                    end
                 catch ME
                     app.logCaught(ME, 'collectLayoutUiState:panel');
                 end
@@ -9991,8 +10464,11 @@
             try
                 layout = app.mergeLayoutUiState(layout);
                 app.CurrentLayoutPreset = char(layout.CurrentLayoutPreset);
-                app.UserLayoutPresets = layout.LayoutPresets;
+                if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
+                    app.UserLayoutPresets = layout.LayoutPresets;
+                end
                 app.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+                app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
                         continue;
@@ -10011,6 +10487,18 @@
                     app.applyMapAltVisibility(fIdx);
                     app.reflowBoardColumns(fIdx);
                     app.refreshBoardOffSummaryPanel(fIdx, true);
+                end
+                if isempty(offIdx)
+                    for fIdx = 1:2
+                        savedWidths = app.getLayoutColumnWidth(layout, fIdx);
+                        if ~isempty(savedWidths) && ~isempty(app.UI) && numel(app.UI) >= fIdx ...
+                                && isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) ...
+                                && isvalid(app.UI(fIdx).dataGrid)
+                            savedWidths = app.enforcePanelVisibilityOnColumnWidths(layout.PanelVisible(fIdx), savedWidths);
+                            app.UI(fIdx).dataGrid.ColumnWidth = savedWidths;
+                            app.updateColumnSplitterVisibility(fIdx, savedWidths);
+                        end
+                    end
                 end
                 if isempty(offIdx)
                     app.setBodyGridRowsDirect(app.normalizeBodyRowHeight(layout.BodyRowHeight));
@@ -10047,7 +10535,9 @@
             end
             layout.BoardOffState = bos;
             layout.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+            layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
+            layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
             panels = def.PanelVisible;
             if isfield(layout, 'PanelVisible') && isstruct(layout.PanelVisible)
                 for fIdx = 1:min(2, numel(layout.PanelVisible))
@@ -10105,7 +10595,7 @@
 
         function rows = normalizeBodyRowHeight(~, rows)
             if nargin < 2 || isempty(rows)
-                rows = {'1x', '1x'};
+                rows = {'1x', 5, '1x'};
                 return;
             end
             if isstring(rows)
@@ -10115,11 +10605,84 @@
             elseif isnumeric(rows)
                 rows = num2cell(rows);
             end
-            if ~iscell(rows) || numel(rows) ~= 2
-                rows = {'1x', '1x'};
+            if ~iscell(rows)
+                rows = {'1x', 5, '1x'};
                 return;
             end
-            rows = reshape(rows, 1, 2);
+            if numel(rows) == 2
+                rows = {rows{1}, 5, rows{2}};
+            elseif numel(rows) ~= 3
+                rows = {'1x', 5, '1x'};
+                return;
+            end
+            rows = reshape(rows, 1, 3);
+        end
+
+        function allWidths = normalizeLayoutColumnWidth(app, allWidths)
+            normalized = cell(1, 2);
+            if nargin >= 2 && iscell(allWidths)
+                for fIdx = 1:min(2, numel(allWidths))
+                    normalized{fIdx} = app.normalizeDataGridColumnWidth(allWidths{fIdx});
+                end
+            elseif nargin >= 2 && isstruct(allWidths)
+                keys = {'Flight1', 'Flight2'};
+                for fIdx = 1:2
+                    if isfield(allWidths, keys{fIdx})
+                        normalized{fIdx} = app.normalizeDataGridColumnWidth(allWidths.(keys{fIdx}));
+                    end
+                end
+            end
+            allWidths = normalized;
+        end
+
+        function widths = getLayoutColumnWidth(app, layout, fIdx)
+            widths = {};
+            try
+                if isfield(layout, 'ColumnWidth') && iscell(layout.ColumnWidth) && numel(layout.ColumnWidth) >= fIdx
+                    widths = app.normalizeDataGridColumnWidth(layout.ColumnWidth{fIdx});
+                end
+            catch
+                widths = {};
+            end
+        end
+
+        function widths = normalizeDataGridColumnWidth(~, widths)
+            if isempty(widths)
+                widths = {};
+                return;
+            end
+            if isstring(widths)
+                widths = cellstr(widths);
+            elseif ischar(widths)
+                widths = {widths};
+            elseif isnumeric(widths)
+                widths = num2cell(widths);
+            end
+            if ~iscell(widths)
+                widths = {};
+                return;
+            end
+            widths = reshape(widths, 1, []);
+            if numel(widths) == 6
+                % Legacy grid: attitude/map/info/plot/splitter/video.
+                widths = {widths{1}, 0, widths{2}, 0, widths{3}, widths{5}, widths{4}, 0};
+            elseif numel(widths) ~= 8
+                widths = {};
+            end
+        end
+
+        function widths = enforcePanelVisibilityOnColumnWidths(app, panelState, widths)
+            widths = app.normalizeDataGridColumnWidth(widths);
+            if isempty(widths), return; end
+            panelState = app.normalizePanelVisibleState(panelState);
+            if ~panelState.attitude, widths{1} = 0; end
+            if ~(panelState.mapOnly || panelState.altOnly), widths{3} = 0; end
+            if ~panelState.info, widths{5} = 0; end
+            if ~panelState.dataView, widths{7} = 0; end
+            widths{2} = 0; widths{4} = 0; widths{6} = 0; widths{8} = 0;
+            if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
+            if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
+            if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = 4; end
         end
 
         function st = migrateProjectState(app, st)

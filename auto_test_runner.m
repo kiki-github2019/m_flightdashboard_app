@@ -619,6 +619,18 @@ function i_applyAction(app, act, beforeState)
             app.testHook('applyTimeChange', act.args{:});
         case 'applyLayoutPreset'
             app.testHook('applyLayoutPreset', act.args{:});
+        case 'setBodyRowSplitRatio'
+            app.testHook('setBodyRowSplitRatio', act.args{:});
+        case 'simulateColumnSplitterDrag'
+            app.testHook('simulateColumnSplitterDrag', act.args{:});
+        case 'saveCurrentLayoutPreset'
+            app.testHook('saveCurrentLayoutPreset', act.args{:});
+        case 'applySavedLayoutPreset'
+            app.testHook('applySavedLayoutPreset', act.args{:});
+        case 'deleteSavedLayoutPreset'
+            app.testHook('deleteSavedLayoutPreset', act.args{:});
+        case 'roundTripProjectLayoutState'
+            app.testHook('roundTripProjectLayoutState');
         case 'setVideoSync'
             app.testHook('setVideoSync', act.args{:});
         otherwise
@@ -644,6 +656,12 @@ function exp = i_expectedFromState(st)
     exp.videoFrameBeforeMove = NaN(1, 2);
     exp.summaryVisible = false(1, 2);
     exp.sourceColumnsHidden = false(1, 2);
+    exp.currentLayoutPreset = char(st.CurrentLayoutPreset);
+    exp.bodyRowSplitRatio = st.BodyRowSplitRatio;
+    exp.minUserLayoutPresetCount = st.UserLayoutPresetCount;
+    exp.requireColumnWidthChange = false(1, 2);
+    exp.columnWidthBefore = cell(1, 2);
+    exp.savedPresetState = struct();
     for fIdx = 1:2
         b = st.boards(fIdx);
         exp.panel(fIdx) = b.PanelVisible;
@@ -666,6 +684,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             if beforeState.BoardOffState(fIdx)
                 return;
             end
+            exp.currentLayoutPreset = 'custom';
             name = char(act.args{2});
             if strcmp(name, 'map')
                 newState = ~(exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly);
@@ -679,6 +698,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 end
             end
         case 'toggleBoardVisibility'
+            exp.currentLayoutPreset = 'custom';
             fIdx = act.args{1};
             if exp.boardOff(fIdx)
                 exp.boardOff(fIdx) = false;
@@ -723,6 +743,42 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             end
         case 'applyLayoutPreset'
             exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
+        case 'setBodyRowSplitRatio'
+            exp.currentLayoutPreset = 'custom';
+            exp.bodyRowSplitRatio = max(0.2, min(0.8, double(act.args{1})));
+        case 'simulateColumnSplitterDrag'
+            exp.currentLayoutPreset = 'custom';
+            fIdx = act.args{1};
+            exp.requireColumnWidthChange(fIdx) = true;
+            exp.columnWidthBefore{fIdx} = beforeState.boards(fIdx).dataGridColumnWidth;
+        case 'saveCurrentLayoutPreset'
+            presetName = char(act.args{1});
+            key = matlab.lang.makeValidName(presetName);
+            exp.savedPresetState.(key) = struct( ...
+                'panel', exp.panel, ...
+                'boardOff', exp.boardOff, ...
+                'summaryVisible', exp.summaryVisible, ...
+                'sourceColumnsHidden', exp.sourceColumnsHidden, ...
+                'currentLayoutPreset', exp.currentLayoutPreset, ...
+                'bodyRowSplitRatio', exp.bodyRowSplitRatio);
+            if ~any(strcmp(beforeState.UserLayoutPresetNames, presetName))
+                exp.minUserLayoutPresetCount = max(exp.minUserLayoutPresetCount, beforeState.UserLayoutPresetCount + 1);
+            end
+        case 'applySavedLayoutPreset'
+            key = matlab.lang.makeValidName(char(act.args{1}));
+            if isfield(exp.savedPresetState, key)
+                saved = exp.savedPresetState.(key);
+                exp.panel = saved.panel;
+                exp.boardOff = saved.boardOff;
+                exp.summaryVisible = saved.summaryVisible;
+                exp.sourceColumnsHidden = saved.sourceColumnsHidden;
+                exp.currentLayoutPreset = char(act.args{1});
+                exp.bodyRowSplitRatio = saved.bodyRowSplitRatio;
+            end
+        case 'deleteSavedLayoutPreset'
+            exp.minUserLayoutPresetCount = max(0, exp.minUserLayoutPresetCount - 1);
+        case 'roundTripProjectLayoutState'
+            % Expected state should remain unchanged after an in-memory project round-trip.
         case 'setVideoSync'
             fIdx = act.args{1};
             exp.videoSynced(fIdx) = true;
@@ -732,6 +788,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
 end
 
 function exp = i_updateExpectedLayoutPreset(exp, presetName)
+    exp.currentLayoutPreset = presetName;
     exp.boardOff = [false, false];
     exp.summaryVisible = [false, false];
     exp.sourceColumnsHidden = [false, false];
@@ -780,6 +837,15 @@ function [ok, msg] = i_validateState(st, exp)
     if sum(st.BoardOffState) > 1
         issues{end + 1} = 'both boards are off';
     end
+    if isfield(st, 'CurrentLayoutPreset') && ~strcmp(char(st.CurrentLayoutPreset), exp.currentLayoutPreset)
+        issues{end + 1} = sprintf('layout preset expected=%s actual=%s', ...
+            exp.currentLayoutPreset, char(st.CurrentLayoutPreset));
+    end
+    if isfield(st, 'UserLayoutPresetCount') && st.UserLayoutPresetCount < exp.minUserLayoutPresetCount
+        issues{end + 1} = sprintf('user layout preset count below expected minimum expected>=%d actual=%d', ...
+            exp.minUserLayoutPresetCount, st.UserLayoutPresetCount);
+    end
+    issues = i_validateBodyRows(st, exp, issues);
     if any(logical(st.BoardOffState) ~= logical(exp.boardOff))
         issues{end + 1} = sprintf('board-off state mismatch expected=%s actual=%s', ...
             i_boolVecString(exp.boardOff), i_boolVecString(st.BoardOffState));
@@ -883,6 +949,17 @@ function [ok, msg] = i_validateState(st, exp)
             end
         end
         issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues);
+        if exp.requireColumnWidthChange(fIdx) && i_widthCellsEqual(st.boards(fIdx).dataGridColumnWidth, exp.columnWidthBefore{fIdx})
+            issues{end + 1} = sprintf('board %d column splitter did not change ColumnWidth', fIdx);
+        end
+        if st.boards(fIdx).PanelVisible.attitude
+            if st.boards(fIdx).attitudeGridRows < 1 || st.boards(fIdx).attitudeGridColumns < 1
+                issues{end + 1} = sprintf('board %d attitude grid dimensions missing', fIdx);
+            end
+            if isfinite(st.boards(fIdx).attitudeLabelFontSize) && st.boards(fIdx).attitudeLabelFontSize < 9
+                issues{end + 1} = sprintf('board %d attitude label font too small', fIdx);
+            end
+        end
         if st.boards(fIdx).dataLoaded
             if st.boards(fIdx).dataTableRows < 1
                 issues{end + 1} = sprintf('board %d data table empty', fIdx);
@@ -1020,13 +1097,69 @@ function tf = i_buttonStateOk(btn, labelNeedle, enableValue)
     end
 end
 
+function issues = i_validateBodyRows(st, exp, issues)
+    if ~isfield(st, 'BodyRowHeight') || numel(st.BodyRowHeight) ~= 3
+        issues{end + 1} = 'BodyGrid RowHeight is not a 3-row splitter layout';
+        return;
+    end
+    activeOff = find(st.BoardOffState, 1);
+    if isempty(activeOff)
+        if isfield(st, 'BodyRowSplitterVisible') && ~st.BodyRowSplitterVisible
+            issues{end + 1} = 'row splitter hidden while both boards are visible';
+        end
+        if isfield(st, 'BodyRowSplitRatio') && abs(double(st.BodyRowSplitRatio) - double(exp.bodyRowSplitRatio)) > 0.03
+            issues{end + 1} = sprintf('row split ratio expected=%.3f actual=%.3f', ...
+                double(exp.bodyRowSplitRatio), double(st.BodyRowSplitRatio));
+        end
+        midRow = i_rowWeight(st.BodyRowHeight{2});
+        if midRow <= 0
+            issues{end + 1} = 'row splitter row is collapsed while both boards are visible';
+        elseif midRow > 20
+            issues{end + 1} = 'row splitter height unexpectedly large';
+        end
+        return;
+    end
+    if isfield(st, 'BodyRowSplitterVisible') && st.BodyRowSplitterVisible
+        issues{end + 1} = 'row splitter visible while one board is off';
+    end
+    row1 = i_rowWeight(st.BodyRowHeight{1});
+    row2 = i_rowWeight(st.BodyRowHeight{2});
+    row3 = i_rowWeight(st.BodyRowHeight{3});
+    if row2 ~= 0
+        issues{end + 1} = 'row splitter row consumes height during board-off';
+    end
+    if activeOff == 1 && row3 <= row1
+        issues{end + 1} = 'lower source board is not expanded when upper board is off';
+    elseif activeOff == 2 && row1 <= row3
+        issues{end + 1} = 'upper source board is not expanded when lower board is off';
+    end
+end
+
+function w = i_rowWeight(spec)
+    w = 0;
+    try
+        if isnumeric(spec)
+            w = double(spec(1));
+            return;
+        end
+        txt = strtrim(char(spec));
+        if ~isempty(txt) && strcmpi(txt(end), 'x')
+            txt = txt(1:end-1);
+        end
+        v = str2double(txt);
+        if isfinite(v), w = v; end
+    catch
+        w = 0;
+    end
+end
+
 function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues)
     if ~st.boards(fIdx).exists || isempty(st.boards(fIdx).dataGridColumnWidth)
         return;
     end
     widths = st.boards(fIdx).dataGridColumnWidth;
-    if numel(widths) < 6
-        issues{end + 1} = sprintf('board %d dataGrid ColumnWidth has fewer than 6 columns', fIdx);
+    if numel(widths) < 7
+        issues{end + 1} = sprintf('board %d dataGrid ColumnWidth has fewer than 7 columns', fIdx);
         return;
     end
 
@@ -1036,7 +1169,26 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues)
         return;
     end
 
-    panelMap = struct('name', {'attitude', 'map', 'video'}, 'col', {1, 2, 6});
+    isSourceDuringBoardOff = ~isempty(activeOff) && fIdx == 3 - activeOff;
+    if isSourceDuringBoardOff
+        if numel(widths) >= 8
+            movedStillVisible = ~i_widthSpecIsZero(widths{4}) || ~i_widthSpecIsZero(widths{5}) || ...
+                ~i_widthSpecIsZero(widths{6}) || ~i_widthSpecIsZero(widths{7});
+        else
+            movedStillVisible = ~i_widthSpecIsZero(widths{3}) || ~i_widthSpecIsZero(widths{4}) || ...
+                ~i_widthSpecIsZero(widths{5});
+        end
+        if movedStillVisible
+            issues{end + 1} = sprintf('board %d moved info/plot columns still occupy width', fIdx);
+        end
+        return;
+    end
+
+    if numel(widths) >= 8
+        panelMap = struct('name', {'attitude', 'map', 'info', 'dataView'}, 'col', {1, 3, 5, 7});
+    else
+        panelMap = struct('name', {'attitude', 'map', 'info', 'dataView'}, 'col', {1, 2, 3, 4});
+    end
     for k = 1:numel(panelMap)
         name = panelMap(k).name;
         col = panelMap(k).col;
@@ -1048,22 +1200,44 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues)
         end
     end
 
-    isSourceDuringBoardOff = ~isempty(activeOff) && fIdx == 3 - activeOff;
-    if isSourceDuringBoardOff
-        if ~i_widthSpecIsZero(widths{3}) || ~i_widthSpecIsZero(widths{4}) || ~i_widthSpecIsZero(widths{5})
-            issues{end + 1} = sprintf('board %d moved info/plot columns still occupy width', fIdx);
+    if numel(widths) >= 8 && ~isempty(st.boards(fIdx).columnSplitterVisible)
+        expectedSplitters = [ ...
+            ~i_widthSpecIsZero(widths{1}) && ~i_widthSpecIsZero(widths{3}), ...
+            ~i_widthSpecIsZero(widths{3}) && ~i_widthSpecIsZero(widths{5}), ...
+            ~i_widthSpecIsZero(widths{5}) && ~i_widthSpecIsZero(widths{7})];
+        actualSplitters = logical(st.boards(fIdx).columnSplitterVisible);
+        n = min(numel(expectedSplitters), numel(actualSplitters));
+        if any(actualSplitters(1:n) ~= expectedSplitters(1:n))
+            issues{end + 1} = sprintf('board %d column splitter visibility mismatch', fIdx);
         end
-    else
-        if st.boards(fIdx).PanelVisible.info && i_widthSpecIsZero(widths{3})
-            issues{end + 1} = sprintf('board %d info column collapsed while visible', fIdx);
-        elseif ~st.boards(fIdx).PanelVisible.info && ~i_widthSpecIsZero(widths{3})
-            issues{end + 1} = sprintf('board %d info column left blank while hidden', fIdx);
+    end
+end
+
+function tf = i_widthCellsEqual(a, b)
+    tf = false;
+    try
+        if numel(a) ~= numel(b), return; end
+        tf = true;
+        for k = 1:numel(a)
+            if ~strcmp(i_widthSpecKey(a{k}), i_widthSpecKey(b{k}))
+                tf = false;
+                return;
+            end
         end
-        if st.boards(fIdx).PanelVisible.dataView && i_widthSpecIsZero(widths{4})
-            issues{end + 1} = sprintf('board %d plot column collapsed while visible', fIdx);
-        elseif ~st.boards(fIdx).PanelVisible.dataView && ~i_widthSpecIsZero(widths{4})
-            issues{end + 1} = sprintf('board %d plot column left blank while hidden', fIdx);
+    catch
+        tf = false;
+    end
+end
+
+function key = i_widthSpecKey(spec)
+    try
+        if isnumeric(spec)
+            key = sprintf('n:%.6g', double(spec(1)));
+        else
+            key = sprintf('s:%s', strtrim(char(spec)));
         end
+    catch
+        key = 'bad';
     end
 end
 
@@ -1289,6 +1463,13 @@ function cases = i_buildCaseMatrix()
     BOC = @(offIdx, lbl)       struct('fn','boardOffClearCurrentTab',     'args',{{offIdx}},     'label',lbl, 'row',NaN);
     BOP = @(offIdx, row, lbl)  struct('fn','boardOffPlotSelectedVariable','args',{{offIdx}},     'label',lbl, 'row',row);
     ATC = @(fIdx, idx, lbl)    struct('fn','applyTimeChange',             'args',{{fIdx, idx}},  'label',lbl, 'row',NaN);
+    LP  = @(name, lbl)         struct('fn','applyLayoutPreset',           'args',{{name}},      'label',lbl, 'row',NaN);
+    SRS = @(ratio, lbl)        struct('fn','setBodyRowSplitRatio',        'args',{{ratio}},     'label',lbl, 'row',NaN);
+    CDS = @(fIdx, sIdx, dx, lbl) struct('fn','simulateColumnSplitterDrag', 'args',{{fIdx, sIdx, dx}}, 'label',lbl, 'row',NaN);
+    SLP = @(name, lbl)         struct('fn','saveCurrentLayoutPreset',      'args',{{name}},      'label',lbl, 'row',NaN);
+    ASP = @(name, lbl)         struct('fn','applySavedLayoutPreset',       'args',{{name}},      'label',lbl, 'row',NaN);
+    DSP = @(name, lbl)         struct('fn','deleteSavedLayoutPreset',      'args',{{name}},      'label',lbl, 'row',NaN);
+    RTL = @(lbl)               struct('fn','roundTripProjectLayoutState',  'args',{{}},          'label',lbl, 'row',NaN);
     SVS = @(fIdx, fr, t, vf, df, lbl) struct('fn','setVideoSync', ...
                                               'args',{{fIdx, fr, t, vf, df, true}}, 'label',lbl, 'row',NaN);
 
@@ -1405,6 +1586,43 @@ function cases = i_buildCaseMatrix()
         {SVS(1, 230, 36.56, 35, 50, 'setVideoSync(1,230,36.56,35,50)'), ATC(1, 100, 'applyTimeChange(1,100)')});
     cases(end + 1) = mk('E','E05 보드1 비디오 off + applyTimeChange','비디오 hidden 회귀','크래시 없음', ...
         {P(1,'video','보드1 비디오 off'), ATC(1, 100, 'applyTimeChange(1,100)')});
+
+    %% Group G - layout regression coverage (10)
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-01 map/altitude independent toggle', ...
+        'mapOnly/altOnly', 'independent PanelVisible and width state', ...
+        {P(1,'mapOnly','Flight 1 mapOnly toggle'), P(1,'altOnly','Flight 1 altOnly toggle'), P(1,'mapOnly','Flight 1 mapOnly restore')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-02 board-off active board expansion', ...
+        'BodyGrid row splitter', 'source board expands, splitter hides', ...
+        {BV(1,'upper board off'), BV(1,'upper board on'), BV(2,'lower board off'), BV(2,'lower board on')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-03 gauges-only attitude reflow', ...
+        'attitude grid', 'attitude grid/font state is testable', ...
+        {LP('gauges-only','apply gauges-only preset')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-04 built-in preset application', ...
+        'built-in presets', 'data-focus and dual-equal apply cleanly', ...
+        {LP('data-focus','apply data-focus preset'), LP('dual-equal','apply dual-equal preset')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-05 custom preset save/apply/delete', ...
+        'custom presets', 'five-slot preset plumbing and apply path', ...
+        {LP('map-focus','apply map-focus before save'), SLP('auto_test_map','save custom preset'), ...
+         LP('data-focus','change layout after save'), ASP('auto_test_map','apply saved custom preset'), ...
+         DSP('auto_test_map','delete saved custom preset')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-06 info/dataView toggle', ...
+        'info/dataView toggles', 'user-facing buttons drive PanelVisible', ...
+        {P(1,'info','Flight 1 info off'), P(1,'dataView','Flight 1 plot off'), ...
+         P(1,'info','Flight 1 info on'), P(1,'dataView','Flight 1 plot on')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-07 row splitter drag state', ...
+        'row splitter', 'row split ratio changes deterministically', ...
+        {SRS(0.65,'set row split ratio to 0.65')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-08 column splitter drag state', ...
+        'column splitter', 'ColumnWidth changes deterministically', ...
+        {LP('data-focus','show info/plot columns'), CDS(1,3,80,'drag Flight 1 info/plot splitter')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-09 marker drag still works after splitter drag', ...
+        'drag conflict guard', 'marker/time update survives splitter change', ...
+        {LP('data-focus','show info/plot columns'), CDS(1,3,60,'drag Flight 1 info/plot splitter'), ...
+         ATC(1, 50, 'applyTimeChange(1,50)')});
+    cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-10 project layout round-trip', ...
+        'project UiState.Layout', 'in-memory project save/load preserves layout state', ...
+        {LP('data-focus','apply data-focus preset'), SRS(0.62,'set row split ratio to 0.62'), ...
+         RTL('collect/apply project layout state')});
 
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)
