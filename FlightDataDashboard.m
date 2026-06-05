@@ -272,12 +272,14 @@
             % [Stabilization P2] re-entry guard so partial cleanup cannot run twice
             if app.IsDeleting, return; end
             app.IsDeleting = true;
+            app.disableAxesInteractionsBeforeDelete(app.UIFigure, 'delete:uifigure-axes');
             try
                 for fIdx = 1:2
                     try
                         if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
                            isfield(app.UI(fIdx), 'vidControlDialog') && ...
                            ~isempty(app.UI(fIdx).vidControlDialog) && isvalid(app.UI(fIdx).vidControlDialog)
+                            app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).vidControlDialog, 'delete:vid-control-dialog-axes');
                             delete(app.UI(fIdx).vidControlDialog);
                         end
                     catch ME
@@ -366,6 +368,39 @@
                 end
             catch ME
                 app.logCaught(ME, 'delete:uifigure');
+            end
+        end
+
+        function disableAxesInteractionsBeforeDelete(app, rootObj, tag)
+            if nargin < 3 || isempty(tag), tag = 'disableAxesInteractionsBeforeDelete'; end
+            try
+                if isempty(rootObj) || ~isvalid(rootObj), return; end
+                axesList = findall(rootObj, 'Type', 'axes');
+            catch ME
+                app.logCaught(ME, [tag ':findall']);
+                return;
+            end
+            for k = 1:numel(axesList)
+                ax = axesList(k);
+                try
+                    if isempty(ax) || ~isvalid(ax), continue; end
+                    try
+                        disableDefaultInteractivity(ax);
+                    catch ME_disable
+                        app.logCaught(ME_disable, [tag ':disable-default']);
+                    end
+                    if isprop(ax, 'Interactions')
+                        ax.Interactions = [];
+                    end
+                    if isprop(ax, 'Toolbar') && ~isempty(ax.Toolbar)
+                        ax.Toolbar.Visible = 'off';
+                    end
+                    if isprop(ax, 'ButtonDownFcn')
+                        ax.ButtonDownFcn = [];
+                    end
+                catch ME
+                    app.logCaught(ME, [tag ':axis']);
+                end
             end
         end
 
@@ -3440,6 +3475,7 @@
             targetLayout = app.UI(fIdx).plotLayouts{tabIdx};
             try
                 if ~isempty(targetLayout) && isvalid(targetLayout)
+                    app.disableAxesInteractionsBeforeDelete(targetLayout, 'clearCurrentTab:axes');
                     delete(targetLayout.Children);
                     targetLayout.RowHeight = {};
                 end
@@ -3462,6 +3498,7 @@
                 end
                 try
                     if ~isempty(app.UI(fIdx).plotTabs(i)) && isvalid(app.UI(fIdx).plotTabs(i))
+                        app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).plotTabs(i), 'clearAllTabs:axes');
                         delete(app.UI(fIdx).plotTabs(i));
                     end
                 catch ME
@@ -8047,6 +8084,7 @@
                 tg = app.UI(fIdx).boardOffTabGroup;
                 if isempty(tg) || ~isvalid(tg), return; end
                 try
+                    app.disableAxesInteractionsBeforeDelete(tg, 'boardOff:clear-tabs-axes');
                     delete(tg.Children);
                 catch ME_silent
                     app.logCaught(ME_silent, 'refreshBoardOffSummaryPanel:clear-tabs');
