@@ -1043,6 +1043,19 @@
 
         function togglePanel(app, fIdx, pnlName)
             % 패널 표시/숨김 토글 (픽셀 고정 기반 리사이징)
+            % [L1 B-1] 'mapOnly' / 'altOnly' 두 키로 분리. 'map' 은 backward-compat alias.
+            if strcmp(pnlName, 'map')
+                % 양쪽 모두 켜져 있으면 모두 끄고, 둘 다 꺼져 있으면 모두 켬 (legacy 1-shot 동작 유지).
+                anyOn = app.UI(fIdx).PanelVisible.mapOnly || app.UI(fIdx).PanelVisible.altOnly;
+                target = ~anyOn;
+                app.UI(fIdx).PanelVisible.mapOnly = target;
+                app.UI(fIdx).PanelVisible.altOnly = target;
+                app.applyMapAltVisibility(fIdx);
+                app.reflowBoardColumns(fIdx);
+                app.refreshBoardOffSummaryPanel(fIdx, true);
+                return;
+            end
+
             state = app.UI(fIdx).PanelVisible.(pnlName);
             newState = ~state;
             app.UI(fIdx).PanelVisible.(pnlName) = newState;
@@ -1059,15 +1072,15 @@
                     widths{1} = 0;
                     app.UI(fIdx).btnAtt.Text = '자세 ▸';
                 end
-            elseif strcmp(pnlName, 'map')
-                app.UI(fIdx).panelMapAlt.Visible = newState;
-                if newState
+            elseif strcmp(pnlName, 'mapOnly') || strcmp(pnlName, 'altOnly')
+                % [L1 B-1] 지도/고도 독립 토글 — 헤더 컬럼은 둘 중 하나라도 visible 이면 표시
+                app.applyMapAltVisibility(fIdx);
+                anyVisible = app.UI(fIdx).PanelVisible.mapOnly || app.UI(fIdx).PanelVisible.altOnly;
+                if anyVisible
                     panelWidths = app.getResponsivePanelWidths();
                     widths{2} = panelWidths(2);
-                    app.UI(fIdx).btnMap.Text = '지도/고도 ▾';
                 else
                     widths{2} = 0;
-                    app.UI(fIdx).btnMap.Text = '지도/고도 ▸';
                 end
             elseif strcmp(pnlName, 'video')
                 app.setVideoViewerVisible(fIdx, newState, false);
@@ -1082,6 +1095,45 @@
             app.UI(fIdx).dataGrid.ColumnWidth = widths;
             app.reflowBoardColumns(fIdx);
             app.refreshBoardOffSummaryPanel(fIdx, true);
+        end
+
+        function applyMapAltVisibility(app, fIdx)
+            % [L1 B-1] panelMapAlt 내부 [2x1] 격자의 sub-panel 가시성/비율을 동적으로 조정.
+            % mapOnly+altOnly 모두 false → panelMapAlt 자체 hide.
+            try
+                pv = app.UI(fIdx).PanelVisible;
+                mapOn = pv.mapOnly;  altOn = pv.altOnly;
+                hasGrid = isfield(app.UI(fIdx), 'panelMapAltGrid') ...
+                          && ~isempty(app.UI(fIdx).panelMapAltGrid) ...
+                          && isvalid(app.UI(fIdx).panelMapAltGrid);
+                hasMap = isfield(app.UI(fIdx), 'panelMap') ...
+                          && ~isempty(app.UI(fIdx).panelMap) && isvalid(app.UI(fIdx).panelMap);
+                hasAlt = isfield(app.UI(fIdx), 'panelAlt') ...
+                          && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt);
+                if hasMap, app.UI(fIdx).panelMap.Visible = mapOn; end
+                if hasAlt, app.UI(fIdx).panelAlt.Visible = altOn; end
+                if hasGrid
+                    if mapOn && altOn
+                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1.5x', '1x'};
+                    elseif mapOn
+                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1x', 0};
+                    elseif altOn
+                        app.UI(fIdx).panelMapAltGrid.RowHeight = {0, '1x'};
+                    else
+                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1x', 0};   % cosmetic
+                    end
+                end
+                app.UI(fIdx).panelMapAlt.Visible = mapOn || altOn;
+                % btn 라벨 갱신
+                if isfield(app.UI(fIdx), 'btnMap') && ~isempty(app.UI(fIdx).btnMap) && isvalid(app.UI(fIdx).btnMap)
+                    app.UI(fIdx).btnMap.Text = ternary(mapOn, '지도 ▾', '지도 ▸');
+                end
+                if isfield(app.UI(fIdx), 'btnAlt') && ~isempty(app.UI(fIdx).btnAlt) && isvalid(app.UI(fIdx).btnAlt)
+                    app.UI(fIdx).btnAlt.Text = ternary(altOn, '고도 ▾', '고도 ▸');
+                end
+            catch ME
+                app.logCaught(ME, 'applyMapAltVisibility');
+            end
         end
 
         % ---------------------------------------------------------------------
@@ -8219,8 +8271,22 @@
                 if isfield(st, 'attitude') && isfield(app.UI(fIdx), 'panelAttitude')
                     app.setUiVisible(app.UI(fIdx).panelAttitude, st.attitude);
                 end
-                if isfield(st, 'map') && isfield(app.UI(fIdx), 'panelMapAlt')
-                    app.setUiVisible(app.UI(fIdx).panelMapAlt, st.map);
+                % [L1 B-1] panelMapAlt 가시성은 mapOnly || altOnly 합집합.
+                % legacy 'map' 키도 backward-compat 으로 인식.
+                hasMapOnly = isfield(st, 'mapOnly') && st.mapOnly;
+                hasAltOnly = isfield(st, 'altOnly') && st.altOnly;
+                if ~isfield(st, 'mapOnly') && isfield(st, 'map')
+                    % 옛 project 로드 시 legacy 'map' 키 → 둘 다 켬으로 마이그레이션
+                    hasMapOnly = st.map; hasAltOnly = st.map;
+                end
+                if isfield(app.UI(fIdx), 'panelMapAlt')
+                    app.setUiVisible(app.UI(fIdx).panelMapAlt, hasMapOnly || hasAltOnly);
+                end
+                if isfield(app.UI(fIdx), 'panelMap') && ~isempty(app.UI(fIdx).panelMap) && isvalid(app.UI(fIdx).panelMap)
+                    app.UI(fIdx).panelMap.Visible = hasMapOnly;
+                end
+                if isfield(app.UI(fIdx), 'panelAlt') && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt)
+                    app.UI(fIdx).panelAlt.Visible = hasAltOnly;
                 end
                 if isfield(st, 'video') && isfield(app.UI(fIdx), 'panelVideo')
                     app.setVideoViewerVisible(fIdx, st.video, false);
@@ -8243,7 +8309,11 @@
                 if isfield(app.UI(fIdx), 'PanelVisible')
                     st = app.UI(fIdx).PanelVisible;
                     if isfield(st, 'attitude') && ~st.attitude, widths{1} = 0; end
-                    if isfield(st, 'map') && ~st.map, widths{2} = 0; end
+                    % [L1 B-1] mapOnly + altOnly 둘 다 false 일 때만 컬럼 hide
+                    mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
+                               (isfield(st, 'altOnly') && st.altOnly) || ...
+                               (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
+                    if ~mapColOn, widths{2} = 0; end
                 end
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
@@ -8252,7 +8322,10 @@
                     widths{5} = 0;
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         st = app.UI(fIdx).PanelVisible;
-                        if isfield(st, 'map') && st.map
+                        mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
+                                   (isfield(st, 'altOnly') && st.altOnly) || ...
+                                   (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
+                        if mapColOn
                             widths{2} = '1x';
                         elseif isfield(st, 'attitude') && st.attitude
                             widths{1} = '1x';
@@ -8873,8 +8946,9 @@
                 fGrid.RowSpacing = 2;
 
                 controlPanel = uipanel(fGrid, 'BackgroundColor', 'w', 'BorderType', 'line');
-                glCtrl = uigridlayout(controlPanel, [1 8]);
-                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 80, 85, 80};
+                % [L1 B-1] 지도/고도 분리: 컬럼 1개 늘려 [1 9]. 새 btnAlt 가 column 8 차지.
+                glCtrl = uigridlayout(controlPanel, [1 9]);
+                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
 
@@ -8887,11 +8961,14 @@
 
                 UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
                 UI_temp(fIdx).btnAtt.Layout.Column = 6;
-                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도/고도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'map'));
+                % [L1 B-1] '지도/고도' 단일 버튼 → '지도'/'고도' 2개로 분리.
+                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'mapOnly'));
                 UI_temp(fIdx).btnMap.Layout.Column = 7;
+                UI_temp(fIdx).btnAlt = uibutton(glCtrl, 'Text', '고도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
+                UI_temp(fIdx).btnAlt.Layout.Column = 8;
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
-                UI_temp(fIdx).btnVid.Layout.Column = 8;
-                UI_temp(fIdx).PanelVisible = struct('attitude', false, 'map', false, 'video', false);
+                UI_temp(fIdx).btnVid.Layout.Column = 9;
+                UI_temp(fIdx).PanelVisible = struct('attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false);
 
                 % [레이아웃 순서 확정 및 폭 최적화] 자세(200) -> 지도/고도(500) -> 정보(250) -> H패널(1x) -> splitter(6) -> 비디오(500)
                 % [PATCH UX-3] H↔I 경계 splitter 컬럼 추가
@@ -8922,6 +8999,7 @@
                 pGrid = uigridlayout(UI_temp(fIdx).panelMapAlt, [2 1]);
                 pGrid.RowHeight = {'1.5x', '1x'};
                 pGrid.Padding = [0 0 0 0];
+                UI_temp(fIdx).panelMapAltGrid = pGrid;   % [L1 B-1] sub-row 동적 변경용
 
                 mapPnl = uipanel(pGrid, 'Title', 'Map', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
                 mapGrid = uigridlayout(mapPnl, [1 1], 'Padding', [5 5 5 5]);
@@ -8937,6 +9015,8 @@
                 UI_temp(fIdx).mapAxes.Interactions = [panInteraction, zoomInteraction];
 
                 altPnl = uipanel(pGrid, 'Title', 'Altitude', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                UI_temp(fIdx).panelMap = mapPnl;          % [L1 B-1] 독립 토글용 핸들
+                UI_temp(fIdx).panelAlt = altPnl;
                 altGrid = uigridlayout(altPnl, [1 1], 'Padding', [5 5 5 5]);
                 UI_temp(fIdx).altAxes = uiaxes(altGrid);
                 hold(UI_temp(fIdx).altAxes, 'on');
