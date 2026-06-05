@@ -3192,7 +3192,7 @@
                 end
                 app.updateNumericPanelsOnly(fIdx, idx);
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'clearCurrentTab:delete-children');
             end
 
             % [V3.12 1.1] Map 비행경로 + 빨간 삼각형 실시간 갱신 (가벼움)
@@ -3239,7 +3239,7 @@
                     % [V3.13 절충] 비행데이터 드래그 시 영상 갱신은 throttle 유지
                     app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'autoplay');
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'clearAllTabs:delete-tab');
                 end
             end
 
@@ -3476,7 +3476,7 @@
             app.refreshBoardOffSummaryPanel(fIdx, true);
         end
 
-        function deleteGraphicsHandles(~, handleCell)
+        function deleteGraphicsHandles(app, handleCell)
             if isempty(handleCell), return; end
             for k = 1:length(handleCell)
                 h = handleCell{k};
@@ -3485,12 +3485,12 @@
                         delete(h);
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'deleteGraphicsHandles');
                 end
             end
         end
 
-        function deleteListeners(~, listenerCell)
+        function deleteListeners(app, listenerCell)
             if isempty(listenerCell), return; end
             for k = 1:length(listenerCell)
                 L = listenerCell{k};
@@ -3499,7 +3499,7 @@
                         delete(L);
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'deleteListeners');
                 end
             end
         end
@@ -3523,7 +3523,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'handlePlotXLimChange:force-interaction-off');
             end
 
             % [버그 완벽 수정] 줌/팬 등에 의해 X축 범위가 변경되었을 때
@@ -3784,7 +3784,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'getConfiguredPlotHeight');
             end
         end
 
@@ -3802,7 +3802,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'getLivePlotHeight');
             end
         end
 
@@ -3851,7 +3851,7 @@
                     tf = logical(cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'getLinkXWithinTab');
             end
         end
 
@@ -3865,7 +3865,7 @@
                 cfg.Flights(fIdx).PlotTabs(tabIdx).LinkXWithinTab = logical(enabled);
                 app.PlotConfigState = cfg;
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setLinkXWithinTab:state');
             end
             try
                 axesCell = app.UI(fIdx).plotAxes{tabIdx};
@@ -3874,7 +3874,7 @@
                     if enabled, linkaxes(allAxes, 'x'); else, linkaxes(allAxes, 'off'); end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setLinkXWithinTab:live-link');
             end
         end
 
@@ -3890,7 +3890,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'disableLinkXOnIndividualEdit');
             end
             app.markProjectDirtyAndScheduleRefresh('linkx-off');
         end
@@ -3913,7 +3913,7 @@
                 cfg.Flights(fIdx).PlotTabs(tabIdx).Plots = plots;
                 app.PlotConfigState = cfg;
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'recordPlotInConfig');
             end
         end
 
@@ -3977,7 +3977,7 @@
                                             end
                                         end
                                     catch ME
-                                        app.logCaught(ME, 'silent');
+                                        app.logCaught(ME, 'capturePlotConfigFromUi:y-column');
                                     end
                                 end
                                 % Inherit Height from existing entry when possible.
@@ -4008,7 +4008,7 @@
                     newTabs = app.compactPlotTabsSpec(newTabs);
                     cfg.Flights(fIdx).PlotTabs = newTabs;
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'capturePlotConfigFromUi:flight');
                 end
             end
             app.PlotConfigState = cfg;
@@ -4052,7 +4052,7 @@
                 end
                 % [R-11] onCleanup fires at function exit; do not clear manually.
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'applyPlotAxisConfig');
             end
         end
 
@@ -4066,7 +4066,7 @@
                 if isempty(ax) || ~isvalid(ax), return; end
                 ylabel(ax, yLabelText, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'applyPlotYLabelInPlace');
             end
         end
 
@@ -4081,7 +4081,7 @@
                 rowHeight{plotIdx} = heightValue;
                 layout.RowHeight = rowHeight;
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'applyPlotHeightInPlace');
             end
         end
 
@@ -4203,11 +4203,11 @@
                             lineObj = h;
                         end
                     catch ME_silent
-                        app.logCaught(ME_silent, 'silent');
+                        app.logCaught(ME_silent, 'findMainPlotLine:tagged-line');
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'findMainPlotLine:fallback');
             end
         end
 
@@ -4232,7 +4232,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'getPlotYData');
             end
         end
 
@@ -4245,7 +4245,7 @@
                 if isempty(srcAx) || ~isvalid(srcAx), return; end
                 xlim = srcAx.XLim;
             catch ME
-                app.logCaught(ME, 'silent'); return
+                app.logCaught(ME, 'syncSelectedPlotXLimToAll:source'); return
             end
             for f = 1:2
                 try
@@ -4259,7 +4259,7 @@
                         end
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'syncSelectedPlotXLimToAll:target');
                 end
             end
             app.markProjectDirtyAndScheduleRefresh('xlim-sync-all');
@@ -4280,7 +4280,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'applyTabXLimToTab');
             end
             app.markProjectDirtyAndScheduleRefresh('xlim-tab');
         end
@@ -4293,7 +4293,7 @@
                 if isempty(srcAx) || ~isvalid(srcAx), return; end
                 xlim = srcAx.XLim;
             catch ME
-                app.logCaught(ME, 'silent'); return
+                app.logCaught(ME, 'applyTabXLimToAllTabs:source'); return
             end
             for f = 1:2
                 try
@@ -4307,7 +4307,7 @@
                         end
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'applyTabXLimToAllTabs:target');
                 end
             end
             app.markProjectDirtyAndScheduleRefresh('xlim-all-tabs');
@@ -4345,7 +4345,7 @@
             try
                 app.capturePlotConfigFromUi();
             catch ME_pc
-                app.logCaught(ME_pc, 'silent');
+                app.logCaught(ME_pc, 'exportEverythingToFolder:refresh-project-cache');
             end
             st = app.collectCurrentProjectState();
             [fileList, missingList] = app.buildExportFileList(st);
@@ -4567,7 +4567,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'getExportProjectPreviewPath');
             end
         end
 
@@ -4594,7 +4594,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'releaseOpenAvisForExport');
             end
         end
 
@@ -4611,7 +4611,7 @@
                     app.loadAviFileFromPath(fIdx, p, ...
                         struct('promptOnSync', false, 'preserveSync', true));
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'reopenReleasedAvis');
                 end
             end
         end
@@ -4829,7 +4829,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'validateMappedColsAgainstData');
             end
         end
 
@@ -4856,7 +4856,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'validatePlotConfigAgainstData');
             end
         end
 
@@ -5046,7 +5046,7 @@
                             app.afterFileReplaceValidation(fIdx, 'project-load');
                         end
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'autoLoadProjectFromFile');
                     end
                 end
 
@@ -5216,7 +5216,7 @@
                                 end
                             end
                         catch ME
-                            app.logCaught(ME, 'silent');
+                            app.logCaught(ME, 'rebuildPlotsFromConfig');
                         end
                     end
                 end
@@ -5324,7 +5324,7 @@
                 catch ME
                     app.logCaught(ME, 'editClose:plotCapture');
                 end
-            catch ME, app.logCaught(ME, 'silent'); end
+            catch ME, app.logCaught(ME, 'closeEditDialog:clear-pending-timer'); end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     % Capture position into project ui state before closing.
@@ -5336,7 +5336,7 @@
                     delete(app.EditDialog);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'closeEditDialog:delete-dialog');
             end
             app.EditDialog = [];
         end
@@ -5393,7 +5393,7 @@
                     app.logCaught(ME, 'refreshExportTab');
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'refreshEditDialog');
             end
         end
 
@@ -5842,7 +5842,7 @@
                         'VariableNames', {'Header', 'Unit', 'Format', 'Order', 'Scale'});
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'refreshOptionsTab');
             end
         end
 
@@ -5873,7 +5873,7 @@
                     expand(app.EDPlotTree);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'refreshPlotTab');
             end
         end
 
@@ -5977,7 +5977,7 @@
                     app.markProjectDirtyAndScheduleRefresh('autosave-on');
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'editDialogToggleAutosave');
             end
         end
 
@@ -5986,7 +5986,7 @@
                 app.ProjectConfirmOnClose = logical(on);
                 app.markProjectDirtyAndScheduleRefresh('close-confirm-policy');
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'editDialogToggleCloseConfirm');
             end
         end
 
@@ -6395,7 +6395,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'onPlotTreeSelectionChanged');
             end
         end
 
@@ -6404,7 +6404,7 @@
                 app.EDPlotYMin.Enable = ternary(isAuto, 'off', 'on');
                 app.EDPlotYMax.Enable = ternary(isAuto, 'off', 'on');
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'editDialogToggleYAuto');
             end
         end
 
@@ -6413,7 +6413,7 @@
                 app.EDPlotXMin.Enable = ternary(isAuto, 'off', 'on');
                 app.EDPlotXMax.Enable = ternary(isAuto, 'off', 'on');
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'editDialogToggleXAuto');
             end
         end
 
@@ -6493,7 +6493,7 @@
                                 cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLim = ax.YLim;
                             end
                         catch ME
-                            app.logCaught(ME, 'silent');
+                            app.logCaught(ME, 'editDialogApplyPlotProps:capture-axis');
                         end
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).Height = app.EDPlotHeight.Value;
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).YLabel = yLabelText;
