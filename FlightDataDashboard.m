@@ -277,6 +277,16 @@
                 for fIdx = 1:2
                     try
                         if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
+                           isfield(app.UI(fIdx), 'vidViewerDialog') && ...
+                           ~isempty(app.UI(fIdx).vidViewerDialog) && isvalid(app.UI(fIdx).vidViewerDialog)
+                            app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).vidViewerDialog, 'delete:vid-viewer-dialog-axes');
+                            delete(app.UI(fIdx).vidViewerDialog);
+                        end
+                    catch ME
+                        app.logCaught(ME, 'delete:vid-viewer-dialog');
+                    end
+                    try
+                        if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
                            isfield(app.UI(fIdx), 'vidControlDialog') && ...
                            ~isempty(app.UI(fIdx).vidControlDialog) && isvalid(app.UI(fIdx).vidControlDialog)
                             app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).vidControlDialog, 'delete:vid-control-dialog-axes');
@@ -1055,15 +1065,13 @@
                     app.UI(fIdx).btnMap.Text = '지도/고도 ▸';
                 end
             elseif strcmp(pnlName, 'video')
-                app.UI(fIdx).panelVideo.Visible = newState;
+                app.setVideoViewerVisible(fIdx, newState, false);
                 if newState
-                    % [V3.12 2.1] 영상 로드되어 있으면 영상 비율 기반 너비 사용
-                    targetWidth = app.getVideoPanelTargetWidth();
-                    widths{6} = targetWidth; % 5를 6으로 수정
-                    app.UI(fIdx).btnVid.Text = '비디오 ▾';
+                    widths{5} = 0;
+                    widths{6} = 0;
                 else
-                    widths{6} = 0;           % 5를 6으로 수정
-                    app.UI(fIdx).btnVid.Text = '비디오 ▸';
+                    widths{5} = 0;
+                    widths{6} = 0;
                 end
             end
             app.UI(fIdx).dataGrid.ColumnWidth = widths;
@@ -1074,15 +1082,67 @@
         % ---------------------------------------------------------------------
         % 비디오 및 동기화
         % ---------------------------------------------------------------------
+        function tf = areBothFlightDataLoaded(app)
+            tf = false;
+            try
+                tf = numel(app.Models) >= 2 ...
+                    && ~isempty(app.Models(1).rawData) && height(app.Models(1).rawData) > 0 ...
+                    && ~isempty(app.Models(2).rawData) && height(app.Models(2).rawData) > 0;
+            catch
+                tf = false;
+            end
+        end
+
+        function color = getFlightTableBgColor(~, fIdx)
+            color = [0.23 0.51 0.96];
+            if fIdx == 2
+                color = [0.31 0.27 0.90];
+            end
+        end
+
+        function refreshGlobalSyncControls(app)
+            try
+                if isempty(app.SyncBtn) || ~isvalid(app.SyncBtn) || isempty(app.SyncInput) || ~isvalid(app.SyncInput)
+                    return;
+                end
+                hasBoth = app.areBothFlightDataLoaded();
+                if ~hasBoth
+                    app.SyncBtn.Enable = 'off';
+                    app.SyncInput.Enable = 'off';
+                    if ~app.SyncState.IsSynced
+                        app.SyncBtn.Text = '비행시간 동기';
+                        app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
+                    end
+                    return;
+                end
+                app.SyncBtn.Enable = 'on';
+                if app.SyncState.IsSynced
+                    app.SyncInput.Enable = 'off';
+                    app.SyncBtn.Text = '비행시간 동기 해제';
+                    app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
+                else
+                    app.SyncInput.Enable = 'on';
+                    app.SyncBtn.Text = '비행시간 동기';
+                    app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
+                end
+            catch ME
+                app.logCaught(ME, 'refreshGlobalSyncControls');
+            end
+        end
+
         function toggleSync(app)
             if app.SyncState.IsSynced
                 app.SyncState.IsSynced = false;
-                app.SyncBtn.Text = '비행시간 동기';
-                app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
-                app.SyncInput.Enable = 'on';
+                app.refreshGlobalSyncControls();
                 if ~isempty(app.Models(2).rawData)
                     app.UI(2).spinner.Enable = 'on';
                 end
+                return;
+            end
+
+            if ~app.areBothFlightDataLoaded()
+                app.refreshGlobalSyncControls();
+                errordlg('두 경로 데이터가 모두 로드되어야 합니다.', '데이터 부족');
                 return;
             end
 
@@ -1093,6 +1153,7 @@
                 return;
             end
             if isempty(app.Models(1).rawData) || isempty(app.Models(2).rawData)
+                app.refreshGlobalSyncControls();
                 errordlg('두 경로 데이터가 모두 로드되어야 합니다.', '데이터 부족');
                 return;
             end
@@ -1106,6 +1167,7 @@
             app.SyncBtn.Text = '비행시간 동기 해제';
             app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
             app.SyncInput.Enable = 'off';
+            app.refreshGlobalSyncControls();
             app.UI(2).spinner.Enable = 'off';
 
             timeCol1 = app.Models(1).mappedCols.Time;
@@ -1480,12 +1542,8 @@
         % [V3.12 2.1] 영상 가로:세로 비율에 따라 비디오 패널 너비 동적 조정
         function adjustVideoPanelWidth(app, fIdx)
             try
-                targetWidth = app.getVideoPanelTargetWidth();
-
                 if app.UI(fIdx).PanelVisible.video
-                    widths = app.UI(fIdx).dataGrid.ColumnWidth;
-                    widths{6} = targetWidth;  % 5를 6으로 수정
-                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                    app.setVideoViewerVisible(fIdx, true, false);
                 end
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
@@ -6541,6 +6599,14 @@
                         cfg.Flights(fIdx).PlotTabs(t).Plots(p).Order = p;
                         app.applyPlotHeightInPlace(fIdx, t, p, app.EDPlotHeight.Value);
                         app.PlotConfigState = cfg;
+                        try
+                            currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                            timeCol = app.Models(fIdx).mappedCols.Time;
+                            currTime = app.Models(fIdx).rawData.(timeCol)(currIdx);
+                            app.updatePlotTimeLines(fIdx, currIdx, currTime);
+                        catch ME
+                            app.logCaught(ME, 'plot-apply:restore-current-marker');
+                        end
                         app.refreshBoardOffSummaryPanel(fIdx, true);
                     else
                         return;
@@ -7085,27 +7151,36 @@
             end
         end
 
-        function setupDataUI(app, fIdx)
+        function setupDataUI(app, fIdx, resetIndex)
+            if nargin < 3
+                resetIndex = true;
+            end
             if height(app.Models(fIdx).rawData) > 0
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 times = app.Models(fIdx).rawData.(timeCol);
                 dt = mean(diff(times(1:min(100, end))));
                 if dt <= 0, dt = 1; end
+                if resetIndex
+                    currIdx = 1;
+                else
+                    currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                end
 
                 app.UI(fIdx).spinner.Limits = [times(1), times(end)];
                 app.UI(fIdx).spinner.Step = dt;
-                app.UI(fIdx).spinner.Value = times(1);
+                app.UI(fIdx).spinner.Value = times(currIdx);
 
                 if ~(app.SyncState.IsSynced && fIdx == 2)
                     app.UI(fIdx).spinner.Enable = 'on';
                 end
 
-                app.Models(fIdx).currentIndex = 1;
+                app.Models(fIdx).currentIndex = currIdx;
                 app.calculateBounds(fIdx);
 
                 app.initPlots(fIdx);
-                app.updateDashboard(fIdx, 1);
+                app.updateDashboard(fIdx, currIdx);
                 app.refreshBoardOffSummaryPanel(fIdx, true);
+                app.refreshGlobalSyncControls();
             end
         end
 
@@ -7548,7 +7623,7 @@
         end
 
         function sizePx = getSelectedVideoDisplaySize(app, fIdx)
-            sizePx = [320, 240];
+            sizePx = [720, 512];
             try
                 if ~isempty(app.UI) && fIdx <= numel(app.UI) && ...
                    isfield(app.UI(fIdx), 'vidResolutionDropdown') && ...
@@ -7564,9 +7639,61 @@
             end
         end
 
+        function pos = getVideoViewerDialogPosition(app, fIdx)
+            sizePx = app.getSelectedVideoDisplaySize(fIdx);
+            dlgW = max(780, sizePx(1) + 60);
+            dlgH = max(620, sizePx(2) + 120);
+            try
+                screen = app.getActiveScreenArea();
+                dlgW = min(dlgW, max(640, screen(3) - 80));
+                dlgH = min(dlgH, max(480, screen(4) - 120));
+                x = screen(1) + max(20, round((screen(3) - dlgW) / 2));
+                y = screen(2) + max(40, round((screen(4) - dlgH) / 2));
+                pos = [x, y, dlgW, dlgH];
+            catch
+                pos = [120, 120, dlgW, dlgH];
+            end
+        end
+
+        function setVideoViewerVisible(app, fIdx, tf, doReflow)
+            if nargin < 4, doReflow = true; end
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                dlg = app.UI(fIdx).vidViewerDialog;
+                if isempty(dlg) || ~isvalid(dlg), return; end
+                if tf
+                    targetPos = app.getVideoViewerDialogPosition(fIdx);
+                    dlgWasHidden = ~strcmpi(char(dlg.Visible), 'on');
+                    if dlgWasHidden || dlg.Position(3) < targetPos(3) || dlg.Position(4) < targetPos(4)
+                        dlg.Position = targetPos;
+                    end
+                    dlg.Visible = 'on';
+                    app.setVideoDisplaySize(fIdx);
+                    app.UI(fIdx).PanelVisible.video = true;
+                    if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
+                        app.UI(fIdx).btnVid.Text = '비디오 창 닫기';
+                    end
+                else
+                    dlg.Visible = 'off';
+                    app.UI(fIdx).PanelVisible.video = false;
+                    if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
+                        app.UI(fIdx).btnVid.Text = '비디오 ▸';
+                    end
+                end
+                if doReflow
+                    app.reflowBoardColumns(fIdx);
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoViewerVisible');
+            end
+        end
+
         function onVideoResolutionChanged(app, fIdx)
             try
                 app.setVideoImageFrame(fIdx, app.CurrentVideoFrame{fIdx});
+                if app.UI(fIdx).PanelVisible.video
+                    app.setVideoViewerVisible(fIdx, true, false);
+                end
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
                 app.logCaught(ME_silent, 'videoResolution');
@@ -7881,9 +8008,7 @@
                     widths{5} = 0;  % H/I splitter
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         st = app.UI(fIdx).PanelVisible;
-                        if isfield(st, 'video') && st.video && numel(widths) >= 6
-                            widths{6} = '1x';
-                        elseif isfield(st, 'map') && st.map
+                        if isfield(st, 'map') && st.map
                             widths{2} = '1x';
                         elseif isfield(st, 'attitude') && st.attitude
                             widths{1} = '1x';
@@ -7909,7 +8034,7 @@
                     app.setUiVisible(app.UI(fIdx).panelMapAlt, st.map);
                 end
                 if isfield(st, 'video') && isfield(app.UI(fIdx), 'panelVideo')
-                    app.setUiVisible(app.UI(fIdx).panelVideo, st.video);
+                    app.setVideoViewerVisible(fIdx, st.video, false);
                 end
             catch ME
                 app.logCaught(ME, 'boardSyncPanelHandles');
@@ -7925,12 +8050,11 @@
                 end
                 app.syncBoardPanelHandles(fIdx);
                 panelWidths = app.getResponsivePanelWidths();
-                widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, app.getVideoPanelTargetWidth()};
+                widths = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 0, 0};
                 if isfield(app.UI(fIdx), 'PanelVisible')
                     st = app.UI(fIdx).PanelVisible;
                     if isfield(st, 'attitude') && ~st.attitude, widths{1} = 0; end
                     if isfield(st, 'map') && ~st.map, widths{2} = 0; end
-                    if isfield(st, 'video') && ~st.video, widths{6} = 0; end
                 end
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
@@ -7939,9 +8063,7 @@
                     widths{5} = 0;
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         st = app.UI(fIdx).PanelVisible;
-                        if isfield(st, 'video') && st.video
-                            widths{6} = '1x';
-                        elseif isfield(st, 'map') && st.map
+                        if isfield(st, 'map') && st.map
                             widths{2} = '1x';
                         elseif isfield(st, 'attitude') && st.attitude
                             widths{1} = '1x';
@@ -8016,6 +8138,7 @@
                         isvalid(app.UI(sourceIdx).dataTable) && isfield(app.UI(fIdx), 'boardOffTable') && ...
                         ~isempty(app.UI(fIdx).boardOffTable) && isvalid(app.UI(fIdx).boardOffTable)
                     app.UI(fIdx).boardOffTable.Data = app.UI(sourceIdx).dataTable.Data;
+                    app.UI(fIdx).boardOffTable.BackgroundColor = app.getFlightTableBgColor(sourceIdx);
                 end
 
                 sig = app.getBoardOffPlotSignature(sourceIdx);
@@ -8459,8 +8582,7 @@
                 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
             infoPanel.Layout.Column = 1;
             infoGrid = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
-            tblBgColor = [0.23 0.51 0.96];
-            if fIdx == 2, tblBgColor = [0.31 0.27 0.90]; end
+            tblBgColor = app.getFlightTableBgColor(fIdx);
             tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], ...
                 'FontWeight', 'bold', 'RowStriping', 'off', 'ColumnName', {'항목', '값'}, ...
                 'RowName', [], 'ColumnWidth', {'26x', '24x'}, 'FontSize', 11, 'FontName', 'Consolas');
@@ -8470,7 +8592,7 @@
             tbl.ContextMenu = cm;
             tbl.CellSelectionCallback = @(~, event) app.boardOffTableSelection(fIdx, event);
 
-            plotPanel = uipanel(root, 'Title', 'H: 데이터 뷰 패널', ...
+            plotPanel = uipanel(root, 'Title', 'plot 데이터', ...
                 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w');
             plotPanel.Layout.Column = 2;
             plotGrid = uigridlayout(plotPanel, [2 1], 'Padding', [2 2 2 2]);
@@ -8533,7 +8655,7 @@
                         'timeLines', {}, 'timeMarkers', {}, 'plotData', {}, 'xLimListeners', {}, 'altXLimListener', {}, 'vidAxes', {}, 'vidImageHandle', {}, ...
                         'dataGrid', {}, 'panelAttitude', {}, 'panelMapAlt', {}, 'panelVideo', {}, ...
                         'btnAtt', {}, 'btnMap', {}, 'btnVid', {}, 'PanelVisible', {}, ...
-                        'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
+                        'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
                         'vidVideoFpsInput', {}, 'vidDataFpsInput', {}, ...
                         'vidFrameAxes', {}, 'vidFrameXLine', {}, 'vidFrameMarker', {}, ...
@@ -8576,18 +8698,18 @@
                 UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', [0.8 0.1 0.1]);
                 UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', [0.2 0.2 0.2], 'FontSize', 11, 'FontWeight', 'bold');
 
-                UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
+                UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
                 UI_temp(fIdx).btnAtt.Layout.Column = 6;
-                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도/고도 ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'map'));
+                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도/고도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'map'));
                 UI_temp(fIdx).btnMap.Layout.Column = 7;
-                UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
+                UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
                 UI_temp(fIdx).btnVid.Layout.Column = 8;
-                UI_temp(fIdx).PanelVisible = struct('attitude', true, 'map', true, 'video', true);
+                UI_temp(fIdx).PanelVisible = struct('attitude', false, 'map', false, 'video', false);
 
                 % [레이아웃 순서 확정 및 폭 최적화] 자세(200) -> 지도/고도(500) -> 정보(250) -> H패널(1x) -> splitter(6) -> 비디오(500)
                 % [PATCH UX-3] H↔I 경계 splitter 컬럼 추가
                 UI_temp(fIdx).dataGrid = uigridlayout(fGrid, [1 6]);
-                UI_temp(fIdx).dataGrid.ColumnWidth = {panelWidths(1), panelWidths(2), panelWidths(3), '1x', 8, panelWidths(4)};
+                UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, panelWidths(3), '1x', 0, 0};
                 UI_temp(fIdx).dataGrid.RowHeight = {'1x'};
                 UI_temp(fIdx).dataGrid.Padding = [0 0 0 0];
                 UI_temp(fIdx).dataGrid.ColumnSpacing = 3;   % splitter 가시성
@@ -8596,6 +8718,7 @@
                 % --- (b) Col 1: 비행 자세 (Pitch / Roll / Heading 게이지) ---
                 UI_temp(fIdx).panelAttitude = uipanel(UI_temp(fIdx).dataGrid, 'Title', '비행 자세', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
                 UI_temp(fIdx).panelAttitude.Layout.Column = 1;
+                UI_temp(fIdx).panelAttitude.Visible = 'off';
                 gGrid = uigridlayout(UI_temp(fIdx).panelAttitude, [3 1]);
                 gGrid.RowHeight = {'1x', '1x', '1x'};
                 gGrid.Padding = [2 2 2 2];
@@ -8608,6 +8731,7 @@
                 % --- (c) Col 2: Map (위) + Altitude (아래) ---
                 UI_temp(fIdx).panelMapAlt = uipanel(UI_temp(fIdx).dataGrid, 'BorderType', 'none', 'BackgroundColor', panelColors{fIdx});
                 UI_temp(fIdx).panelMapAlt.Layout.Column = 2;
+                UI_temp(fIdx).panelMapAlt.Visible = 'off';
                 pGrid = uigridlayout(UI_temp(fIdx).panelMapAlt, [2 1]);
                 pGrid.RowHeight = {'1.5x', '1x'};
                 pGrid.Padding = [0 0 0 0];
@@ -8643,7 +8767,7 @@
                 infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
                 infoPanel.Layout.Column = 3;
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
-                if fIdx == 1, tblBgColor = [0.23 0.51 0.96]; else, tblBgColor = [0.31 0.27 0.90]; end
+                tblBgColor = app.getFlightTableBgColor(fIdx);
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
                                              'RowStriping', 'off', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
                                              'ColumnWidth', {'29x', '20x'}, 'FontSize', 11, 'FontName', 'Consolas');
@@ -8653,7 +8777,7 @@
                 UI_temp(fIdx).dataTable.CellSelectionCallback = @(~, event) app.handleTableSelection(fIdx, event);
 
                 % --- (e) Col 4: H 패널 (플롯 tabGroup) ---
-                hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'H: 데이터 뷰 패널', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
                 hPnl.Layout.Column = 4;
                 hGrid2 = uigridlayout(hPnl, [2 1]);
                 hGrid2.RowHeight = {30, '1x'};
@@ -8689,8 +8813,22 @@
                 UI_temp(fIdx).hiSplitter.Layout.Column = 5;
                 UI_temp(fIdx).hiSplitter.ButtonDownFcn = @(~,~) app.startHISplitterDrag(fIdx);
 
-                UI_temp(fIdx).panelVideo = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'I: AVI Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
-                UI_temp(fIdx).panelVideo.Layout.Column = 6;
+                UI_temp(fIdx).vidViewerDialog = uifigure('Name', sprintf('Video Player - Flight Data %d', fIdx), ...
+                    'Visible', 'off', 'Position', [120, 120, 780, 620], ...
+                    'Color', [0.94 0.94 0.96], ...
+                    'CloseRequestFcn', @(~,~) app.setVideoViewerVisible(fIdx, false, true));
+                try
+                    if isprop(UI_temp(fIdx).vidViewerDialog, 'AutoResizeChildren')
+                        UI_temp(fIdx).vidViewerDialog.AutoResizeChildren = 'off';
+                    end
+                catch ME_silent
+                    app.logCaught(ME_silent, 'videoViewer:auto-resize');
+                end
+                viewerRoot = uigridlayout(UI_temp(fIdx).vidViewerDialog, [1 1], ...
+                    'Padding', [6 6 6 6], 'RowHeight', {'1x'}, 'ColumnWidth', {'1x'});
+                UI_temp(fIdx).panelVideo = uipanel(viewerRoot, 'Title', 'Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                UI_temp(fIdx).panelVideo.Layout.Row = 1;
+                UI_temp(fIdx).panelVideo.Layout.Column = 1;
                 % 영상 표시 우선: 제어 기능은 별도 다이얼로그로 분리
                 iGrid2 = uigridlayout(UI_temp(fIdx).panelVideo, [2 1]);
                 iGrid2.RowHeight = {34, '1x'};
@@ -8727,6 +8865,7 @@
                 UI_temp(fIdx).vidAxes.Toolbar.Visible = 'off';
                 UI_temp(fIdx).vidImageHandle = image(UI_temp(fIdx).vidAxes, zeros(512,720,3,'uint8'), ...
                     'XData', [1 720], 'YData', [1 512]);
+                app.applyLightPanelTitleContrast(UI_temp(fIdx).vidViewerDialog);
                 ctrl = app.createVideoControlDialog(fIdx);
                 UI_temp(fIdx).vidControlDialog = ctrl.vidControlDialog;
                 UI_temp(fIdx).vidSyncFrameInput = ctrl.vidSyncFrameInput;
@@ -8795,6 +8934,7 @@
 
                 % 비디오 + Frame Navigator 그룹
                 grp.video = struct( ...
+                    'viewerDialog',    u.vidViewerDialog, ...
                     'panel',           u.panelVideo, ...
                     'container',       u.vidContainer, ...
                     'vidAxes',         u.vidAxes, ...
@@ -8851,12 +8991,12 @@
             app.UIGroup = UIGroup_temp;
         end
 
-        % [V3.22 #7] 메인 윈도우 상단 헤더 바 (파일 선택 / Debug / Sync 입력)
+        % [V3.22 #7] 메인 윈도우 상단 헤더 바 (파일 선택 / Sync 입력)
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', 'w', 'BorderType', 'none');
-            glHeader = uigridlayout(hHeaderPanel, [1 12]);
-            glHeader.ColumnWidth = {140, 140, 140, 110, 110, '1x', 80, 150, 150, 72, 80, 110};
+            glHeader = uigridlayout(hHeaderPanel, [1 11]);
+            glHeader.ColumnWidth = {140, 140, 140, 110, 110, '1x', 150, 150, 72, 80, 110};
             glHeader.RowHeight = {'fit'};
             glHeader.Padding = [5 5 5 5];
             glHeader.ColumnSpacing = 5;
@@ -8878,15 +9018,10 @@
                 'ButtonPushedFcn', @(~, ~) app.toggleBoardVisibility(2));
             uilabel(glHeader, 'Text', '');
 
-            % [V3.15 항목 5-3] DebugMode GUI 체크박스
-            uicheckbox(glHeader, 'Text', 'Debug', 'Value', false, ...
-                'FontSize', 12, 'FontWeight', 'bold', ...
-                'Tooltip', 'XLim 변경, 캐시 변동 등 디버그 로그를 콘솔에 출력', ...
-                'ValueChangedFcn', @(src,~) app.toggleDebugMode(src.Value));
-
-            app.SyncInput = uieditfield(glHeader, 'text', 'Value', '', 'Tooltip', 'ex: 23.4, 34.4', 'FontSize', 13);
+            app.SyncInput = uieditfield(glHeader, 'text', 'Value', '', 'Enable', 'off', ...
+                'Tooltip', 'ex: 23.4, 34.4', 'FontSize', 13);
             app.SyncBtn = uibutton(glHeader, 'Text', '비행시간 동기', 'BackgroundColor', [0.58 0.0 0.83], 'FontColor', 'w', ...
-                               'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.toggleSync());
+                               'Enable', 'off', 'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.toggleSync());
             app.WindowMinBtn = uibutton(glHeader, 'Text', '최소화', ...
                 'FontSize', 12, 'ButtonPushedFcn', @(~, ~) app.minimizeWindow());
             app.WindowMaxBtn = uibutton(glHeader, 'Text', '최대화', ...
@@ -8903,6 +9038,7 @@
                 app.logCaught(ME_silent, 'buildHeaderBar:edit-button');
             end
             app.updateBoardToggleButtons();
+            app.refreshGlobalSyncControls();
         end
 
         function [ax, lbl] = createGaugePanel(~, parentPnl, titleStr)
@@ -9404,7 +9540,7 @@
                 for fIdx = 1:2
                     try
                         if ~isempty(app.Models(fIdx).rawData) && height(app.Models(fIdx).rawData) > 0
-                            app.setupDataUI(fIdx);
+                            app.setupDataUI(fIdx, false);
                             app.refreshSyncUi(fIdx);
                         end
                     catch ME
@@ -9433,13 +9569,7 @@
             if ~enabled
                 app.SyncState.IsSynced = false;
                 try
-                    if ~isempty(app.SyncBtn) && isvalid(app.SyncBtn)
-                        app.SyncBtn.Text = '비행시간 동기';
-                        app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
-                    end
-                    if ~isempty(app.SyncInput) && isvalid(app.SyncInput)
-                        app.SyncInput.Enable = 'on';
-                    end
+                    app.refreshGlobalSyncControls();
                     if numel(app.UI) >= 2 && isfield(app.UI(2), 'spinner') ...
                             && ~isempty(app.UI(2).spinner) && isvalid(app.UI(2).spinner) ...
                             && ~isempty(app.Models(2).rawData)
@@ -9452,6 +9582,7 @@
                 return;
             end
             if isempty(app.Models(1).rawData) || isempty(app.Models(2).rawData)
+                app.refreshGlobalSyncControls();
                 try
                     uialert(app.UIFigure, '두 경로 데이터가 모두 로드되어야 합니다.', 'Sync');
                 catch
@@ -9465,6 +9596,7 @@
                 if ~isempty(app.SyncBtn) && isvalid(app.SyncBtn)
                     app.SyncBtn.Text = '비행시간 동기 해제';
                     app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
+                    app.SyncBtn.Enable = 'on';
                 end
                 if ~isempty(app.SyncInput) && isvalid(app.SyncInput)
                     app.SyncInput.Value  = sprintf('%g, %g', syncT1, syncT2);
@@ -9477,6 +9609,7 @@
             catch ME
                 app.logCaught(ME, 'setFlightDataSync:disable-spinner');
             end
+            app.refreshGlobalSyncControls();
             try
                 timeCol1 = app.Models(1).mappedCols.Time;
                 idx1 = app.findClosestIndexByTime(app.Models(1).rawData.(timeCol1), syncT1);
