@@ -114,6 +114,7 @@
         DraggedColumnSplitterInfo = struct('fIdx', 0, 'leftCol', 0, 'rightCol', 0)
         ColumnSplitterStartPoint = [0, 0]
         ColumnSplitterStartWidths = {}
+        UserColumnWidths = {[], []}           % [Layout] user-adjusted dataGrid ColumnWidth cache
         FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
         FrameCacheKeys      = {[], []}      % [V3.13 C-1] 비행경로별 캐시 키 순서 (LRU)
         DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
@@ -165,7 +166,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.7)
+        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.95)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -491,8 +492,12 @@
                 case 'applySavedLayoutPreset',         app.applySavedLayoutPresetForTest(varargin{:});
                 case 'deleteSavedLayoutPreset',        app.deleteSavedLayoutPresetForTest(varargin{:});
                 case 'roundTripProjectLayoutState'
+                    beforeState = app.getTestState();
                     st = app.collectCurrentProjectState();
                     app.applyProjectState(st, []);
+                    afterState = app.getTestState();
+                    varargout{1} = struct('Before', beforeState, 'After', afterState, ...
+                                          'ProjectState', st, 'Ok', true);
                 case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
                 case 'boardOffClearCurrentTab',       app.boardOffClearCurrentTab(varargin{:});
                 case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
@@ -3026,6 +3031,9 @@
             if event.Button ~= 1, return; end
             if isempty(app.Models(fIdx).rawData), return; end
             if app.SyncState.IsSynced && fIdx == 2, return; end
+            if app.IsDraggingSplitter || app.IsDraggingRowSplitter || app.IsDraggingColumnSplitter
+                return;
+            end
 
             % 드래그 상태 활성화 및 객체 HitTest 끄기
             app.IsDraggingMarker = true;
@@ -8480,7 +8488,7 @@
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
-                srcW = max(0.5, min(0.7, double(app.BoardOffSourceRatio)));
+                srcW = max(0.5, min(0.95, double(app.BoardOffSourceRatio)));
                 summaryW = 1 - srcW;
                 srcStr = sprintf('%dx', round(srcW * 100));
                 summaryStr = sprintf('%dx', round(summaryW * 100));
@@ -8646,6 +8654,7 @@
                 live{leftCol} = round(newLeft);
                 live{rightCol} = round(newRight);
                 dg.ColumnWidth = live;
+                app.rememberUserColumnWidths(fIdx, live);
                 app.refreshAfterColumnWidthChange(fIdx, false);
             catch ME
                 app.logCaught(ME, 'columnSplitter:motion');
@@ -8701,6 +8710,7 @@
                 cw{leftCol} = round(newLeft);
                 cw{rightCol} = round(newRight);
                 dg.ColumnWidth = cw;
+                app.rememberUserColumnWidths(fIdx, cw);
                 app.updateColumnSplitterVisibility(fIdx, cw);
                 app.refreshAfterColumnWidthChange(fIdx, true);
             catch ME
@@ -8727,6 +8737,32 @@
             catch ME
                 app.logCaught(ME, 'columnSplitter:postReflow');
             end
+        end
+
+        function rememberUserColumnWidths(app, fIdx, widths)
+            try
+                if fIdx < 1 || fIdx > 2, return; end
+                widths = app.normalizeDataGridColumnWidth(widths);
+                if isempty(widths), return; end
+                app.UserColumnWidths{fIdx} = widths;
+            catch ME
+                app.logCaught(ME, 'columnWidth:remember');
+            end
+        end
+
+        function widths = getRememberedColumnWidths(app, fIdx)
+            widths = {};
+            try
+                if fIdx < 1 || fIdx > numel(app.UserColumnWidths), return; end
+                widths = app.normalizeDataGridColumnWidth(app.UserColumnWidths{fIdx});
+            catch
+                widths = {};
+            end
+        end
+
+        function widths = getDefaultDataGridColumnWidths(app)
+            panelWidths = app.getResponsivePanelWidths();
+            widths = {panelWidths(1), 0, panelWidths(2), 0, panelWidths(3), 0, '1x', 0};
         end
 
         function px = widthSpecToPixels(~, spec, gridHandle)
@@ -8840,7 +8876,7 @@
                 if isfield(app.UI(fIdx), 'panelAlt') && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt)
                     app.UI(fIdx).panelAlt.Visible = hasAltOnly;
                 end
-                if isfield(st, 'video') && isfield(app.UI(fIdx), 'panelVideo')
+                if isfield(st, 'video')
                     app.setVideoViewerVisible(fIdx, st.video, false);
                 end
             catch ME
@@ -8857,21 +8893,41 @@
                 end
                 app.syncBoardPanelHandles(fIdx);
                 panelWidths = app.getResponsivePanelWidths();
-                widths = {panelWidths(1), 0, panelWidths(2), 0, panelWidths(3), 0, '1x', 0};
+                widths = app.getRememberedColumnWidths(fIdx);
+                if isempty(widths)
+                    widths = app.getDefaultDataGridColumnWidths();
+                end
                 infoOn = true;
                 dataViewOn = true;
                 if isfield(app.UI(fIdx), 'PanelVisible')
                     st = app.UI(fIdx).PanelVisible;
-                    if isfield(st, 'attitude') && ~st.attitude, widths{1} = 0; end
+                    if isfield(st, 'attitude') && ~st.attitude
+                        widths{1} = 0;
+                    elseif isfield(st, 'attitude') && st.attitude && app.isTestWidthZero(widths{1})
+                        widths{1} = panelWidths(1);
+                    end
                     % [L1 B-1] mapOnly + altOnly 둘 다 false 일 때만 컬럼 hide
                     mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
                                (isfield(st, 'altOnly') && st.altOnly) || ...
                                (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
-                    if ~mapColOn, widths{3} = 0; end
+                    if ~mapColOn
+                        widths{3} = 0;
+                    elseif app.isTestWidthZero(widths{3})
+                        widths{3} = panelWidths(2);
+                    end
                     if isfield(st, 'info'), infoOn = logical(st.info); end
                     if isfield(st, 'dataView'), dataViewOn = logical(st.dataView); end
-                    if ~infoOn, widths{5} = 0; end
-                    if ~dataViewOn, widths{7} = 0; end
+                    if ~infoOn
+                        widths{5} = 0;
+                    elseif app.isTestWidthZero(widths{5})
+                        widths{5} = panelWidths(3);
+                    end
+                    if ~dataViewOn
+                        widths{7} = 0;
+                    elseif app.isTestWidthZero(widths{7})
+                        widths{7} = '1x';
+                    end
+                    widths{2} = 0; widths{4} = 0; widths{6} = 0;
                     if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
                     if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
                     if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = 4; end
@@ -9171,6 +9227,9 @@
             try
                 if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
                     app.BodyGrid.RowHeight = app.normalizeBodyRowHeight(rows);
+                    if isempty(find(app.BoardOffState, 1))
+                        app.setUiVisible(app.BodyRowSplitter, true);
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:rows');
@@ -10324,7 +10383,7 @@
             layout = struct( ...
                 'CurrentLayoutPreset', 'custom', ...
                 'BoardOffState', [false, false], ...
-                'BoardOffSourceRatio', 0.7, ...
+                'BoardOffSourceRatio', 0.9, ...
                 'BodyRowSplitRatio', 0.5, ...
                 'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
                 'PanelVisible', [panel, panel]);
@@ -10511,7 +10570,14 @@
                     end
                     if ~isempty(app.UI) && numel(app.UI) >= fIdx && isfield(app.UI(fIdx), 'dataGrid') ...
                             && ~isempty(app.UI(fIdx).dataGrid) && isvalid(app.UI(fIdx).dataGrid)
-                        layout.ColumnWidth{fIdx} = app.UI(fIdx).dataGrid.ColumnWidth;
+                        cachedWidths = app.getRememberedColumnWidths(fIdx);
+                        if isempty(cachedWidths)
+                            layout.ColumnWidth{fIdx} = app.enforcePanelVisibilityOnColumnWidths( ...
+                                layout.PanelVisible(fIdx), app.UI(fIdx).dataGrid.ColumnWidth);
+                        else
+                            layout.ColumnWidth{fIdx} = app.enforcePanelVisibilityOnColumnWidths( ...
+                                layout.PanelVisible(fIdx), cachedWidths);
+                        end
                     end
                 catch ME
                     app.logCaught(ME, 'collectLayoutUiState:panel');
@@ -10527,7 +10593,7 @@
                 if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
                     app.UserLayoutPresets = layout.LayoutPresets;
                 end
-                app.BoardOffSourceRatio = max(0.5, min(0.7, double(layout.BoardOffSourceRatio)));
+                app.BoardOffSourceRatio = max(0.5, min(0.95, double(layout.BoardOffSourceRatio)));
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
@@ -10535,6 +10601,11 @@
                     end
                     app.UI(fIdx).PanelVisible = app.normalizePanelVisibleState(layout.PanelVisible(fIdx));
                     app.applyMapAltVisibility(fIdx);
+                    savedWidths = app.getLayoutColumnWidth(layout, fIdx);
+                    if ~isempty(savedWidths)
+                        savedWidths = app.enforcePanelVisibilityOnColumnWidths(layout.PanelVisible(fIdx), savedWidths);
+                        app.rememberUserColumnWidths(fIdx, savedWidths);
+                    end
                 end
 
                 offIdx = find(logical(layout.BoardOffState), 1);
@@ -10556,6 +10627,7 @@
                                 && isvalid(app.UI(fIdx).dataGrid)
                             savedWidths = app.enforcePanelVisibilityOnColumnWidths(layout.PanelVisible(fIdx), savedWidths);
                             app.UI(fIdx).dataGrid.ColumnWidth = savedWidths;
+                            app.rememberUserColumnWidths(fIdx, savedWidths);
                             app.updateColumnSplitterVisibility(fIdx, savedWidths);
                         end
                     end
@@ -10594,7 +10666,7 @@
                 bos(2) = false;
             end
             layout.BoardOffState = bos;
-            layout.BoardOffSourceRatio = max(0.5, min(0.7, double(layout.BoardOffSourceRatio)));
+            layout.BoardOffSourceRatio = max(0.5, min(0.95, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
@@ -10738,10 +10810,27 @@
             widths = app.normalizeDataGridColumnWidth(widths);
             if isempty(widths), return; end
             panelState = app.normalizePanelVisibleState(panelState);
-            if ~panelState.attitude, widths{1} = 0; end
-            if ~(panelState.mapOnly || panelState.altOnly), widths{3} = 0; end
-            if ~panelState.info, widths{5} = 0; end
-            if ~panelState.dataView, widths{7} = 0; end
+            panelWidths = app.getResponsivePanelWidths();
+            if ~panelState.attitude
+                widths{1} = 0;
+            elseif app.isTestWidthZero(widths{1})
+                widths{1} = panelWidths(1);
+            end
+            if ~(panelState.mapOnly || panelState.altOnly)
+                widths{3} = 0;
+            elseif app.isTestWidthZero(widths{3})
+                widths{3} = panelWidths(2);
+            end
+            if ~panelState.info
+                widths{5} = 0;
+            elseif app.isTestWidthZero(widths{5})
+                widths{5} = panelWidths(3);
+            end
+            if ~panelState.dataView
+                widths{7} = 0;
+            elseif app.isTestWidthZero(widths{7})
+                widths{7} = '1x';
+            end
             widths{2} = 0; widths{4} = 0; widths{6} = 0; widths{8} = 0;
             if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
             if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
