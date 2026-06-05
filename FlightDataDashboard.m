@@ -104,6 +104,7 @@
         DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
         CacheBudgetMB       = 30            % [V3.14 항목 3] 비행경로당 캐시 메모리 예산(MB) - GUI에서 조정
         LastSliderUpdate    = {uint64(0), uint64(0)}  % [PATCH] tic 핸들(채널별)
+        LastDragTableUpdate = [uint64(0), uint64(0)]  % [Perf] dataTable throttle (드래그 중)
         InGoToFrame         = [false, false] % [V3.16] goToFrame 재진입 차단 플래그
         PendingFrame        = [NaN, NaN]     % [V3.17 (1)(9)] 처리 중 들어온 최신 frame 요청
         PendingMode         = {'', ''}        % [V3.17 (1)(9)] 처리 중 들어온 최신 mode
@@ -744,7 +745,7 @@
                 'Indeterminate', 'on');
             % [Major 6] uiprogressdlg cleanup 을 autoLoadProjectFromFile 과 동일한 패턴으로
             % onCleanup + safeClose 로 일관화 → 어떤 분기에서 return/throw 해도 dialog 잔류 없음.
-            cleanupDlg = onCleanup(@() app.safeClose(d)); %#ok<NASGU>
+            cleanupDlg = onCleanup(@() app.safeClose(d));
             try
                 fullpath = fullfile(pathname, filename);
                 app.parseFlightData(fIdx, fullpath);
@@ -2092,7 +2093,10 @@
             try
                 if isempty(fut) || ~isvalid(fut), return; end
                 state = '';
-                try, state = char(fut.State); catch, end
+                try
+                    state = char(fut.State);
+                catch
+                end
                 hadError = false;
                 try
                     if ~isempty(fut.Error)
@@ -2111,7 +2115,11 @@
                 % If this future ended without delivering a usable frame, drain pending
                 % so a queued user request can proceed.
                 if hadError || ~strcmpi(state, 'finished')
-                    try, app.drainPendingVideoRequest(fIdx); catch ME, app.logCaught(ME, 'silent'); end
+                    try
+                        app.drainPendingVideoRequest(fIdx);
+                    catch ME
+                        app.logCaught(ME, 'silent');
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'async-finally');
@@ -3037,7 +3045,7 @@
                     % [Major 4] IsUpdating 복원을 onCleanup 로 고정 (예외 경로에서도 복원 보장)
                     prevUpdating = app.IsUpdating(fIdx);
                     app.IsUpdating(fIdx) = true;
-                    cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating)); %#ok<NASGU>
+                    cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating));
                     try
                         app.updateDashboard(fIdx, idx);
                     catch e
@@ -3093,7 +3101,23 @@
             try
                 if isempty(app.Models(fIdx).rawData), return; end
 
-                if isfield(app.UI(fIdx), 'dataTable') && ~isempty(app.UI(fIdx).dataTable) && isvalid(app.UI(fIdx).dataTable)
+                % [Perf] dataTable.Data = cell{N x 2} rewrite is the single most
+                % expensive per-frame op on MATLAB Online (uitable network round-trip).
+                % While dragging, throttle to ~6 fps (0.16 s); final value applies on stop.
+                allowTable = true;
+                if app.IsDraggingMarker
+                    last = app.LastDragTableUpdate(fIdx);
+                    if last ~= uint64(0) && toc(last) < 0.16
+                        allowTable = false;
+                    else
+                        app.LastDragTableUpdate(fIdx) = tic;
+                    end
+                else
+                    app.LastDragTableUpdate(fIdx) = uint64(0);
+                end
+
+                if allowTable && isfield(app.UI(fIdx), 'dataTable') ...
+                        && ~isempty(app.UI(fIdx).dataTable) && isvalid(app.UI(fIdx).dataTable)
                     metaList = app.Models(fIdx).displayMeta;
                     dataCell = cell(length(metaList), 2);
                     for i = 1:length(metaList)
@@ -3229,7 +3253,7 @@
                     % [Major 3] onCleanup 만으로 복원 — 수동 복원 제거 (중복 호출 방지/의도 명확화)
                     prevCascade = app.InCascade;
                     app.InCascade = true;
-                    cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade)); %#ok<NASGU>
+                    cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade));
                     app.updateMarkersOnly(2, idx2);
                 end
             end
@@ -4008,7 +4032,7 @@
                 end
                 oldFlag = app.IsProgrammaticXLim(fIdx);
                 app.IsProgrammaticXLim(fIdx) = true;
-                cleanupFlag = onCleanup(@() app.restoreProgrammaticXLim(fIdx, oldFlag)); %#ok<NASGU>
+                cleanupFlag = onCleanup(@() app.restoreProgrammaticXLim(fIdx, oldFlag));
                 if isfield(axisCfg, 'XLimMode') && strcmpi(char(axisCfg.XLimMode), 'auto')
                     ax.XLimMode = 'auto';
                 elseif isfield(axisCfg, 'XLim') && numel(axisCfg.XLim) == 2 ...
@@ -4931,7 +4955,7 @@
             try
                 d = uiprogressdlg(app.UIFigure, 'Title', 'Project 자동 로드', ...
                     'Message', 'project 파일 읽는 중', 'Cancelable', 'on');
-                cleanupDlg = onCleanup(@() app.safeClose(d)); %#ok<NASGU>
+                cleanupDlg = onCleanup(@() app.safeClose(d));
                 advance = @(val, msg) app.setProgress(d, val, msg);
 
                 advance(0.02, 'project 파일 읽는 중');
@@ -4941,13 +4965,13 @@
                 advance(0.08, '파일 경로 검증 중');
                 app.applyProjectState(st, struct('skipFiles', true));
                 if ~isempty(d) && d.CancelRequested
-                    loadCompletedCleanly = false; return;
+                    app.ProjectDirty = true; return;
                 end
 
                 stepBase = [0.10 0.18 0.30; 0.42 0.50 0.62]; % rows: flights, cols: option/data/avi
                 for fIdx = 1:2
                     if ~isempty(d) && d.CancelRequested
-                        loadCompletedCleanly = false; return;
+                        app.ProjectDirty = true; return;
                     end
 
                     % [Critical 2] Always re-read Models(fIdx) before each sub-step.
@@ -4990,7 +5014,7 @@
                 end
 
                 if ~isempty(d) && d.CancelRequested
-                    loadCompletedCleanly = false; return;
+                    app.ProjectDirty = true; return;
                 end
                 advance(0.78, '비행데이터 동기화 상태 복원 중');
                 if app.SyncState.IsSynced
@@ -5285,10 +5309,21 @@
             try
                 if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) ...
                         && strcmpi(app.EditApplyTimer.Running, 'on')
-                    try, stop(app.EditApplyTimer); catch, end
-                    try, app.applyPendingDialogChanges(); catch ME, app.logCaught(ME, 'editClose:pendingApply'); end
+                    try
+                        stop(app.EditApplyTimer);
+                    catch
+                    end
+                    try
+                        app.applyPendingDialogChanges();
+                    catch ME
+                        app.logCaught(ME, 'editClose:pendingApply');
+                    end
                 end
-                try, app.capturePlotConfigFromUi(); catch ME, app.logCaught(ME, 'editClose:plotCapture'); end
+                try
+                    app.capturePlotConfigFromUi();
+                catch ME
+                    app.logCaught(ME, 'editClose:plotCapture');
+                end
             catch ME, app.logCaught(ME, 'silent'); end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
@@ -5327,12 +5362,36 @@
                 end
                 % Refresh per-tab content if the handles still exist.
                 % [Medium #5] 각 sub-refresh 호출도 독립 try/catch 로 cascading failure 차단.
-                try, app.refreshProjectTab(); catch ME, app.logCaught(ME, 'refreshProjectTab'); end
-                try, app.refreshFilesTab();   catch ME, app.logCaught(ME, 'refreshFilesTab'); end
-                try, app.refreshSyncTab();    catch ME, app.logCaught(ME, 'refreshSyncTab'); end
-                try, app.refreshOptionsTab(); catch ME, app.logCaught(ME, 'refreshOptionsTab'); end
-                try, app.refreshPlotTab();    catch ME, app.logCaught(ME, 'refreshPlotTab'); end
-                try, app.refreshExportTab();  catch ME, app.logCaught(ME, 'refreshExportTab'); end
+                try
+                    app.refreshProjectTab();
+                catch ME
+                    app.logCaught(ME, 'refreshProjectTab');
+                end
+                try
+                    app.refreshFilesTab();
+                catch ME
+                    app.logCaught(ME, 'refreshFilesTab');
+                end
+                try
+                    app.refreshSyncTab();
+                catch ME
+                    app.logCaught(ME, 'refreshSyncTab');
+                end
+                try
+                    app.refreshOptionsTab();
+                catch ME
+                    app.logCaught(ME, 'refreshOptionsTab');
+                end
+                try
+                    app.refreshPlotTab();
+                catch ME
+                    app.logCaught(ME, 'refreshPlotTab');
+                end
+                try
+                    app.refreshExportTab();
+                catch ME
+                    app.logCaught(ME, 'refreshExportTab');
+                end
             catch ME
                 app.logCaught(ME, 'silent');
             end
@@ -8069,8 +8128,9 @@
                         p.Layout.Row = rowIdx;
                         p.Layout.Column = 1;
                         axGrid = uigridlayout(p, [1 1], 'Padding', [5 5 5 5]);
-                        % [R-10] Summary plot panels are created dynamically after layout init.
-                        app.applyLightPanelTitleContrast(p);
+                        % [Perf] Removed per-plot applyLightPanelTitleContrast(p) — p has
+                        % no Title text so contrast adjust is a no-op, and walking the
+                        % whole panel tree per plot dominated rebuildBoardOffPlots cost.
                         ax = uiaxes(axGrid);
                         ax.Layout.Row = 1;
                         ax.Layout.Column = 1;
@@ -9061,7 +9121,10 @@
                 if isempty(autoInfo) || isempty(mainInfo), return; end
                 if autoInfo(1).datenum <= mainInfo(1).datenum
                     % autosave older than current project; safe to ignore
-                    try, delete(autoPath); catch, end
+                    try
+                        delete(autoPath);
+                    catch
+                    end
                     return;
                 end
                 msg = sprintf(['이전 세션이 정상 종료되지 않아 자동 백업이 남아 있습니다.\n\n', ...
@@ -9083,7 +9146,10 @@
                         cancelled = true;
                     otherwise
                         % keep chosenPath = filePath; remove stale autosave
-                        try, delete(autoPath); catch, end
+                        try
+                            delete(autoPath);
+                        catch
+                        end
                 end
             catch ME
                 app.logCaught(ME, 'autosave-detect');
