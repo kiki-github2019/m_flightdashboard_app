@@ -329,7 +329,8 @@
                 if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer)
                     try
                         stop(app.EditApplyTimer);
-                    catch
+                    catch ME_stop
+                        app.logCaught(ME_stop, 'delete:edit-apply-timer-stop');
                     end
                     delete(app.EditApplyTimer);
                     app.EditApplyTimer = [];
@@ -341,7 +342,8 @@
                 if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer)
                     try
                         stop(app.AutosaveTimer);
-                    catch
+                    catch ME_stop
+                        app.logCaught(ME_stop, 'delete:autosave-timer-stop');
                     end
                     delete(app.AutosaveTimer);
                     app.AutosaveTimer = [];
