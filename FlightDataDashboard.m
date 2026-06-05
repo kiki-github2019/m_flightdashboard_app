@@ -828,22 +828,28 @@
         end
 
         function [ok, issues] = compareRoundTripLayoutState(app, beforeState, afterState)
-            issues = {};
+            issues = cell(1, 32);
+            issueCount = 0;
             try
                 if ~isequal(logical(beforeState.BoardOffState), logical(afterState.BoardOffState))
-                    issues{end + 1} = 'BoardOffState mismatch';
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'BoardOffState mismatch';
                 end
                 if abs(double(beforeState.BodyRowSplitRatio) - double(afterState.BodyRowSplitRatio)) > 1e-6
-                    issues{end + 1} = 'BodyRowSplitRatio mismatch';
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'BodyRowSplitRatio mismatch';
                 end
                 if ~app.layoutSpecCellsEqual(beforeState.BodyRowHeight, afterState.BodyRowHeight)
-                    issues{end + 1} = 'BodyRowHeight mismatch';
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'BodyRowHeight mismatch';
                 end
                 if ~strcmp(char(beforeState.CurrentLayoutPreset), char(afterState.CurrentLayoutPreset))
-                    issues{end + 1} = 'CurrentLayoutPreset mismatch';
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'CurrentLayoutPreset mismatch';
                 end
                 if double(beforeState.UserLayoutPresetCount) ~= double(afterState.UserLayoutPresetCount)
-                    issues{end + 1} = 'UserLayoutPresetCount mismatch';
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'UserLayoutPresetCount mismatch';
                 end
                 for fIdx = 1:2
                     fields = {'attitude', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
@@ -852,20 +858,25 @@
                         try
                             if logical(beforeState.boards(fIdx).PanelVisible.(nm)) ~= ...
                                     logical(afterState.boards(fIdx).PanelVisible.(nm))
-                                issues{end + 1} = sprintf('Flight %d PanelVisible.%s mismatch', fIdx, nm);
+                                issueCount = issueCount + 1;
+                                issues{issueCount} = sprintf('Flight %d PanelVisible.%s mismatch', fIdx, nm);
                             end
                         catch
-                            issues{end + 1} = sprintf('Flight %d PanelVisible.%s missing', fIdx, nm);
+                            issueCount = issueCount + 1;
+                            issues{issueCount} = sprintf('Flight %d PanelVisible.%s missing', fIdx, nm);
                         end
                     end
                     if ~app.layoutSpecCellsEqual(beforeState.boards(fIdx).dataGridColumnWidth, ...
                             afterState.boards(fIdx).dataGridColumnWidth)
-                        issues{end + 1} = sprintf('Flight %d ColumnWidth mismatch', fIdx);
+                        issueCount = issueCount + 1;
+                        issues{issueCount} = sprintf('Flight %d ColumnWidth mismatch', fIdx);
                     end
                 end
             catch ME
-                issues{end + 1} = sprintf('roundTrip compare failed: %s', ME.message);
+                issueCount = issueCount + 1;
+                issues{issueCount} = sprintf('roundTrip compare failed: %s', ME.message);
             end
+            issues = issues(1:issueCount);
             ok = isempty(issues);
         end
 
@@ -1273,13 +1284,8 @@
                 end
             elseif strcmp(pnlName, 'video')
                 app.setVideoViewerVisible(fIdx, newState, false);
-                if newState
-                    widths{5} = 0;
-                    widths{6} = 0;
-                else
-                    widths{5} = 0;
-                    widths{6} = 0;
-                end
+                widths{5} = 0;
+                widths{6} = 0;
             elseif strcmp(pnlName, 'info') || strcmp(pnlName, 'dataView')
                 app.refreshPanelToggleButtons(fIdx);
             end
@@ -1352,7 +1358,6 @@
         % 비디오 및 동기화
         % ---------------------------------------------------------------------
         function tf = areBothFlightDataLoaded(app)
-            tf = false;
             try
                 tf = numel(app.Models) >= 2 ...
                     && ~isempty(app.Models(1).rawData) && height(app.Models(1).rawData) > 0 ...
@@ -1511,7 +1516,9 @@
                     if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
                         parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
                     end
-                catch ME, app.logCaught(ME, 'loadAvi:worker-cache-cleanup'); end
+                catch ME
+                    app.logCaught(ME, 'loadAvi:worker-cache-cleanup');
+                end
             end
             startTime = app.computeStartTimeFromFlightData(fIdx);
             app.cleanupVideoResources(fIdx);
@@ -1699,12 +1706,14 @@
                     if app.VideoSyncState(fIdx).TotalFrames < 1
                         app.VideoSyncState(fIdx).TotalFrames = 1;
                     end
-                catch ME, app.logCaught(ME, 'applyVideoLoadedUI:totalFrames-fallback'); end
+                catch ME
+                    app.logCaught(ME, 'applyVideoLoadedUI:totalFrames-fallback');
+                end
                 % Surface the failure visibly so user knows video is not usable.
                 try
                     uialert(app.UIFigure, ...
                         sprintf('Flight %d 영상 메타데이터 로드 실패. 슬라이더/라벨 갱신을 건너뜁니다.', fIdx), ...
-                        'Video') %#ok<NOSEM>
+                        'Video')
                 catch
                 end
                 return;
@@ -2436,7 +2445,7 @@
             end
         end
 
-        function onAsyncDecodeFinally(app, fIdx, frameNo, gen, fut) %#ok<INUSL>
+        function onAsyncDecodeFinally(app, fIdx, frameNo, gen, fut)
             % [Critical 3] Terminal-state cleanup for async decode futures.
             % Fires on Finished / Failed / Cancelled regardless of whether
             % afterEach delivered an image. Logs worker errors and guarantees
@@ -2451,7 +2460,9 @@
                         && gen == app.AsyncGen(fIdx)
                     app.AsyncFutures{fIdx} = [];
                 end
-            catch ME, app.logCaught(ME, 'async-finally:detach'); end
+            catch ME
+                app.logCaught(ME, 'async-finally:detach');
+            end
             try
                 if isempty(fut) || ~isvalid(fut), return; end
                 state = '';
@@ -4827,7 +4838,6 @@
                 if fid < 0, error('FlightDataDashboard:ExportWrite', 'project 파일 쓰기 실패'); end
                 fwrite(fid, txt, 'char');
                 fclose(fid);
-                fid = -1;
             catch ME
                 if fid > 0
                     try
@@ -5697,7 +5707,9 @@
                 catch ME
                     app.logCaught(ME, 'editClose:plotCapture');
                 end
-            catch ME, app.logCaught(ME, 'closeEditDialog:clear-pending-timer'); end
+            catch ME
+                app.logCaught(ME, 'closeEditDialog:clear-pending-timer');
+            end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     % Capture position into project ui state before closing.
@@ -6768,7 +6780,6 @@
                     end
                     return;
                 end
-                sel = '';
                 try
                     sel = uiconfirm(app.EditDialog, ...
                         sprintf(['Flight %d 의 RequiredColumns 매핑을 데이터 파일 기본값(첫 N개 컬럼)으로 ', ...
@@ -10694,7 +10705,9 @@
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     app.refreshEditDialog();
                 end
-            catch ME, app.logCaught(ME, 'applyProjectState:refresh'); end
+            catch ME
+                app.logCaught(ME, 'applyProjectState:refresh');
+            end
         end
 
         function layout = collectLayoutUiState(app)
@@ -11073,7 +11086,6 @@
                                '자동 백업: %s\n원본 project: %s\n\n', ...
                                '자동 백업을 사용하면 마지막 저장 이후의 편집을 복구할 수 있습니다.'], ...
                               char(autoInfo(1).date), char(mainInfo(1).date));
-                sel = '';
                 try
                     sel = uiconfirm(app.UIFigure, msg, 'Project 복구', ...
                         'Options', {'자동 백업 복구', '원본 사용', '취소'}, ...
