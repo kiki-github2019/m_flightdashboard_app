@@ -1110,20 +1110,17 @@
                     app.SyncBtn.Enable = 'off';
                     app.SyncInput.Enable = 'off';
                     if ~app.SyncState.IsSynced
-                        app.SyncBtn.Text = '비행시간 동기';
-                        app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
+                        app.styleToolbarButton(app.SyncBtn, '↔', '비행시간 동기', 'disabled');
                     end
                     return;
                 end
                 app.SyncBtn.Enable = 'on';
                 if app.SyncState.IsSynced
                     app.SyncInput.Enable = 'off';
-                    app.SyncBtn.Text = '비행시간 동기 해제';
-                    app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
+                    app.styleToolbarButton(app.SyncBtn, '⟲', '동기 해제', 'active');
                 else
                     app.SyncInput.Enable = 'on';
-                    app.SyncBtn.Text = '비행시간 동기';
-                    app.SyncBtn.BackgroundColor = [0.58 0.0 0.83];
+                    app.styleToolbarButton(app.SyncBtn, '↔', '비행시간 동기', 'accent');
                 end
             catch ME
                 app.logCaught(ME, 'refreshGlobalSyncControls');
@@ -1164,8 +1161,7 @@
             app.SyncState.SyncT2 = t2;
             app.SyncState.IsSynced = true;
 
-            app.SyncBtn.Text = '비행시간 동기 해제';
-            app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
+            app.styleToolbarButton(app.SyncBtn, '⟲', '동기 해제', 'active');
             app.SyncInput.Enable = 'off';
             app.refreshGlobalSyncControls();
             app.UI(2).spinner.Enable = 'off';
@@ -7395,12 +7391,12 @@
             screenW = max(640, screen(3));
             screenH = max(480, screen(4));
 
-            marginX = 24;
-            marginY = 56;
+            marginX = 16;
+            marginY = 24;
             maxW = max(640, screenW - 2 * marginX);
             maxH = max(480, screenH - 2 * marginY);
-            desiredW = 1420;
-            desiredH = 820;
+            desiredW = 1560;
+            desiredH = 858;
 
             w = min(desiredW, maxW);
             h = min(desiredH, maxH);
@@ -7608,14 +7604,14 @@
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure) && isprop(app.UIFigure, 'WindowState')
                     windowState = char(app.UIFigure.WindowState);
                     if strcmpi(windowState, 'maximized') || strcmpi(windowState, 'fullscreen')
-                        app.WindowMaxBtn.Text = '복원';
+                        app.styleToolbarButton(app.WindowMaxBtn, '▣', '복원', 'normal');
                     else
-                        app.WindowMaxBtn.Text = '최대화';
+                        app.styleToolbarButton(app.WindowMaxBtn, '□', '최대화', 'normal');
                     end
                 elseif app.IsWindowManuallyMaximized
-                    app.WindowMaxBtn.Text = '복원';
+                    app.styleToolbarButton(app.WindowMaxBtn, '▣', '복원', 'normal');
                 else
-                    app.WindowMaxBtn.Text = '최대화';
+                    app.styleToolbarButton(app.WindowMaxBtn, '□', '최대화', 'normal');
                 end
             catch ME_silent
                 app.logCaught(ME_silent, 'windowLabel');
@@ -8088,19 +8084,16 @@
                     btn = app.BoardToggleButtons(k);
                     if isempty(btn) || ~isvalid(btn), continue; end
                     if app.BoardOffState(k)
-                        btn.Text = labelsOn{k};
                         btn.Enable = 'on';
-                        btn.BackgroundColor = [0.75 0.20 0.20];
-                        btn.FontColor = [1 1 1];
+                        app.styleToolbarButton(btn, '▦', labelsOn{k}, 'active');
                     else
-                        btn.Text = labelsOff{k};
                         if isempty(activeOff)
                             btn.Enable = 'on';
+                            app.styleToolbarButton(btn, '▦', labelsOff{k}, 'normal');
                         else
                             btn.Enable = 'off';
+                            app.styleToolbarButton(btn, '▦', labelsOff{k}, 'disabled');
                         end
-                        btn.BackgroundColor = [0.18 0.18 0.22];
-                        btn.FontColor = [1 1 1];
                     end
                 end
             catch ME
@@ -8627,7 +8620,7 @@
             % [V3.22 #7] 메인 레이아웃 골격 + 헤더는 buildHeaderBar로 위임
             % 비행경로별 빌드는 기존 in-place 코드 유지 (위험도 관리)
             mainLayout = uigridlayout(app.UIFigure, [2 1]);
-            mainLayout.RowHeight = {'fit', '1x'};
+            mainLayout.RowHeight = {66, '1x'};
             mainLayout.Padding = [2 2 2 2];
             mainLayout.RowSpacing = 2;
 
@@ -8991,49 +8984,84 @@
             app.UIGroup = UIGroup_temp;
         end
 
+        function txt = toolbarButtonText(~, iconText, labelText)
+            txt = sprintf('%s\n%s', iconText, labelText);
+        end
+
+        function btn = createToolbarButton(app, parent, iconText, labelText, callbackFcn, stateName)
+            if nargin < 6 || isempty(stateName)
+                stateName = 'normal';
+            end
+            btn = uibutton(parent, 'Text', app.toolbarButtonText(iconText, labelText), ...
+                'ButtonPushedFcn', callbackFcn, 'FontSize', 10, 'FontWeight', 'bold');
+            try
+                btn.WordWrap = 'on';
+            catch
+            end
+            try
+                btn.Tooltip = labelText;
+            catch
+            end
+            app.styleToolbarButton(btn, iconText, labelText, stateName);
+        end
+
+        function styleToolbarButton(app, btn, iconText, labelText, stateName)
+            try
+                if isempty(btn) || ~isvalid(btn), return; end
+                btn.Text = app.toolbarButtonText(iconText, labelText);
+                btn.FontSize = 10;
+                btn.FontWeight = 'bold';
+                try
+                    btn.WordWrap = 'on';
+                catch
+                end
+                switch lower(char(stateName))
+                    case 'active'
+                        btn.BackgroundColor = [0.80 0.18 0.18];
+                        btn.FontColor = [1 1 1];
+                    case 'accent'
+                        btn.BackgroundColor = [0.86 0.92 1.00];
+                        btn.FontColor = [0.05 0.15 0.32];
+                    case 'disabled'
+                        btn.BackgroundColor = [0.90 0.90 0.90];
+                        btn.FontColor = [0.45 0.45 0.45];
+                    otherwise
+                        btn.BackgroundColor = [0.97 0.97 0.97];
+                        btn.FontColor = [0.08 0.08 0.08];
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'toolbarButtonStyle');
+            end
+        end
+
         % [V3.22 #7] 메인 윈도우 상단 헤더 바 (파일 선택 / Sync 입력)
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
-            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', 'w', 'BorderType', 'none');
+            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', [0.94 0.94 0.94], 'BorderType', 'line');
             glHeader = uigridlayout(hHeaderPanel, [1 11]);
-            glHeader.ColumnWidth = {140, 140, 140, 110, 110, '1x', 150, 150, 72, 80, 110};
-            glHeader.RowHeight = {'fit'};
-            glHeader.Padding = [5 5 5 5];
-            glHeader.ColumnSpacing = 5;
+            glHeader.ColumnWidth = {110, 110, 100, 104, 104, '1x', 150, 120, 72, 72, 104};
+            glHeader.RowHeight = {'1x'};
+            glHeader.Padding = [4 4 4 4];
+            glHeader.ColumnSpacing = 4;
 
-            uibutton(glHeader, 'Text', '비행경로 1 선택', 'BackgroundColor', [0.15 0.38 0.82], 'FontColor', 'w', ...
-                     'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.handleFlightFile(1));
-            uibutton(glHeader, 'Text', '비행경로 2 선택', 'BackgroundColor', [0.31 0.27 0.90], 'FontColor', 'w', ...
-                     'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.handleFlightFile(2));
-            uibutton(glHeader, 'Text', '해안선 정보', 'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', ...
-                     'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.handleCoastFile());
+            app.createToolbarButton(glHeader, '+', '비행경로 1 선택', @(~, ~) app.handleFlightFile(1), 'normal');
+            app.createToolbarButton(glHeader, '+', '비행경로 2 선택', @(~, ~) app.handleFlightFile(2), 'normal');
+            app.createToolbarButton(glHeader, '≋', '해안선 정보', @(~, ~) app.handleCoastFile(), 'normal');
             app.BoardToggleButtons = gobjects(1, 2);
-            app.BoardToggleButtons(1) = uibutton(glHeader, 'Text', '상단 보드 off', ...
-                'BackgroundColor', [0.18 0.18 0.22], 'FontColor', 'w', ...
-                'FontSize', 12, 'FontWeight', 'bold', ...
-                'ButtonPushedFcn', @(~, ~) app.toggleBoardVisibility(1));
-            app.BoardToggleButtons(2) = uibutton(glHeader, 'Text', '하단 보드 off', ...
-                'BackgroundColor', [0.18 0.18 0.22], 'FontColor', 'w', ...
-                'FontSize', 12, 'FontWeight', 'bold', ...
-                'ButtonPushedFcn', @(~, ~) app.toggleBoardVisibility(2));
+            app.BoardToggleButtons(1) = app.createToolbarButton(glHeader, '▦', '상단 보드 off', @(~, ~) app.toggleBoardVisibility(1), 'normal');
+            app.BoardToggleButtons(2) = app.createToolbarButton(glHeader, '▦', '하단 보드 off', @(~, ~) app.toggleBoardVisibility(2), 'normal');
             uilabel(glHeader, 'Text', '');
 
             app.SyncInput = uieditfield(glHeader, 'text', 'Value', '', 'Enable', 'off', ...
                 'Tooltip', 'ex: 23.4, 34.4', 'FontSize', 13);
-            app.SyncBtn = uibutton(glHeader, 'Text', '비행시간 동기', 'BackgroundColor', [0.58 0.0 0.83], 'FontColor', 'w', ...
-                               'Enable', 'off', 'FontSize', 13, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.toggleSync());
-            app.WindowMinBtn = uibutton(glHeader, 'Text', '최소화', ...
-                'FontSize', 12, 'ButtonPushedFcn', @(~, ~) app.minimizeWindow());
-            app.WindowMaxBtn = uibutton(glHeader, 'Text', '최대화', ...
-                'FontSize', 12, 'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) app.toggleMaximizeWindow());
+            app.SyncBtn = app.createToolbarButton(glHeader, '↔', '비행시간 동기', @(~, ~) app.toggleSync(), 'disabled');
+            app.SyncBtn.Enable = 'off';
+            app.WindowMinBtn = app.createToolbarButton(glHeader, '-', '최소화', @(~, ~) app.minimizeWindow(), 'normal');
+            app.WindowMaxBtn = app.createToolbarButton(glHeader, '□', '최대화', @(~, ~) app.toggleMaximizeWindow(), 'normal');
 
             % [Audit fix #1] Entry point to the modeless settings/edit dialog.
             try
-                uibutton(glHeader, 'Text', '⚙ 설정/편집', ...
-                    'BackgroundColor', [0.20 0.20 0.25], 'FontColor', 'w', ...
-                    'FontSize', 12, 'FontWeight', 'bold', ...
-                    'Tooltip', 'Project/Files/Sync/Options/Plot Manager/Export 편집기 열기', ...
-                    'ButtonPushedFcn', @(~,~) app.openEditDialog());
+                app.createToolbarButton(glHeader, '⚙', '설정/편집', @(~,~) app.openEditDialog(), 'normal');
             catch ME_silent
                 app.logCaught(ME_silent, 'buildHeaderBar:edit-button');
             end
@@ -9594,9 +9622,8 @@
             app.SyncState.IsSynced = true;
             try
                 if ~isempty(app.SyncBtn) && isvalid(app.SyncBtn)
-                    app.SyncBtn.Text = '비행시간 동기 해제';
-                    app.SyncBtn.BackgroundColor = [0.8 0.2 0.2];
                     app.SyncBtn.Enable = 'on';
+                    app.styleToolbarButton(app.SyncBtn, '⟲', '동기 해제', 'active');
                 end
                 if ~isempty(app.SyncInput) && isvalid(app.SyncInput)
                     app.SyncInput.Value  = sprintf('%g, %g', syncT1, syncT2);
