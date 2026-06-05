@@ -1522,7 +1522,7 @@
                     fprintf('[Cache] Budget changed to %d MB\n', budgetMB);
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'setCacheBudget');
             end
         end
 
@@ -1532,7 +1532,7 @@
                 app.DebugMode = logical(val);
                 fprintf('[Debug] DebugMode = %s\n', mat2str(app.DebugMode));
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'toggleDebugMode');
             end
         end
 
@@ -1568,7 +1568,7 @@
                     sld.MinorTicks = [];
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'updateVdubSliderRange');
             end
         end
 
@@ -1601,7 +1601,7 @@
                 app.UI(fIdx).vidVdubLabel.Text = sprintf('Frame %d / %d  (%02d:%02d:%02d.%03d)', ...
                     frameNo, total, hh, mm, ss, ms);
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'updateVdubFrameLabel');
             end
         end
 
@@ -1711,7 +1711,7 @@
                         app.DraggedFromVideo = false;
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'processFrameInternal:data-sync');
                 end
             end
             app.refreshBoardOffSummaryPanel(fIdx);
@@ -1753,7 +1753,7 @@
                 % [V3.19 (2)] 슬라이더 드래그 종료 시 adaptive prefetch
                 app.prefetchAdjacentFrames(fIdx);
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'onVdubSliderChanged');
             end
         end
 
@@ -1970,7 +1970,7 @@
                         cancel(app.AsyncFutures{fIdx});
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'async-start:cancel-previous');
                 end
                 app.AsyncTargetFrame(fIdx) = frameNo;
                 fps = app.VideoSyncState(fIdx).VideoFps;
@@ -2118,7 +2118,7 @@
                     try
                         app.drainPendingVideoRequest(fIdx);
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'async-finally:drain-pending');
                     end
                 end
             catch ME
@@ -2169,7 +2169,7 @@
                     app.prefetchFrameToCacheOnly(fIdx, target);
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'prefetchAdjacentFrames');
             end
         end
 
@@ -2212,7 +2212,7 @@
                 % LastDecodedFrame is OK to update so seq-read heuristic can still benefit.
                 app.LastDecodedFrame(fIdx) = clamped;
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'prefetchFrameToCacheOnly');
             end
         end
 
@@ -2237,7 +2237,7 @@
                 if newFrame == cur, return; end
                 app.goToFrame(fIdx, newFrame, 'final');
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'onVdubNav');
             end
         end
 
@@ -2277,7 +2277,7 @@
                     app.UI(fIdx).vidSyncStatus.FontColor = [0.5 0.5 0.5];
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'resetVideoSync:update-ui');
             end
         end
 
@@ -2375,7 +2375,7 @@
                     app.VideoSyncState(fIdx).DataFps = newVal;
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'adjustHzValue');
             end
         end
 
@@ -2390,7 +2390,7 @@
                     app.VideoSyncState(fIdx).DataFps = newVal;
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'onHzInputChanged');
             end
         end
 
@@ -2632,7 +2632,7 @@
                 if app.LastDisplayedFrame(fIdx) == target, return; end
                 app.requestFrame(fIdx, target, mode);
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'drainPendingVideoRequest');
             end
         end
 
@@ -2738,7 +2738,7 @@
                     app.setVideoImageFrame(fIdx, frame);
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'displayFrameLegacy');
             end
         end
 
@@ -2769,7 +2769,7 @@
                     ax.Interactions = []; % 드래그 중 내장 Pan 비활성화
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'startPlotMarkerDrag:disable-interactions');
             end
 
             % [V3.11 B] 드래그 중 XLim 리스너 일시 중단
@@ -2789,7 +2789,7 @@
                     app.UI(fIdx).timeLine.Alpha = 1.0;
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'startPlotMarkerDrag:xline-alpha');
             end
 
             app.UIFigure.WindowButtonMotionFcn = @(~,~) app.plotMarkerDragMotion(fIdx);
@@ -2817,7 +2817,7 @@
                     ax.Interactions = [];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'startVideoFrameDrag:disable-interactions');
             end
 
             % XLim 리스너 중단 (비행데이터와 동일 정책)
@@ -2854,7 +2854,7 @@
                 if isequal(app.Models(fIdx).currentIndex, idx), return; end
                 app.updateMarkersOnly(fIdx, idx);
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'plotMarkerDragMotion');
             end
         end
 
@@ -2885,7 +2885,7 @@
                 app.goToFrame(fIdx, targetFrame, 'drag');
                 drawnow limitrate;
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'videoFrameDragMotion');
             end
         end
 
@@ -2917,7 +2917,7 @@
                 % 부드러운 전이 (지수 가중 이동평균)
                 app.VideoThrottleDyn = 0.7 * app.VideoThrottleDyn + 0.3 * target;
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'computeDynamicVideoThrottle');
             end
         end
 
@@ -2992,7 +2992,7 @@
                     app.UIFigure.WindowButtonUpFcn = '';
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'stopPlotMarkerDrag:clear-window-callbacks');
             end
 
             try
@@ -3005,7 +3005,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'stopPlotMarkerDrag:restore-hit-test');
             end
 
             app.DraggedMarker = [];
@@ -3028,7 +3028,7 @@
                         app.UI(fIdx).timeLine.Alpha = 0.5;
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'stopPlotMarkerDrag:restore-xline-alpha');
                 end
             end
 
@@ -3074,7 +3074,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setXLimListenersEnabled:plot');
             end
 
             % Altitude 패널 XLim 리스너 제어
@@ -3086,7 +3086,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setXLimListenersEnabled:altitude');
             end
         end
 
