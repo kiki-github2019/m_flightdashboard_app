@@ -617,6 +617,8 @@ function i_applyAction(app, act, beforeState)
             app.testHook('boardOffPlotSelectedVariable', offIdx);
         case 'applyTimeChange'
             app.testHook('applyTimeChange', act.args{:});
+        case 'applyLayoutPreset'
+            app.testHook('applyLayoutPreset', act.args{:});
         case 'setVideoSync'
             app.testHook('setVideoSync', act.args{:});
         otherwise
@@ -625,7 +627,8 @@ function i_applyAction(app, act, beforeState)
 end
 
 function exp = i_expectedFromState(st)
-    side = struct('attitude', true, 'map', true, 'video', true);
+    side = struct('attitude', true, 'map', true, 'mapOnly', true, 'altOnly', true, ...
+        'video', true, 'info', true, 'dataView', true);
     exp = struct();
     exp.boardOff = logical(st.BoardOffState);
     exp.panel = repmat(side, 1, 2);
@@ -664,7 +667,17 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 return;
             end
             name = char(act.args{2});
-            exp.panel(fIdx).(name) = ~exp.panel(fIdx).(name);
+            if strcmp(name, 'map')
+                newState = ~(exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly);
+                exp.panel(fIdx).mapOnly = newState;
+                exp.panel(fIdx).altOnly = newState;
+                exp.panel(fIdx).map = newState;
+            else
+                exp.panel(fIdx).(name) = ~exp.panel(fIdx).(name);
+                if strcmp(name, 'mapOnly') || strcmp(name, 'altOnly')
+                    exp.panel(fIdx).map = exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly;
+                end
+            end
         case 'toggleBoardVisibility'
             fIdx = act.args{1};
             if exp.boardOff(fIdx)
@@ -708,12 +721,58 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.requireVideoFrameMove(fIdx) = true;
                 exp.videoFrameBeforeMove(fIdx) = beforeState.boards(fIdx).videoSync.CurrentFrame;
             end
+        case 'applyLayoutPreset'
+            exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
         case 'setVideoSync'
             fIdx = act.args{1};
             exp.videoSynced(fIdx) = true;
             exp.requireVideoFrameMove(fIdx) = false;
             exp.videoFrameBeforeMove(fIdx) = NaN;
     end
+end
+
+function exp = i_updateExpectedLayoutPreset(exp, presetName)
+    exp.boardOff = [false, false];
+    exp.summaryVisible = [false, false];
+    exp.sourceColumnsHidden = [false, false];
+    switch presetName
+        case 'single-top'
+            exp.boardOff(2) = true;
+            exp.summaryVisible(2) = true;
+            exp.sourceColumnsHidden(1) = true;
+            exp.panel(1) = i_makePanelState(true, true, true, true, true, true);
+        case 'single-bot'
+            exp.boardOff(1) = true;
+            exp.summaryVisible(1) = true;
+            exp.sourceColumnsHidden(2) = true;
+            exp.panel(2) = i_makePanelState(true, true, true, true, true, true);
+        case {'data-focus'}
+            for fIdx = 1:2
+                exp.panel(fIdx) = i_makePanelState(false, false, false, false, true, true);
+            end
+        case {'gauges-only'}
+            for fIdx = 1:2
+                exp.panel(fIdx) = i_makePanelState(true, false, false, false, false, false);
+            end
+        case {'map-focus'}
+            for fIdx = 1:2
+                exp.panel(fIdx) = i_makePanelState(false, true, false, false, false, false);
+            end
+        case {'video-focus'}
+            for fIdx = 1:2
+                exp.panel(fIdx) = i_makePanelState(false, false, false, true, false, true);
+            end
+    end
+end
+
+function s = i_makePanelState(attitude, mapOnly, altOnly, video, info, dataView)
+    s = struct('attitude', logical(attitude), ...
+        'map', logical(mapOnly) || logical(altOnly), ...
+        'mapOnly', logical(mapOnly), ...
+        'altOnly', logical(altOnly), ...
+        'video', logical(video), ...
+        'info', logical(info), ...
+        'dataView', logical(dataView));
 end
 
 function [ok, msg] = i_validateState(st, exp)
@@ -811,14 +870,15 @@ function [ok, msg] = i_validateState(st, exp)
             issues{end + 1} = sprintf('board %d state missing', fIdx);
             continue;
         end
-        names = {'attitude', 'map', 'video'};
+        names = {'attitude', 'map', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
         for iName = 1:numel(names)
             nm = names{iName};
             if st.boards(fIdx).PanelVisible.(nm) ~= exp.panel(fIdx).(nm)
                 issues{end + 1} = sprintf('board %d %s PanelVisible expected=%d actual=%d', ...
                     fIdx, nm, exp.panel(fIdx).(nm), st.boards(fIdx).PanelVisible.(nm));
             end
-            if ~st.BoardOffState(fIdx) && st.boards(fIdx).sideHandleVisible.(nm) ~= st.boards(fIdx).PanelVisible.(nm)
+            if any(strcmp(nm, {'attitude', 'map', 'video'})) && ...
+                    ~st.BoardOffState(fIdx) && st.boards(fIdx).sideHandleVisible.(nm) ~= st.boards(fIdx).PanelVisible.(nm)
                 issues{end + 1} = sprintf('board %d %s handle visibility mismatch', fIdx, nm);
             end
         end
@@ -994,8 +1054,15 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues)
             issues{end + 1} = sprintf('board %d moved info/plot columns still occupy width', fIdx);
         end
     else
-        if i_widthSpecIsZero(widths{3}) || i_widthSpecIsZero(widths{4}) || i_widthSpecIsZero(widths{5})
-            issues{end + 1} = sprintf('board %d info/plot columns collapsed outside board-off mode', fIdx);
+        if st.boards(fIdx).PanelVisible.info && i_widthSpecIsZero(widths{3})
+            issues{end + 1} = sprintf('board %d info column collapsed while visible', fIdx);
+        elseif ~st.boards(fIdx).PanelVisible.info && ~i_widthSpecIsZero(widths{3})
+            issues{end + 1} = sprintf('board %d info column left blank while hidden', fIdx);
+        end
+        if st.boards(fIdx).PanelVisible.dataView && i_widthSpecIsZero(widths{4})
+            issues{end + 1} = sprintf('board %d plot column collapsed while visible', fIdx);
+        elseif ~st.boards(fIdx).PanelVisible.dataView && ~i_widthSpecIsZero(widths{4})
+            issues{end + 1} = sprintf('board %d plot column left blank while hidden', fIdx);
         end
     end
 end

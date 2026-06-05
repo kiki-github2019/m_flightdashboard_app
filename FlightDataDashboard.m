@@ -153,6 +153,7 @@
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
         BoardOffSourceRatio  = 0.7             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~0.9)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
+        UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
         % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
 
@@ -165,6 +166,7 @@
         EDProjectAutosaveCB  = []
         EDProjectConfirmCloseCB = []
         EDProjectLastSaveLbl = []
+        EDProjectLayoutLbl   = []
         EDFilesPathLbl       = struct()
         EDSyncF1Time         = []
         EDSyncF2Time         = []
@@ -446,7 +448,8 @@
                     fIdx = varargin{1}; pnlName = varargin{2};
                     switch lower(char(pnlName))
                         case 'attitude', btn = app.UI(fIdx).btnAtt;
-                        case 'map',      btn = app.UI(fIdx).btnMap;
+                        case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;
+                        case 'altonly',  btn = app.UI(fIdx).btnAlt;
                         case 'video',    btn = app.UI(fIdx).btnVid;
                         otherwise
                             error('FlightDataDashboard:UnknownPanelToggle', ...
@@ -461,6 +464,7 @@
                     cb(btn, []);
                 case 'togglePanel',                   app.togglePanel(varargin{:});
                 case 'toggleBoardVisibility',         app.toggleBoardVisibility(varargin{:});
+                case 'applyLayoutPreset',             app.applyLayoutPreset(varargin{:});
                 case 'boardOffAddPlotTab',            app.boardOffAddPlotTab(varargin{:});
                 case 'boardOffClearCurrentTab',       app.boardOffClearCurrentTab(varargin{:});
                 case 'boardOffPlotSelectedVariable',  app.boardOffPlotSelectedVariable(varargin{:});
@@ -470,6 +474,13 @@
                 case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
                 case 'addPlotTab',                    app.addPlotTab(varargin{:});
                 case 'getTestState',                  varargout{1} = app.getTestState();
+                case 'collectCurrentProjectState',    varargout{1} = app.collectCurrentProjectState();
+                case 'applyProjectState'
+                    if numel(varargin) < 2
+                        app.applyProjectState(varargin{1}, []);
+                    else
+                        app.applyProjectState(varargin{:});
+                    end
                 case 'setSelectedRow'
                     fIdx = varargin{1}; row = varargin{2};
                     app.Models(fIdx).selectedRow = row;
@@ -483,6 +494,16 @@
             % [Testing] Read-only UI/model snapshot for auto_test_runner.m.
             state = struct();
             state.BoardOffState = logical(app.BoardOffState);
+            state.CurrentLayoutPreset = char(app.CurrentLayoutPreset);
+            state.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
+            state.BodyRowHeight = {};
+            try
+                if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
+                    state.BodyRowHeight = app.BodyGrid.RowHeight;
+                end
+            catch ME
+                app.logCaught(ME, 'test:get-body-row-height');
+            end
             state.boards = repmat(app.emptyTestBoardState(), 1, 2);
             for fIdx = 1:2
                 state.boards(fIdx) = app.collectTestBoardState(fIdx);
@@ -503,7 +524,9 @@
         end
 
         function s = emptyTestBoardState(~)
-            panelVisible = struct('attitude', false, 'map', false, 'video', false);
+            panelVisible = struct('attitude', false, 'map', false, ...
+                'mapOnly', false, 'altOnly', false, 'video', false, ...
+                'info', true, 'dataView', true);
             s = struct( ...
                 'exists', false, ...
                 'panelVisible', false, ...
@@ -546,13 +569,14 @@
                 s.panelVisible = app.isUiVisible(app.UI(fIdx).panel);
 
                 if isfield(app.UI(fIdx), 'PanelVisible')
-                    names = {'attitude', 'map', 'video'};
+                    names = {'attitude', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
                     for iName = 1:numel(names)
                         nm = names{iName};
                         if isfield(app.UI(fIdx).PanelVisible, nm)
                             s.PanelVisible.(nm) = logical(app.UI(fIdx).PanelVisible.(nm));
                         end
                     end
+                    s.PanelVisible.map = s.PanelVisible.mapOnly || s.PanelVisible.altOnly;
                 end
                 if isfield(app.UI(fIdx), 'panelAttitude')
                     s.sideHandleVisible.attitude = app.isUiVisible(app.UI(fIdx).panelAttitude);
@@ -5555,8 +5579,8 @@
         end
 
         function buildEditTabProject(app, parent)
-            gl = uigridlayout(parent, [7 4]);
-            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
+            gl = uigridlayout(parent, [8 4]);
+            gl.RowHeight = {'fit', 'fit', 'fit', 'fit', 'fit', 'fit', 'fit', '1x'};
             gl.ColumnWidth = {120, '1x', 100, 100};
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
@@ -5591,6 +5615,13 @@
             uilabel(gl, 'Text', '마지막 저장:', 'FontWeight', 'bold');
             app.EDProjectLastSaveLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
             app.EDProjectLastSaveLbl.Layout.Column = [2 4];
+
+            uilabel(gl, 'Text', 'Layout preset:', 'FontWeight', 'bold');
+            app.EDProjectLayoutLbl = uilabel(gl, 'Text', '0개 / custom', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectLayoutLbl.Layout.Column = 2;
+            btn = uibutton(gl, 'Text', '현재 레이아웃 저장', ...
+                'ButtonPushedFcn', @(~,~) app.editDialogSaveLayoutPreset());
+            btn.Layout.Column = [3 4];
         end
 
         function buildEditTabFiles(app, parent)
@@ -5902,6 +5933,10 @@
                         app.EDProjectLastSaveLbl.Text = app.ProjectLastSaveText;
                     end
                 end
+                if ~isempty(app.EDProjectLayoutLbl) && isvalid(app.EDProjectLayoutLbl)
+                    app.EDProjectLayoutLbl.Text = sprintf('%d개 / %s', ...
+                        numel(app.UserLayoutPresets), char(app.CurrentLayoutPreset));
+                end
             catch
             end
         end
@@ -6121,6 +6156,38 @@
             end
             app.autoLoadProjectFromFile(app.ProjectFilePath);
             app.refreshEditDialog();
+        end
+
+        function editDialogSaveLayoutPreset(app)
+            try
+                ts = char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'));
+                defaultName = sprintf('layout_%s', ts);
+                presetName = defaultName;
+                try
+                    answer = inputdlg({'프리셋 이름:'}, 'Layout preset 저장', 1, {defaultName});
+                    if isempty(answer), return; end
+                    presetName = strtrim(char(answer{1}));
+                    if isempty(presetName), presetName = defaultName; end
+                catch
+                end
+                layout = app.collectLayoutUiState();
+                layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
+                preset = struct('Name', presetName, 'SavedAt', ts, 'Layout', layout);
+                names = {};
+                if ~isempty(app.UserLayoutPresets) && isstruct(app.UserLayoutPresets)
+                    names = arrayfun(@(p) char(p.Name), app.UserLayoutPresets, 'UniformOutput', false);
+                end
+                hit = find(strcmp(names, presetName), 1);
+                if isempty(hit)
+                    app.UserLayoutPresets(end + 1) = preset;
+                else
+                    app.UserLayoutPresets(hit) = preset;
+                end
+                app.markProjectDirtyAndScheduleRefresh('layout-preset-save');
+                app.refreshProjectTab();
+            catch ME
+                app.logCaught(ME, 'editDialogSaveLayoutPreset');
+            end
         end
 
         function editDialogToggleAutosave(app, on)
@@ -9721,11 +9788,28 @@
                 'FlightSync',  struct('IsSynced', false, 'SyncT1', 0, 'SyncT2', 0), ...
                 'ProjectSettings', struct('ConfirmOnClose', true, 'AutosaveEnabled', true), ...
                 'PlotConfig',  struct(), ...
-                'UiState',     struct('WindowPosition', [], 'EditDialogPosition', [], 'ActiveTab', 'Project'), ...
+                'UiState',     struct('WindowPosition', [], 'EditDialogPosition', [], ...
+                                      'ActiveTab', 'Project', 'Layout', app.createDefaultLayoutUiState()), ...
                 'AuxFiles',    {{}});
             for i = 1:2
                 st.Flights(i).Name = sprintf('Flight %d', i);
             end
+        end
+
+        function layout = createDefaultLayoutUiState(app)
+            panel = app.createDefaultPanelVisibleState();
+            layout = struct( ...
+                'CurrentLayoutPreset', 'custom', ...
+                'BoardOffState', [false, false], ...
+                'BoardOffSourceRatio', 0.7, ...
+                'BodyRowHeight', {{'1x', '1x'}}, ...
+                'PanelVisible', [panel, panel]);
+            layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
+        end
+
+        function panel = createDefaultPanelVisibleState(~)
+            panel = struct('attitude', false, 'mapOnly', false, 'altOnly', false, ...
+                'video', false, 'info', true, 'dataView', true);
         end
 
         function st = collectCurrentProjectState(app)
@@ -9788,6 +9872,11 @@
             catch ME
                 app.logCaught(ME, 'collectCurrentProjectState:edit-dialog-position');
             end
+            try
+                st.UiState.Layout = app.collectLayoutUiState();
+            catch ME
+                app.logCaught(ME, 'collectCurrentProjectState:layout');
+            end
             % Phase 4 will populate PlotConfig; preserve any cached structure for now.
             if ~isempty(app.PlotConfigState)
                 st.PlotConfig = app.PlotConfigState;
@@ -9849,6 +9938,13 @@
                 catch ME
                     app.logCaught(ME, 'applyProjectStateToApp:window-position');
                 end
+                try
+                    if isfield(st.UiState, 'Layout') && ~isempty(st.UiState.Layout)
+                        app.applyLayoutUiState(st.UiState.Layout);
+                    end
+                catch ME
+                    app.logCaught(ME, 'applyProjectStateToApp:layout');
+                end
             end
             if isfield(st, 'PlotConfig')
                 app.PlotConfigState = st.PlotConfig;
@@ -9867,11 +9963,183 @@
             catch ME, app.logCaught(ME, 'applyProjectState:refresh'); end
         end
 
+        function layout = collectLayoutUiState(app)
+            layout = app.createDefaultLayoutUiState();
+            layout.CurrentLayoutPreset = char(app.CurrentLayoutPreset);
+            layout.BoardOffState = logical(app.BoardOffState);
+            layout.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
+            try
+                if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
+                    layout.BodyRowHeight = app.BodyGrid.RowHeight;
+                end
+            catch ME
+                app.logCaught(ME, 'collectLayoutUiState:rows');
+            end
+            for fIdx = 1:2
+                try
+                    if ~isempty(app.UI) && numel(app.UI) >= fIdx && isfield(app.UI(fIdx), 'PanelVisible')
+                        layout.PanelVisible(fIdx) = app.normalizePanelVisibleState(app.UI(fIdx).PanelVisible);
+                    end
+                catch ME
+                    app.logCaught(ME, 'collectLayoutUiState:panel');
+                end
+            end
+            layout.LayoutPresets = app.UserLayoutPresets;
+        end
+
+        function applyLayoutUiState(app, layout)
+            try
+                layout = app.mergeLayoutUiState(layout);
+                app.CurrentLayoutPreset = char(layout.CurrentLayoutPreset);
+                app.UserLayoutPresets = layout.LayoutPresets;
+                app.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+                for fIdx = 1:2
+                    if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
+                        continue;
+                    end
+                    app.UI(fIdx).PanelVisible = app.normalizePanelVisibleState(layout.PanelVisible(fIdx));
+                    app.applyMapAltVisibility(fIdx);
+                end
+
+                offIdx = find(logical(layout.BoardOffState), 1);
+                if isempty(offIdx)
+                    app.setBoardOffDirect(0);
+                else
+                    app.setBoardOffDirect(offIdx);
+                end
+                for fIdx = 1:2
+                    app.applyMapAltVisibility(fIdx);
+                    app.reflowBoardColumns(fIdx);
+                    app.refreshBoardOffSummaryPanel(fIdx, true);
+                end
+                if isempty(offIdx)
+                    app.setBodyGridRowsDirect(app.normalizeBodyRowHeight(layout.BodyRowHeight));
+                else
+                    app.applyBodyGridRowHeights();
+                end
+                app.updateBoardToggleButtons();
+                app.updateLayoutPresetButtons();
+                drawnow limitrate;
+            catch ME
+                app.logCaught(ME, 'applyLayoutUiState');
+            end
+        end
+
+        function layout = mergeLayoutUiState(app, layout)
+            def = app.createDefaultLayoutUiState();
+            if nargin < 2 || isempty(layout) || ~isstruct(layout)
+                layout = def;
+                return;
+            end
+            names = fieldnames(def);
+            for i = 1:numel(names)
+                nm = names{i};
+                if ~isfield(layout, nm) || isempty(layout.(nm))
+                    layout.(nm) = def.(nm);
+                end
+            end
+            layout.CurrentLayoutPreset = char(layout.CurrentLayoutPreset);
+            bos = logical(layout.BoardOffState);
+            if numel(bos) < 2, bos = def.BoardOffState; end
+            bos = [bos(1), bos(2)];
+            if all(bos)
+                bos(2) = false;
+            end
+            layout.BoardOffState = bos;
+            layout.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+            layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
+            panels = def.PanelVisible;
+            if isfield(layout, 'PanelVisible') && isstruct(layout.PanelVisible)
+                for fIdx = 1:min(2, numel(layout.PanelVisible))
+                    panels(fIdx) = app.normalizePanelVisibleState(layout.PanelVisible(fIdx));
+                end
+            end
+            layout.PanelVisible = panels;
+            if ~isstruct(layout.LayoutPresets) || isempty(layout.LayoutPresets)
+                layout.LayoutPresets = def.LayoutPresets;
+            else
+                presetDef = struct('Name', '', 'SavedAt', '', 'Layout', def);
+                presets = layout.LayoutPresets;
+                for p = 1:numel(presets)
+                    if ~isfield(presets(p), 'Name'), presets(p).Name = presetDef.Name; end
+                    if ~isfield(presets(p), 'SavedAt'), presets(p).SavedAt = presetDef.SavedAt; end
+                    if ~isfield(presets(p), 'Layout') || isempty(presets(p).Layout)
+                        presets(p).Layout = def;
+                    else
+                        presets(p).Layout = app.mergeLayoutUiState(presets(p).Layout);
+                        presets(p).Layout.LayoutPresets = def.LayoutPresets;
+                    end
+                end
+                layout.LayoutPresets = presets;
+            end
+        end
+
+        function panel = normalizePanelVisibleState(app, panel)
+            def = app.createDefaultPanelVisibleState();
+            if nargin < 2 || isempty(panel) || ~isstruct(panel)
+                panel = def;
+                return;
+            end
+            names = fieldnames(def);
+            for i = 1:numel(names)
+                nm = names{i};
+                if ~isfield(panel, nm) || isempty(panel.(nm))
+                    if strcmp(nm, 'mapOnly') && isfield(panel, 'map')
+                        panel.(nm) = logical(panel.map);
+                    elseif strcmp(nm, 'altOnly') && isfield(panel, 'map')
+                        panel.(nm) = logical(panel.map);
+                    else
+                        panel.(nm) = def.(nm);
+                    end
+                else
+                    panel.(nm) = logical(panel.(nm));
+                end
+            end
+            orderedPanel = def;
+            for i = 1:numel(names)
+                nm = names{i};
+                orderedPanel.(nm) = panel.(nm);
+            end
+            panel = orderedPanel;
+        end
+
+        function rows = normalizeBodyRowHeight(~, rows)
+            if nargin < 2 || isempty(rows)
+                rows = {'1x', '1x'};
+                return;
+            end
+            if isstring(rows)
+                rows = cellstr(rows);
+            elseif ischar(rows)
+                rows = {rows};
+            elseif isnumeric(rows)
+                rows = num2cell(rows);
+            end
+            if ~iscell(rows) || numel(rows) ~= 2
+                rows = {'1x', '1x'};
+                return;
+            end
+            rows = reshape(rows, 1, 2);
+        end
+
         function st = migrateProjectState(app, st)
             % [D7] in-memory migration entry point. v1->v1 passthrough; future versions extend switch.
             if isempty(st), return; end
             if ~isfield(st, 'Version') || isempty(st.Version)
                 st.Version = 1;
+            end
+            defaultState = app.createDefaultProjectState();
+            if ~isfield(st, 'UiState') || isempty(st.UiState) || ~isstruct(st.UiState)
+                st.UiState = defaultState.UiState;
+            else
+                uiNames = fieldnames(defaultState.UiState);
+                for iName = 1:numel(uiNames)
+                    nm = uiNames{iName};
+                    if ~isfield(st.UiState, nm)
+                        st.UiState.(nm) = defaultState.UiState.(nm);
+                    end
+                end
+                st.UiState.Layout = app.mergeLayoutUiState(st.UiState.Layout);
             end
             switch double(st.Version)
                 case 1
