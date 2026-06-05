@@ -8644,7 +8644,7 @@
                 pt = app.UIFigure.CurrentPoint;
                 figH = max(1, app.UIFigure.Position(4));
                 dy = double(pt(2) - app.RowSplitterStartPoint(2));
-                app.setBodyRowSplitRatio(app.RowSplitterStartRatio + dy / figH);
+                app.setBodyRowSplitRatio(app.RowSplitterStartRatio - dy / figH);
             catch ME
                 app.logCaught(ME, 'rowSplitter:motion');
             end
