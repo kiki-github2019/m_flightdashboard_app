@@ -556,7 +556,7 @@
                             s.selectedTabPlotCount = s.plotCounts(sel);
                         end
                     catch ME_silent
-                        app.logCaught(ME_silent, 'silent');
+                        app.logCaught(ME_silent, 'testState:selected-tab');
                     end
                 end
 
@@ -587,7 +587,7 @@
                                 end
                             end
                         catch ME_silent
-                            app.logCaught(ME_silent, 'silent');
+                            app.logCaught(ME_silent, 'testState:board-toggle-text');
                         end
                     end
                 end
@@ -635,7 +635,7 @@
                         sel = find(app.UI(fIdx).boardOffPlotTabs == app.UI(fIdx).boardOffTabGroup.SelectedTab, 1);
                         if ~isempty(sel), s.boardOff.selectedTab = double(sel); end
                     catch ME_silent
-                        app.logCaught(ME_silent, 'silent');
+                        app.logCaught(ME_silent, 'testState:boardoff-selected-tab');
                     end
                 end
             catch ME
@@ -776,7 +776,7 @@
                         end
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'handleFlightFile:restore-ui-snapshot');
                 end
                 app.setupDataUI(fIdx);
 
@@ -3214,7 +3214,7 @@
                     set(app.UI(fIdx).hgMapPlane, 'Matrix', T_map);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'updateNumericPanelsOnly:map');
             end
 
             % H 패널 책장 넘기기 + 마커 갱신 (개선안 A의 IsProgrammaticXLim 가드 작동)
@@ -3440,7 +3440,7 @@
                     targetLayout.RowHeight = {};
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'clearCurrentTab:delete-layout-children');
             end
 
             app.UI(fIdx).plotAxes{tabIdx} = {};
@@ -3461,7 +3461,7 @@
                         delete(app.UI(fIdx).plotTabs(i));
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'clearAllTabs:delete-tab');
                 end
             end
             app.UI(fIdx).plotTabs = [];
@@ -6665,7 +6665,7 @@
             try
                 app.Models(fIdx).dataFilePath = app.normalizeAbsPath(filepath);
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'loadFlightDataFile:data-file-path');
             end
             app.applyOptionFile(fIdx, dataTbl, false);
 
@@ -6675,7 +6675,7 @@
                 try
                     app.Models(fIdx).rawDataUnscaled = fillmissing(app.Models(fIdx).rawDataUnscaled, 'linear', 'DataVariables', @isnumeric);
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'loadFlightDataFile:fillmissing-unscaled');
                 end
             end
         end
@@ -7115,7 +7115,7 @@
                         delete(app.UI(fIdx).altXLimListener);
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'createAltitudePlot:delete-xlim-listener');
                 end
             end
 
@@ -7329,7 +7329,7 @@
                     figW = figPos(3);
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'getFigureContentWidth');
             end
         end
 
@@ -7560,7 +7560,7 @@
                 try
                     out = imresize(img, [targetH, targetW]);
                 catch ME_resize
-                    app.logCaught(ME_resize, 'silent');
+                    app.logCaught(ME_resize, 'resizeVideoFrame:imresize');
                     rowIdx = round(linspace(1, size(img, 1), targetH));
                     colIdx = round(linspace(1, size(img, 2), targetW));
                     rowIdx = max(1, min(size(img, 1), rowIdx));
@@ -7613,7 +7613,7 @@
                         figPos = app.UIFigure.Position;
                         dlg.Position(1:2) = [figPos(1) + 80, max(40, figPos(2) + figPos(4) - dlg.Position(4) - 80)];
                     catch ME_inner
-                        app.logCaught(ME_inner, 'silent');
+                        app.logCaught(ME_inner, 'openVideoControlDialog:position');
                     end
                     dlg.Visible = 'on';
                     drawnow limitrate;
@@ -7822,7 +7822,7 @@
                 % restoration happens in reflowBoardColumns which always sets widths{3}
                 % from getResponsivePanelWidths and widths{4}='1x' when board is not off.
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'restoreBoardInfoPlotColumns');
             end
         end
 
@@ -8045,7 +8045,7 @@
                 try
                     delete(tg.Children);
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'refreshBoardOffSummaryPanel:clear-tabs');
                 end
 
                 app.UI(fIdx).boardOffPlotTabs = [];
@@ -8256,7 +8256,7 @@
                                 end
                             end
                         catch ME_silent
-                            app.logCaught(ME_silent, 'silent');
+                            app.logCaught(ME_silent, 'refreshBoardOffSummaryPanel:copy-axis');
                         end
                     end
                 end
@@ -8395,7 +8395,7 @@
                         p.ForegroundColor = [0 0 0];
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'enforceReadablePanelTitles');
                 end
             end
         end
@@ -8858,7 +8858,7 @@
                     'Tooltip', 'Project/Files/Sync/Options/Plot Manager/Export 편집기 열기', ...
                     'ButtonPushedFcn', @(~,~) app.openEditDialog());
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'buildHeaderBar:edit-button');
             end
             app.updateBoardToggleButtons();
         end
@@ -8944,7 +8944,7 @@
                         st.Flights(fIdx).VideoResolution = char(app.UI(fIdx).videoResLabel.Text);
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'collectCurrentProjectState:flight');
                 end
             end
             try
@@ -8953,28 +8953,28 @@
                     'SyncT1',   double(app.SyncState.SyncT1), ...
                     'SyncT2',   double(app.SyncState.SyncT2));
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'collectCurrentProjectState:flight-sync');
             end
             try
                 st.ProjectSettings = struct( ...
                     'ConfirmOnClose', logical(app.ProjectConfirmOnClose), ...
                     'AutosaveEnabled', logical(app.ProjectAutosaveEnabled));
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'collectCurrentProjectState:settings');
             end
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
                     st.UiState.WindowPosition = app.UIFigure.Position;
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'collectCurrentProjectState:window-position');
             end
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     st.UiState.EditDialogPosition = app.EditDialog.Position;
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'collectCurrentProjectState:edit-dialog-position');
             end
             % Phase 4 will populate PlotConfig; preserve any cached structure for now.
             if ~isempty(app.PlotConfigState)
@@ -8993,7 +8993,7 @@
                     app.SyncState.SyncT2   = double(st.FlightSync.SyncT2);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'applyProjectStateToApp:flight-sync');
             end
             if isfield(st, 'Flights')
                 for fIdx = 1:min(numel(st.Flights), 2)
@@ -9011,7 +9011,7 @@
                             app.VideoSyncState(fIdx).DataFps     = double(vs.DataFps);
                         end
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'applyProjectStateToApp:video-sync');
                     end
                 end
             end
@@ -9025,7 +9025,7 @@
                         app.ProjectAutosaveEnabled = logical(ps.AutosaveEnabled);
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'applyProjectStateToApp:settings');
                 end
             end
             if isfield(st, 'UiState')
@@ -9035,7 +9035,7 @@
                         app.UIFigure.Position = st.UiState.WindowPosition;
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'applyProjectStateToApp:window-position');
                 end
             end
             if isfield(st, 'PlotConfig')
@@ -9224,7 +9224,7 @@
                 try
                     app.capturePlotConfigFromUi();
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'saveProjectToFile:plot-capture');
                 end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
@@ -9264,7 +9264,7 @@
                 try
                     app.capturePlotConfigFromUi();
                 catch ME_pc
-                    app.logCaught(ME_pc, 'silent');
+                    app.logCaught(ME_pc, 'autosaveProject:plot-capture');
                 end
                 st  = app.collectCurrentProjectState();
                 txt = jsonencode(st, 'PrettyPrint', true);
@@ -9280,7 +9280,7 @@
                 autoPath = [app.ProjectFilePath '.autosave.json'];
                 if isfile(autoPath), delete(autoPath); end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'clearProjectAutosave');
             end
         end
 
@@ -9433,14 +9433,14 @@
                     app.UI(2).spinner.Enable = 'off';
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setFlightDataSync:disable-spinner');
             end
             try
                 timeCol1 = app.Models(1).mappedCols.Time;
                 idx1 = app.findClosestIndexByTime(app.Models(1).rawData.(timeCol1), syncT1);
                 app.applyTimeChange(1, idx1);
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setFlightDataSync:apply-time');
             end
             app.markProjectDirtyAndScheduleRefresh('flight-sync-on');
         end
@@ -9516,7 +9516,7 @@
                     app.UI(fIdx).vidSyncStatus.FontColor = [0.0 0.5 0.0];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'setVideoSync:status');
             end
             app.refreshSyncUi(fIdx);
             app.markProjectDirtyAndScheduleRefresh('video-sync-on');
@@ -9550,7 +9550,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'clearVideoSync:status');
             end
         end
     end
