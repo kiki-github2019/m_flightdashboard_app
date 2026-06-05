@@ -242,14 +242,14 @@
                     app.UIFigure.Resize = 'on';
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'constructor:resize');
             end
             try
                 if isprop(app.UIFigure, 'AutoResizeChildren')
                     app.UIFigure.AutoResizeChildren = 'off';
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'constructor:auto-resize-children');
             end
 
             app.createLayout();
@@ -257,7 +257,7 @@
             try
                 app.UIFigure.SizeChangedFcn = @(~,~) app.onFigureSizeChanged();
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'constructor:size-changed-fcn');
             end
             app.applyResponsiveLayout();
 
@@ -443,7 +443,7 @@
                         state.toggleButtons(k).Visible = app.isUiVisible(btn);
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'test:get-toggle-button-state');
                 end
             end
         end
@@ -975,7 +975,7 @@
                     end
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'close-request');
             end
 
             try
@@ -984,7 +984,7 @@
                     app.UIFigure.WindowButtonUpFcn = '';
                 end
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'close-request:clear-window-callbacks');
             end
             delete(app);
         end
@@ -1147,7 +1147,7 @@
                     if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
                         parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
                     end
-                catch ME, app.logCaught(ME, 'silent'); end
+                catch ME, app.logCaught(ME, 'loadAvi:worker-cache-cleanup'); end
             end
             startTime = app.computeStartTimeFromFlightData(fIdx);
             app.cleanupVideoResources(fIdx);
@@ -1182,7 +1182,7 @@
                 try
                     app.refreshSyncUi(fIdx);
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'loadAvi:refresh-sync-ui');
                 end
             end
             % [Q-07] Keep Export file table current after path-based AVI changes.
@@ -1251,7 +1251,7 @@
                     delete(app.VideoState(fIdx).videoReader);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'video-cleanup:reader');
             end
             try
                 if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
@@ -1259,7 +1259,7 @@
                     app.AsyncFutures{fIdx} = [];
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'video-cleanup:future-cancel');
             end
         end
 
@@ -1430,7 +1430,7 @@
                         firstFrame = readFrame(app.VideoState(fIdx).videoReader);
                     end
                 catch ME_silent
-                    app.logCaught(ME_silent, 'silent');
+                    app.logCaught(ME_silent, 'loadFirstFrame:fallback');
                 end
             end
 
@@ -1452,7 +1452,7 @@
                 end
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
-                app.logCaught(ME_silent, 'silent');
+                app.logCaught(ME_silent, 'adjustVideoPanelWidth');
             end
         end
 
@@ -9339,7 +9339,7 @@
                 end
                 start(app.EditApplyTimer);
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'project-dirty:edit-apply-timer');
             end
             try
                 if app.ProjectAutosaveEnabled && (isempty(app.AutosaveTimer) || ~isvalid(app.AutosaveTimer))
@@ -9351,7 +9351,7 @@
                     start(app.AutosaveTimer);
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'project-dirty:autosave-timer');
             end
         end
 
@@ -9366,17 +9366,18 @@
                             app.refreshSyncUi(fIdx);
                         end
                     catch ME
-                        app.logCaught(ME, 'silent');
+                        app.logCaught(ME, 'apply-pending-dialog:flight-refresh');
                     end
                 end
                 app.LastEditApplyTime = datetime('now');
                 % [Audit fix #1] keep dialog status/values in sync after debounce fires
                 try
                     app.refreshEditDialog();
-                catch
+                catch ME
+                    app.logCaught(ME, 'apply-pending-dialog:refresh-edit-dialog');
                 end
             catch ME
-                app.logCaught(ME, 'silent');
+                app.logCaught(ME, 'apply-pending-dialog');
             end
         end
 
@@ -9403,7 +9404,7 @@
                         app.UI(2).spinner.Enable = 'on';
                     end
                 catch ME
-                    app.logCaught(ME, 'silent');
+                    app.logCaught(ME, 'flight-sync-off:update-ui');
                 end
                 app.markProjectDirtyAndScheduleRefresh('flight-sync-off');
                 return;
