@@ -608,6 +608,7 @@
                 'videoSync', struct('IsSynced', false, 'AnchorFrame', 0, 'AnchorTime', 0, ...
                                     'VideoFps', 0, 'DataFps', 0, 'TotalFrames', 0, 'CurrentFrame', 0), ...
                 'boardOffPanelVisible', false, ...
+                'arrangementMode', 'normal', ...
                 'boardOff', struct('tableRows', 0, 'buttonTexts', {{}}, 'tabCount', 0, ...
                                    'selectedTab', 0, 'plotCounts', [], 'totalPlotCount', 0, ...
                                    'markerCount', 0, 'interactiveMarkerCount', 0, ...
@@ -729,6 +730,10 @@
                     'AnchorFrame', double(vss.AnchorFrame), 'AnchorTime', double(vss.AnchorTime), ...
                     'VideoFps', double(vss.VideoFps), 'DataFps', double(vss.DataFps), ...
                     'TotalFrames', double(vss.TotalFrames), 'CurrentFrame', double(vss.CurrentFrame));
+
+                if isfield(app.UI(fIdx), 'arrangementMode') && ~isempty(app.UI(fIdx).arrangementMode)
+                    s.arrangementMode = char(app.UI(fIdx).arrangementMode);
+                end
 
                 if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
                         && isvalid(app.UI(fIdx).boardOffPanel)
@@ -1367,10 +1372,18 @@
             end
         end
 
-        function color = getFlightTableBgColor(~, fIdx)
-            color = [0.23 0.51 0.96];
+        function color = getFlightTableBgColor(app, fIdx) %#ok<INUSD>
+            % v3 P14: 비행 식별색 → subtle accent 만 사용. dataTable 본체는 white (theme).
+            t = app.getLightTheme();
+            color = t.tableRowBgA;
+        end
+
+        function color = getFlightIdentityAccent(~, fIdx)
+            % v3 P14: 비행별 식별 accent (border / header tint 용도).
             if fIdx == 2
                 color = [0.31 0.27 0.90];
+            else
+                color = [0.23 0.51 0.96];
             end
         end
 
@@ -10392,7 +10405,8 @@
             infoPanel.Layout.Column = 1;
             infoGrid = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
             tblBgColor = app.getFlightTableBgColor(fIdx);
-            tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], ...
+            themeT = app.getLightTheme();
+            tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', themeT.textPrimary, ...
                 'FontWeight', 'bold', 'RowStriping', 'off', 'ColumnName', {'항목', '값'}, ...
                 'RowName', [], 'ColumnWidth', {'26x', '24x'}, 'FontSize', 11, 'FontName', 'Consolas');
             cm = uicontextmenu(app.UIFigure);
@@ -10612,7 +10626,8 @@
                 UI_temp(fIdx).panelInfo = infoPanel;        % [v4-L1] hsplit reparent 용 핸들
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
                 tblBgColor = app.getFlightTableBgColor(fIdx);
-                UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
+                themeT = app.getLightTheme();  % v3 P14: white bg + dark text
+                UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', themeT.textPrimary, 'FontWeight', 'bold', ...
                                              'RowStriping', 'off', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
                                              'ColumnWidth', {'29x', '20x'}, 'FontSize', 11, 'FontName', 'Consolas');
                 cm = uicontextmenu(app.UIFigure);

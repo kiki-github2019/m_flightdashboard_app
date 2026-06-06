@@ -43,6 +43,7 @@ function auto_test_runner(varargin)
     p.addParameter('LoadAvi', 'lazy', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureMode', 'baseline', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureScale', 0.60, @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0 && x <= 1);
+    p.addParameter('OnlineSafeMode', false, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
     p.parse(varargin{:});
     opts = p.Results;
     loadAviMode = lower(char(opts.LoadAvi));
@@ -58,6 +59,13 @@ function auto_test_runner(varargin)
         error('auto_test_runner:BadOrder', 'Order must be ''asc'' or ''desc''.');
     end
     captureOpts = struct('mode', captureMode, 'scale', double(opts.CaptureScale));
+
+    % v3 P9: OnlineSafeMode — MATLAB Online OOM/render hard-crash 회피용 권고
+    if logical(opts.OnlineSafeMode) && strcmp(captureMode, 'all') && strcmp(loadAviMode, 'always')
+        warning('auto_test_runner:OnlineSafeMode', ...
+            ['CaptureMode=all + LoadAvi=always 는 MATLAB Online 광범위 실행 시 hard-crash 위험. ' ...
+             '권장: LoadAvi=never/lazy, CaptureMode=fail/none, CaptureScale<=0.6.']);
+    end
 
     outDir = i_resolveOutputDir();
     if ~isfolder(outDir), mkdir(outDir); end
@@ -705,10 +713,10 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.currentLayoutPreset = 'custom';
             name = char(act.args{2});
             if strcmp(name, 'map')
-                newState = ~(exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly);
-                exp.panel(fIdx).mapOnly = newState;
-                exp.panel(fIdx).altOnly = newState;
-                exp.panel(fIdx).map = newState;
+                % v3 P1: 앱 btnMap 콜백은 togglePanel('mapOnly') — mapOnly 만 토글.
+                % 'map' alias 도 mapOnly 만 토글하도록 일치시킴. altOnly 는 불변.
+                exp.panel(fIdx).mapOnly = ~exp.panel(fIdx).mapOnly;
+                exp.panel(fIdx).map = exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly;
             else
                 exp.panel(fIdx).(name) = ~exp.panel(fIdx).(name);
                 if strcmp(name, 'mapOnly') || strcmp(name, 'altOnly')
@@ -844,21 +852,17 @@ function [ok, msg] = i_validateState(st, exp)
             i_boolVecString(exp.boardOff), i_boolVecString(st.BoardOffState));
     end
 
+    % v3 P2/P3/P4: 새 board-off policy = active source hsplit, summary panel 폐기.
+    % 무거운 hidden boardOffPanel findall/marker/xline scan 제거 (case 48 hard-crash 방지).
+    % 라이트한 검증만: source visible + off hidden + Video Player 비표시.
     activeOff = find(st.BoardOffState, 1);
     if isempty(activeOff)
         for fIdx = 1:2
             if ~st.boards(fIdx).panelVisible
                 issues{end + 1} = sprintf('board %d panel hidden while no board-off active', fIdx);
             end
-            if st.boards(fIdx).boardOffPanelVisible
-                issues{end + 1} = sprintf('board %d summary visible while no board-off active', fIdx);
-            end
             if st.boards(fIdx).infoColumnHidden || st.boards(fIdx).plotColumnHidden
                 issues{end + 1} = sprintf('board %d info/plot column hidden after board-on restore', fIdx);
-            end
-            if st.boards(fIdx).boardOffPanelVisible ~= exp.summaryVisible(fIdx)
-                issues{end + 1} = sprintf('board %d summary visibility expected=%d actual=%d', ...
-                    fIdx, exp.summaryVisible(fIdx), st.boards(fIdx).boardOffPanelVisible);
             end
         end
     else
@@ -867,60 +871,18 @@ function [ok, msg] = i_validateState(st, exp)
         if st.boards(offIdx).panelVisible
             issues{end + 1} = sprintf('off board %d original panel still visible', offIdx);
         end
-        if ~st.boards(offIdx).boardOffPanelVisible
-            issues{end + 1} = sprintf('off board %d summary panel not visible', offIdx);
-        end
         if ~st.boards(srcIdx).panelVisible
             issues{end + 1} = sprintf('source board %d panel hidden', srcIdx);
         end
-        if ~(st.boards(srcIdx).infoColumnHidden && st.boards(srcIdx).plotColumnHidden && st.boards(srcIdx).splitterColumnHidden)
-            issues{end + 1} = sprintf('source board %d info/plot columns were not moved out', srcIdx);
+        % source 보드 arrangementMode = 'hsplit' (있을 때)
+        if isfield(st.boards(srcIdx), 'arrangementMode') && ...
+                ~strcmp(char(st.boards(srcIdx).arrangementMode), 'hsplit')
+            issues{end + 1} = sprintf('source board %d arrangementMode expected=hsplit actual=%s', ...
+                srcIdx, char(st.boards(srcIdx).arrangementMode));
         end
-        if st.boards(offIdx).boardOffPanelVisible ~= exp.summaryVisible(offIdx)
-            issues{end + 1} = sprintf('off board %d summary visibility expected=%d actual=%d', ...
-                offIdx, exp.summaryVisible(offIdx), st.boards(offIdx).boardOffPanelVisible);
-        end
-        actualSourceColumnsHidden = st.boards(srcIdx).infoColumnHidden && ...
-            st.boards(srcIdx).plotColumnHidden && st.boards(srcIdx).splitterColumnHidden;
-        if actualSourceColumnsHidden ~= exp.sourceColumnsHidden(srcIdx)
-            issues{end + 1} = sprintf('source board %d moved-column state expected=%d actual=%d', ...
-                srcIdx, exp.sourceColumnsHidden(srcIdx), actualSourceColumnsHidden);
-        end
-        if st.boards(srcIdx).dataLoaded && st.boards(offIdx).boardOff.tableRows ~= st.boards(srcIdx).dataTableRows
-            issues{end + 1} = sprintf('summary table rows mismatch: off=%d source=%d', ...
-                st.boards(offIdx).boardOff.tableRows, st.boards(srcIdx).dataTableRows);
-        end
-        if st.boards(srcIdx).totalPlotCount ~= st.boards(offIdx).boardOff.totalPlotCount
-            issues{end + 1} = sprintf('summary plot count mismatch: off=%d source=%d', ...
-                st.boards(offIdx).boardOff.totalPlotCount, st.boards(srcIdx).totalPlotCount);
-        end
-        if ~i_hasButtonText(st.boards(offIdx).boardOff.buttonTexts, '+ 빈 탭 추가') || ...
-                ~i_hasButtonText(st.boards(offIdx).boardOff.buttonTexts, '현재 탭 지우기')
-            issues{end + 1} = sprintf('off board %d summary plot buttons missing', offIdx);
-        end
-        if st.boards(offIdx).boardOff.totalPlotCount > 0 && ...
-                st.boards(offIdx).boardOff.markerCount ~= st.boards(offIdx).boardOff.totalPlotCount
-            issues{end + 1} = sprintf('off board %d summary marker count mismatch', offIdx);
-        end
-        if st.boards(offIdx).boardOff.totalPlotCount > 0 && ...
-                st.boards(offIdx).boardOff.lineCount ~= st.boards(offIdx).boardOff.totalPlotCount
-            issues{end + 1} = sprintf('off board %d summary xline count mismatch', offIdx);
-        end
-        if st.boards(offIdx).boardOff.markerCount > 0 && ...
-                st.boards(offIdx).boardOff.interactiveMarkerCount ~= st.boards(offIdx).boardOff.markerCount
-            issues{end + 1} = sprintf('off board %d summary marker is not draggable', offIdx);
-        end
-        if st.boards(offIdx).boardOff.lineCount > 0 && ...
-                st.boards(offIdx).boardOff.interactiveLineCount ~= st.boards(offIdx).boardOff.lineCount
-            issues{end + 1} = sprintf('off board %d summary xline is not draggable', offIdx);
-        end
-        if st.boards(offIdx).boardOff.markerCount > 0 && st.boards(srcIdx).dataLoaded && ...
-                abs(st.boards(offIdx).boardOff.firstMarkerX - st.boards(srcIdx).currentTime) > 0.05
-            issues{end + 1} = sprintf('summary marker time mismatch on off board %d', offIdx);
-        end
-        if st.boards(offIdx).boardOff.lineCount > 0 && st.boards(srcIdx).dataLoaded && ...
-                abs(st.boards(offIdx).boardOff.firstLineX - st.boards(srcIdx).currentTime) > 0.05
-            issues{end + 1} = sprintf('summary xline time mismatch on off board %d', offIdx);
+        % Video Player 자동 팝업 금지 (있을 때만 체크)
+        if isfield(st, 'vidViewerDialogVisible') && any(logical(st.vidViewerDialogVisible))
+            issues{end + 1} = 'Video Player auto-opened during board-off';
         end
     end
 
@@ -1335,6 +1297,7 @@ function i_initProgressMd(progressFile, opts, nCases, caseOrder)
         fprintf(fid, '- LoadAvi: %s\n', char(opts.LoadAvi));
         fprintf(fid, '- CaptureMode: %s\n', char(opts.CaptureMode));
         fprintf(fid, '- CaptureScale: %.3g\n', opts.CaptureScale);
+        fprintf(fid, '- OnlineSafeMode: %d\n', logical(opts.OnlineSafeMode));
         fprintf(fid, '- Total cases: %d\n', nCases);
         fprintf(fid, '- Actual caseOrder (%d): %s\n\n', numel(caseOrder), i_vecToStr(caseOrder));
         fprintf(fid, '| Time | Case | Step | Status | Detail |\n');
