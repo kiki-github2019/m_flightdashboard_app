@@ -466,19 +466,26 @@
                 case 'updateDashboard',               app.updateDashboard(varargin{:});
                 case 'pushPanelToggleButton'
                     fIdx = varargin{1}; pnlName = varargin{2};
+                    btn = gobjects(0);
+                    routeName = '';   % togglePanel fallback target
                     switch lower(char(pnlName))
-                        case 'attitude', btn = app.UI(fIdx).btnAtt;
-                        case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;
-                        case 'altonly',  btn = app.UI(fIdx).btnAlt;
-                        case 'info',     btn = app.UI(fIdx).btnInfo;
-                        case {'dataview', 'plot'}, btn = app.UI(fIdx).btnDataView;
-                        case 'video',    btn = app.UI(fIdx).btnVid;
+                        case 'attitude', btn = app.UI(fIdx).btnAtt;            routeName = 'attitude';
+                        case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;    routeName = 'mapOnly';
+                        case 'altonly',  btn = app.UI(fIdx).btnAlt;            routeName = 'altOnly';
+                        case 'info',     btn = app.UI(fIdx).btnInfo;           routeName = 'info';
+                        case {'dataview', 'plot'}, btn = app.UI(fIdx).btnDataView; routeName = 'dataView';
+                        case 'video',    btn = app.UI(fIdx).btnVid;            routeName = 'video';
                         otherwise
                             error('FlightDataDashboard:UnknownPanelToggle', ...
                                   'Unknown panel toggle: %s', char(pnlName));
                     end
-                    cb = btn.ButtonPushedFcn;
-                    cb(btn, []);
+                    % v2-B: btn 핸들 없으면 togglePanel 직접 호출 (info/dataView 헤더 버튼 제거됨)
+                    if isempty(btn) || ~isvalid(btn)
+                        app.togglePanel(fIdx, routeName);
+                    else
+                        cb = btn.ButtonPushedFcn;
+                        cb(btn, []);
+                    end
                 case 'pushBoardToggleButton'
                     fIdx = varargin{1};
                     btn = app.BoardToggleButtons(fIdx);
@@ -1340,32 +1347,17 @@
         end
 
         function applyMapAltVisibility(app, fIdx)
-            % [L1 B-1] panelMapAlt 내부 [2x1] 격자의 sub-panel 가시성/비율을 동적으로 조정.
-            % mapOnly+altOnly 모두 false → panelMapAlt 자체 hide.
+            % v2-C: board-off active source 에서는 horizontal orientation 사용.
             try
+                activeOff = find(app.BoardOffState, 1);
+                isHorizontal = ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff);
+                if isHorizontal
+                    app.setMapAltArrangement(fIdx, 'horizontal');
+                else
+                    app.setMapAltArrangement(fIdx, 'vertical');
+                end
                 pv = app.UI(fIdx).PanelVisible;
                 mapOn = pv.mapOnly;  altOn = pv.altOnly;
-                hasGrid = isfield(app.UI(fIdx), 'panelMapAltGrid') ...
-                          && ~isempty(app.UI(fIdx).panelMapAltGrid) ...
-                          && isvalid(app.UI(fIdx).panelMapAltGrid);
-                hasMap = isfield(app.UI(fIdx), 'panelMap') ...
-                          && ~isempty(app.UI(fIdx).panelMap) && isvalid(app.UI(fIdx).panelMap);
-                hasAlt = isfield(app.UI(fIdx), 'panelAlt') ...
-                          && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt);
-                if hasMap, app.UI(fIdx).panelMap.Visible = mapOn; end
-                if hasAlt, app.UI(fIdx).panelAlt.Visible = altOn; end
-                if hasGrid
-                    if mapOn && altOn
-                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1.5x', '1x'};
-                    elseif mapOn
-                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1x', 0};
-                    elseif altOn
-                        app.UI(fIdx).panelMapAltGrid.RowHeight = {0, '1x'};
-                    else
-                        app.UI(fIdx).panelMapAltGrid.RowHeight = {'1x', 0};   % cosmetic
-                    end
-                end
-                app.UI(fIdx).panelMapAlt.Visible = mapOn || altOn;
                 % btn 라벨 갱신
                 if isfield(app.UI(fIdx), 'btnMap') && ~isempty(app.UI(fIdx).btnMap) && isvalid(app.UI(fIdx).btnMap)
                     app.UI(fIdx).btnMap.Text = ternary(mapOn, '지도 ▾', '지도 ▸');
@@ -1375,6 +1367,55 @@
                 end
             catch ME
                 app.logCaught(ME, 'applyMapAltVisibility');
+            end
+        end
+
+        function setMapAltArrangement(app, fIdx, orientation)
+            % v2-C1: Map/Altitude vertical(default) 또는 horizontal(board-off) 배치.
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                pv = app.UI(fIdx).PanelVisible;
+                mapOn = pv.mapOnly; altOn = pv.altOnly;
+                hasGrid = isfield(app.UI(fIdx), 'panelMapAltGrid') ...
+                          && ~isempty(app.UI(fIdx).panelMapAltGrid) ...
+                          && isvalid(app.UI(fIdx).panelMapAltGrid);
+                hasMap = isfield(app.UI(fIdx), 'panelMap') ...
+                          && ~isempty(app.UI(fIdx).panelMap) && isvalid(app.UI(fIdx).panelMap);
+                hasAlt = isfield(app.UI(fIdx), 'panelAlt') ...
+                          && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt);
+                if hasMap, app.UI(fIdx).panelMap.Visible = mapOn; end
+                if hasAlt, app.UI(fIdx).panelAlt.Visible = altOn; end
+                if ~hasGrid, return; end
+                g = app.UI(fIdx).panelMapAltGrid;
+                if strcmp(orientation, 'horizontal') && mapOn && altOn
+                    g.RowHeight = {'1x'};
+                    g.ColumnWidth = {'1x', '1x'};
+                    if hasMap, try, app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch, end, end
+                    if hasAlt, try, app.UI(fIdx).panelAlt.Layout.Row = 1; app.UI(fIdx).panelAlt.Layout.Column = 2; catch, end, end
+                elseif strcmp(orientation, 'horizontal') && (mapOn || altOn)
+                    % 단독 가시 → fill
+                    g.RowHeight = {'1x'};
+                    g.ColumnWidth = {'1x'};
+                    if mapOn && hasMap, try, app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch, end, end
+                    if altOn && hasAlt, try, app.UI(fIdx).panelAlt.Layout.Row = 1; app.UI(fIdx).panelAlt.Layout.Column = 1; catch, end, end
+                else
+                    % vertical
+                    g.ColumnWidth = {'1x'};
+                    if mapOn && altOn
+                        g.RowHeight = {'1.5x', '1x'};
+                    elseif mapOn
+                        g.RowHeight = {'1x', 0};
+                    elseif altOn
+                        g.RowHeight = {0, '1x'};
+                    else
+                        g.RowHeight = {'1x', 0};
+                    end
+                    if hasMap, try, app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch, end, end
+                    if hasAlt, try, app.UI(fIdx).panelAlt.Layout.Row = 2; app.UI(fIdx).panelAlt.Layout.Column = 1; catch, end, end
+                end
+                app.UI(fIdx).panelMapAlt.Visible = mapOn || altOn;
+            catch ME
+                app.logCaught(ME, 'setMapAltArrangement');
             end
         end
 
@@ -7789,50 +7830,47 @@
             theta = linspace(0, 2*pi, 100);
             angles = 0:30:330;
             for gaugeType = 1:3
+                tg = app.getLightTheme();   % v2-D: theme-driven gauge colors
                 if gaugeType == 1
-                    ax = app.UI(fIdx).pitchAxes; cla(ax); app.UI(fIdx).hgPitch = hgtransform('Parent', ax); hg = app.UI(fIdx).hgPitch; offsetDeg = 180; bgColor = [0.15 0.25 0.35]; valueField = 'pitchValueText'; valueText = 'P +0.00°';
+                    ax = app.UI(fIdx).pitchAxes; cla(ax); app.UI(fIdx).hgPitch = hgtransform('Parent', ax); hg = app.UI(fIdx).hgPitch; offsetDeg = 180; bgColor = tg.gaugePitchBg;   valueField = 'pitchValueText'; valueText = 'P +0.00°';
                 elseif gaugeType == 2
-                    ax = app.UI(fIdx).rollAxes; cla(ax); app.UI(fIdx).hgRoll = hgtransform('Parent', ax); hg = app.UI(fIdx).hgRoll; offsetDeg = 90; bgColor = [0.35 0.20 0.20]; valueField = 'rollValueText'; valueText = 'R +0.00°';
+                    ax = app.UI(fIdx).rollAxes;  cla(ax); app.UI(fIdx).hgRoll  = hgtransform('Parent', ax); hg = app.UI(fIdx).hgRoll;  offsetDeg = 90;  bgColor = tg.gaugeRollBg;    valueField = 'rollValueText';  valueText = 'R +0.00°';
                 else
-                    ax = app.UI(fIdx).hdgAxes; cla(ax); app.UI(fIdx).hgHdg = hgtransform('Parent', ax); hg = app.UI(fIdx).hgHdg; offsetDeg = 90; bgColor = [0.20 0.35 0.20]; valueField = 'hdgValueText'; valueText = 'H +0.00°';
+                    ax = app.UI(fIdx).hdgAxes;   cla(ax); app.UI(fIdx).hgHdg   = hgtransform('Parent', ax); hg = app.UI(fIdx).hgHdg;   offsetDeg = 90;  bgColor = tg.gaugeHeadingBg; valueField = 'hdgValueText';   valueText = 'H +0.00°';
                 end
 
-                patch(ax, cos(theta), sin(theta), bgColor, 'EdgeColor', 'k', 'LineWidth', 2);
+                patch(ax, cos(theta), sin(theta), bgColor, 'EdgeColor', tg.borderColor, 'LineWidth', 2);
                 for i = 1:length(angles)
                     val = angles(i); if val > 180, val = val - 360; end
                     angRad = (offsetDeg - angles(i)) * pi / 180;
-                    plot(ax, [0.85*cos(angRad) 1.0*cos(angRad)], [0.85*sin(angRad) 1.0*sin(angRad)], 'w', 'LineWidth', 1.5);
+                    plot(ax, [0.85*cos(angRad) 1.0*cos(angRad)], [0.85*sin(angRad) 1.0*sin(angRad)], 'Color', tg.gaugeTickFg, 'LineWidth', 1.5);
                     if gaugeType == 3
                         if val == 0, str = 'N'; elseif val == 90, str = 'E'; elseif val == 180 || val == -180, str = 'S'; elseif val == -90, str = 'W'; else, str = num2str(val); end
                     else
                         str = num2str(val);
                     end
-                    % FontSize를 0.06으로 유지하여 원안의 숫자 크기를 적절하게 설정
-                    text(ax, 0.65*cos(angRad), 0.65*sin(angRad), str, 'Color', 'w', ...
+                    text(ax, 0.65*cos(angRad), 0.65*sin(angRad), str, 'Color', tg.gaugeTickFg, ...
                          'HorizontalAlignment', 'center', 'FontWeight', 'bold', ...
-                         'FontUnits', 'normalized', 'FontSize', 0.06);
+                         'FontUnits', 'normalized', 'FontSize', 0.085);
                 end
 
                 if gaugeType == 1
-                    patch(hg, [-1.15 -1.15 -1.0], [-0.08 0.08 0], bgColor, 'EdgeColor', 'k', 'LineWidth', 1);
-                    plot(hg, [-0.4 0.4], [0 0], 'y', 'LineWidth', 4);
-                    plot(hg, [0.2 0.3], [0 0.2], 'y', 'LineWidth', 3);
+                    patch(hg, [-1.15 -1.15 -1.0], [-0.08 0.08 0], tg.gaugeNeedleFg, 'EdgeColor', tg.borderColor, 'LineWidth', 1);
+                    plot(hg, [-0.4 0.4], [0 0], 'Color', tg.gaugeNeedleFg, 'LineWidth', 4);
+                    plot(hg, [0.2 0.3], [0 0.2], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
                 elseif gaugeType == 2
-                    patch(hg, [-0.08 0.08 0], [1.15 1.15 1.0], bgColor, 'EdgeColor', 'k', 'LineWidth', 1);
-                    plot(hg, [-0.4 0.4], [0 0], 'y', 'LineWidth', 3);
-                    plot(hg, [0 0], [0 0.3], 'y', 'LineWidth', 3);
+                    patch(hg, [-0.08 0.08 0], [1.15 1.15 1.0], tg.gaugeNeedleFg, 'EdgeColor', tg.borderColor, 'LineWidth', 1);
+                    plot(hg, [-0.4 0.4], [0 0], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
+                    plot(hg, [0 0], [0 0.3], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
                 else
-                    patch(hg, [-0.08 0.08 0], [1.15 1.15 1.0], bgColor, 'EdgeColor', 'k', 'LineWidth', 1);
-                    plot(hg, [0 0], [-0.4 0.4], 'y', 'LineWidth', 3);
-                    plot(hg, [-0.3 0.3], [0.1 0.1], 'y', 'LineWidth', 3);
-                    plot(hg, [-0.15 0.15], [-0.3 -0.3], 'y', 'LineWidth', 2);
+                    patch(hg, [-0.08 0.08 0], [1.15 1.15 1.0], tg.gaugeNeedleFg, 'EdgeColor', tg.borderColor, 'LineWidth', 1);
+                    plot(hg, [0 0], [-0.4 0.4], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
+                    plot(hg, [-0.3 0.3], [0.1 0.1], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
+                    plot(hg, [-0.15 0.15], [-0.3 -0.3], 'Color', tg.gaugeNeedleFg, 'LineWidth', 2);
                 end
-                tg = app.getLightTheme();  % v4-Theme: gauge value bg/text light
-                app.UI(fIdx).(valueField) = text(ax, 0, -1.12, valueText, ...
-                    'Color', tg.textPrimary, 'BackgroundColor', tg.surfaceBg, ...
-                    'EdgeColor', tg.gridLine, 'Margin', 1, ...
-                    'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', ...
-                    'FontWeight', 'bold', 'FontSize', tg.fontSizeBase, 'HitTest', 'off');
+                % v2-D3: 중복 inner value text 제거 — text 객체 자체를 생성하지 않음.
+                % 외부 label (pitchLabel/rollLabel/hdgLabel) 만 사용.
+                app.UI(fIdx).(valueField) = gobjects(0);
                 axis(ax, 'equal'); axis(ax, [-1.35 1.35 -1.35 1.35]); axis(ax, 'off');
             end
         end
@@ -8538,7 +8576,7 @@
                 'BackgroundColor', [0.94 0.96 0.98], ...
                 'BorderType', 'line', 'ForegroundColor', tT.textPrimary);
             vdubGrid = uigridlayout(vdubGroupPnl, [3 1]);
-            vdubGrid.RowHeight = {24, 48, 36};
+            vdubGrid.RowHeight = {32, 50, 40};   % v2-F2: label/slider/button row 높이 증가 (clipping 방지)
             vdubGrid.Padding = [8 3 8 2];
             vdubGrid.RowSpacing = 2;
             ctrl.vidVdubLabel = uilabel(vdubGrid, ...
@@ -9600,18 +9638,33 @@
                 dg.ColumnWidth = widths;
                 dg.Scrollable = 'on';
 
-                % 자식 패널 reparent (Layout.Row/.Column 재할당)
+                % v2-C3: 자식 패널 배치 — blank lower-left 제거
+                % Case C3-2/C3-3: attitudeOff + mapColOn → panelMapAlt 가 lower-left 채움
+                % Case C3-1: attitudeOff + mapColOn (both) → 일반 horizontal Map/Alt
+                % Case C3-5: attitudeOn + mapColOn → 기본 좌/우 분할
+                % Case M: attitudeOn + !mapColOn → attitude col [1 3] span
                 app.setPanelLayoutCell(fIdx, 'panelInfo',     1, 1);
                 app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
-                % v3-audit M: lower 가 attitude 단독이면 col 1~3 span (1×3 가로 reflow 확보)
-                if attitudeOn && ~mapColOn && isfield(app.UI(fIdx), 'panelAttitude') ...
-                        && ~isempty(app.UI(fIdx).panelAttitude) && isvalid(app.UI(fIdx).panelAttitude)
-                    try, app.UI(fIdx).panelAttitude.Layout.Row = 3; catch, end
-                    try, app.UI(fIdx).panelAttitude.Layout.Column = [1 3]; catch, end
+                if attitudeOn && ~mapColOn
+                    % attitude 단독 lower — col [1 3] span (1×3 가로 reflow 확보)
+                    if isfield(app.UI(fIdx), 'panelAttitude') ...
+                            && ~isempty(app.UI(fIdx).panelAttitude) && isvalid(app.UI(fIdx).panelAttitude)
+                        try, app.UI(fIdx).panelAttitude.Layout.Row = 3; catch, end
+                        try, app.UI(fIdx).panelAttitude.Layout.Column = [1 3]; catch, end
+                    end
+                    app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
+                elseif ~attitudeOn && mapColOn
+                    % v2-C3-2/C3-3: attitude hidden — panelMapAlt 를 lower-left 로 옮겨 blank 제거
+                    if isfield(app.UI(fIdx), 'panelMapAlt') ...
+                            && ~isempty(app.UI(fIdx).panelMapAlt) && isvalid(app.UI(fIdx).panelMapAlt)
+                        try, app.UI(fIdx).panelMapAlt.Layout.Row = 3; catch, end
+                        try, app.UI(fIdx).panelMapAlt.Layout.Column = [1 3]; catch, end
+                    end
+                    app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
                 else
                     app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
+                    app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
                 end
-                app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
 
                 % v3-fix: hsplit 는 shared column 모델 — 패널 width 만으로 hidden 처리 부족.
                 % 각 패널 Visible 을 PanelVisible state 에 명시적으로 동기화.
@@ -10187,30 +10240,41 @@
         end
 
         function t = getLightTheme(~)
-            % v-style: MATLAB desktop blue-header + light content. 중앙 컬러/폰트 정의.
+            % v2-style: 샘플.png 기반 light blue window + white surface.
             t = struct();
-            t.windowBg       = [0.90 0.93 0.96];
+            t.windowBg       = [0.92 0.96 1.00];
             t.surfaceBg      = [1.00 1.00 1.00];
-            t.surfaceAltBg   = [0.94 0.96 0.98];
-            t.headerBg       = [0.00 0.30 0.50];   % dark MATLAB-like blue header
-            t.borderColor    = [0.30 0.48 0.65];
-            t.gridLine       = [0.78 0.84 0.90];
-            t.textPrimary    = [0.05 0.05 0.05];
-            t.textSecondary  = [0.18 0.24 0.30];
-            t.textMuted      = [0.42 0.48 0.55];
+            t.surfaceAltBg   = [0.95 0.98 1.00];
+            t.headerBg       = [0.00 0.36 0.58];
+            t.borderColor    = [0.35 0.58 0.76];
+            t.gridLine       = [0.74 0.84 0.92];
+            t.textPrimary    = [0.03 0.05 0.07];
+            t.textSecondary  = [0.10 0.18 0.25];
+            t.textMuted      = [0.35 0.42 0.48];
             t.textInverse    = [1.00 1.00 1.00];
-            t.accentBlue     = [0.00 0.42 0.72];
-            t.accentBlueLite = [0.82 0.91 1.00];
-            t.accentBlueText = [0.00 0.18 0.35];
+            t.accentBlue     = [0.00 0.45 0.74];
+            t.accentBlueLite = [0.82 0.93 1.00];
+            t.accentBlueText = [0.00 0.18 0.32];
             t.accentGreen    = [0.00 0.58 0.22];
-            t.warningRed     = [0.78 0.16 0.12];
+            t.warningRed     = [0.86 0.32 0.18];
             t.successGreen   = [0.00 0.48 0.20];
             t.disabledBg     = [0.82 0.85 0.88];
             t.disabledFg     = [0.32 0.36 0.40];
-            t.tableHeaderBg  = [0.91 0.94 0.97];
+            t.tableHeaderBg  = [0.88 0.94 0.99];
             t.tableRowBgA    = [1.00 1.00 1.00];
             t.tableRowBgB    = [0.94 0.97 1.00];
-            t.axesBg         = [1.00 1.00 1.00];
+            t.axesBg         = [0.99 1.00 1.00];
+            t.plotPanelBg    = [1.00 1.00 1.00];
+            t.plotAxesBg     = [0.99 1.00 1.00];
+            t.tabBg          = [1.00 1.00 1.00];
+            t.tabFg          = [0.03 0.05 0.07];
+            t.gaugePitchBg   = [0.74 0.88 1.00];
+            t.gaugeRollBg    = [1.00 0.86 0.82];
+            t.gaugeHeadingBg = [0.82 0.94 0.84];
+            t.gaugeTickFg    = [0.03 0.05 0.07];
+            t.gaugeNeedleFg  = [0.95 0.67 0.10];
+            t.videoPlaceholderBg = [0.92 0.96 1.00];
+            t.videoAxesBg        = [0.02 0.02 0.02];
             t.fontFamily     = 'Segoe UI';
             t.fontFamilyMono = 'Consolas';
             t.fontSizeSmall  = 11;
@@ -10227,20 +10291,79 @@
             t.btnDisabledFg  = [0.32 0.36 0.40];
             t.btnWarningBg   = [0.78 0.16 0.12];
             t.btnWarningFg   = [1.00 1.00 1.00];
-            % v-style: blue panel + role-based toolbar palette
-            t.panelBlueBg    = [0.00 0.30 0.50];
-            t.panelBlueBg2   = [0.02 0.37 0.60];
+            % v2-style: blue panel + role-based toolbar palette
+            t.panelBlueBg    = [0.00 0.36 0.58];
+            t.panelBlueBg2   = [0.02 0.43 0.68];
             t.panelBlueFg    = [1.00 1.00 1.00];
             t.toolbarYellowBg = [0.98 0.78 0.18];
             t.toolbarYellowFg = [0.05 0.05 0.05];
             t.toolbarGreenBg  = [0.00 0.58 0.22];
             t.toolbarGreenFg  = [1.00 1.00 1.00];
-            t.toolbarBlueBg   = [0.00 0.42 0.72];
+            t.toolbarBlueBg   = [0.00 0.45 0.74];
             t.toolbarBlueFg   = [1.00 1.00 1.00];
             t.toolbarGrayBg   = [0.86 0.88 0.90];
             t.toolbarGrayFg   = [0.05 0.05 0.05];
-            t.toolbarDarkBg   = [0.04 0.10 0.16];
+            t.toolbarDarkBg   = [0.16 0.46 0.70];   % v2: 비-블랙 blue 변환 (no near-black)
             t.toolbarDarkFg   = [1.00 1.00 1.00];
+        end
+
+        function tf = isNearBlackColor(~, c)
+            tf = false;
+            try
+                if isnumeric(c) && numel(c) == 3
+                    tf = mean(double(c)) < 0.20 && max(double(c)) < 0.30;
+                end
+            catch
+            end
+        end
+
+        function tf = isBlueThemeColor(app, c, t)
+            tf = false;
+            if nargin < 3 || isempty(t), t = app.getLightTheme(); end
+            try
+                if isnumeric(c) && numel(c) == 3
+                    refs = [t.headerBg; t.panelBlueBg; t.panelBlueBg2; t.toolbarBlueBg; t.toolbarDarkBg];
+                    for k = 1:size(refs, 1)
+                        if all(abs(double(c) - refs(k, :)) < 0.05), tf = true; return; end
+                    end
+                end
+            catch
+            end
+        end
+
+        function tf = isVideoAxes(app, ax)
+            tf = false;
+            try
+                if isempty(ax) || ~isvalid(ax), return; end
+                if isprop(ax, 'Tag') && ~isempty(char(ax.Tag)) && contains(lower(char(ax.Tag)), 'video')
+                    tf = true; return;
+                end
+                if ~isempty(app.UI)
+                    for k = 1:numel(app.UI)
+                        if isfield(app.UI(k), 'vidAxes') && ~isempty(app.UI(k).vidAxes) ...
+                                && isvalid(app.UI(k).vidAxes) && app.UI(k).vidAxes == ax
+                            tf = true; return;
+                        end
+                    end
+                end
+            catch
+            end
+        end
+
+        function safeSetFontColor(~, h, color)
+            try
+                if isempty(h) || ~isvalid(h), return; end
+                if isprop(h, 'FontColor'), h.FontColor = color; end
+            catch
+            end
+        end
+
+        function safeSetBackground(~, h, color)
+            try
+                if isempty(h) || ~isvalid(h), return; end
+                if isprop(h, 'BackgroundColor'), h.BackgroundColor = color; end
+            catch
+            end
         end
 
         function applyLightTheme(app, root)
@@ -10270,7 +10393,7 @@
         end
 
         function applyThemeToPanels(app, root, t)
-            % v-style: 의도된 dark/blue 배경은 보존. bordered panel 만 borderColor 통일.
+            % v2-style: blue 의도는 보존 + near-black non-video 는 surfaceAltBg 로 normalize.
             try
                 panels = findall(root, 'Type', 'uipanel');
                 for k = 1:numel(panels)
@@ -10280,10 +10403,43 @@
                         if isprop(p, 'BorderColor') && isprop(p, 'BorderType') && ~strcmp(char(p.BorderType), 'none')
                             p.BorderColor = t.borderColor;
                         end
+                        if isprop(p, 'BackgroundColor')
+                            bg = p.BackgroundColor;
+                            if app.isBlueThemeColor(bg, t)
+                                % blue 의도 panel — ForegroundColor 만 inverse 강제
+                                if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textInverse; end
+                            elseif app.isNearBlackColor(bg)
+                                % near-black non-video → surfaceAltBg 로 light normalize
+                                p.BackgroundColor = t.surfaceAltBg;
+                                if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textPrimary; end
+                            else
+                                % light bg: 흰글씨 → dark 로 교정
+                                if isprop(p, 'ForegroundColor')
+                                    fg = p.ForegroundColor;
+                                    if isnumeric(fg) && numel(fg)==3 && mean(double(fg))>=0.85 ...
+                                            && isnumeric(bg) && numel(bg)==3 && mean(double(bg))>=0.85
+                                        p.ForegroundColor = t.textPrimary;
+                                    end
+                                end
+                            end
+                        end
                     catch
                     end
                 end
-                % uigridlayout: 의도 dark 도 보존 (NO normalize)
+                grids = findall(root, 'Type', 'uigridlayout');
+                for k = 1:numel(grids)
+                    g = grids(k);
+                    if isempty(g) || ~isvalid(g), continue; end
+                    try
+                        if isprop(g, 'BackgroundColor')
+                            bg = g.BackgroundColor;
+                            if app.isNearBlackColor(bg) && ~app.isBlueThemeColor(bg, t)
+                                g.BackgroundColor = t.surfaceAltBg;
+                            end
+                        end
+                    catch
+                    end
+                end
             catch ME
                 app.logCaught(ME, 'theme:panels');
             end
@@ -10378,40 +10534,24 @@
         end
 
         function applyThemeToAxes(app, root, t)
-            % v4-L2: axes — dark bg → white. 외부 vidViewer image axes 는 건드리지 않음.
+            % v2-style: non-video axes 항상 light 강제 + tick/grid/font 일관성.
             try
                 axesAll = findall(root, 'Type', 'axes');
                 for k = 1:numel(axesAll)
                     ax = axesAll(k);
                     if isempty(ax) || ~isvalid(ax), continue; end
-                    % video image axes 보호: NextPlot='replace' 이거나 Tag='video' 인 경우 skip
+                    if app.isVideoAxes(ax), continue; end
                     try
-                        if isprop(ax, 'Tag') && ~isempty(char(ax.Tag)) && contains(lower(char(ax.Tag)), 'video')
-                            continue;
-                        end
-                    catch
-                    end
-                    try
-                        if isprop(ax, 'Color')
-                            c = ax.Color;
-                            if isnumeric(c) && numel(c) == 3 && all(double(c) < 0.5)
-                                ax.Color = t.axesBg;
-                            end
-                        end
-                        if isprop(ax, 'XColor')
-                            xc = ax.XColor;
-                            if isnumeric(xc) && numel(xc) == 3 && all(double(xc) >= 0.90)
-                                ax.XColor = t.textSecondary;
-                            end
-                        end
-                        if isprop(ax, 'YColor')
-                            yc = ax.YColor;
-                            if isnumeric(yc) && numel(yc) == 3 && all(double(yc) >= 0.90)
-                                ax.YColor = t.textSecondary;
-                            end
-                        end
-                        if isprop(ax, 'GridColor')
-                            try, ax.GridColor = t.gridLine; catch, end
+                        if isprop(ax, 'Color'), ax.Color = t.plotAxesBg; end
+                        if isprop(ax, 'XColor'), ax.XColor = t.textSecondary; end
+                        if isprop(ax, 'YColor'), ax.YColor = t.textSecondary; end
+                        if isprop(ax, 'GridColor'), ax.GridColor = t.gridLine; end
+                        if isprop(ax, 'FontSize') && ax.FontSize < 11, ax.FontSize = 11; end
+                        try
+                            if ~isempty(ax.Title), ax.Title.Color = t.textPrimary; if ax.Title.FontSize < 12, ax.Title.FontSize = 12; end, end
+                            if ~isempty(ax.XLabel), ax.XLabel.Color = t.textPrimary; if ax.XLabel.FontSize < 12, ax.XLabel.FontSize = 12; end, end
+                            if ~isempty(ax.YLabel), ax.YLabel.Color = t.textPrimary; if ax.YLabel.FontSize < 12, ax.YLabel.FontSize = 12; end, end
+                        catch
                         end
                     catch
                     end
@@ -10630,9 +10770,10 @@
 
                 controlPanel = uipanel(fGrid, 'BackgroundColor', tT.headerBg, 'ForegroundColor', tT.textInverse, 'BorderType', 'line');
                 % [L1 B-1/L2] 지도/고도/정보/plot/비디오 독립 토글.
-                glCtrl = uigridlayout(controlPanel, [1 11]);
+                % v2-B: 헤더에 visible 정보/plot 버튼 제거 — 11→9 col
+                glCtrl = uigridlayout(controlPanel, [1 9]);
                 glCtrl.BackgroundColor = tT.headerBg;
-                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70, 78, 70};
+                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
 
@@ -10657,18 +10798,13 @@
                     'BackgroundColor', [0.00 0.42 0.72], 'FontColor', [1 1 1], ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
-                UI_temp(fIdx).btnInfo = uibutton(glCtrl, 'Text', '정보 ▾', 'FontSize', 11, 'FontWeight', 'bold', ...
-                    'BackgroundColor', tT.toolbarYellowBg, 'FontColor', tT.toolbarYellowFg, ...
-                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'info'));
-                UI_temp(fIdx).btnInfo.Layout.Column = 9;
-                UI_temp(fIdx).btnDataView = uibutton(glCtrl, 'Text', 'plot ▾', 'FontSize', 11, 'FontWeight', 'bold', ...
-                    'BackgroundColor', [0.55 0.32 0.80], 'FontColor', [1 1 1], ...
-                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'dataView'));
-                UI_temp(fIdx).btnDataView.Layout.Column = 10;
+                % v2-B: btnInfo/btnDataView 제거 (PanelVisible.info/dataView 는 내부적으로 true 유지)
+                UI_temp(fIdx).btnInfo = gobjects(0);
+                UI_temp(fIdx).btnDataView = gobjects(0);
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
-                    'BackgroundColor', [0.12 0.12 0.12], 'FontColor', [1 1 1], ...
+                    'BackgroundColor', tT.toolbarDarkBg, 'FontColor', tT.toolbarDarkFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
-                UI_temp(fIdx).btnVid.Layout.Column = 11;
+                UI_temp(fIdx).btnVid.Layout.Column = 9;
                 UI_temp(fIdx).PanelVisible = struct( ...
                     'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
                     'info', true, 'dataView', true);
@@ -11180,15 +11316,16 @@
         end
 
         function [ax, lbl, grid] = createGaugePanel(app, parentPnl, titleStr)
-            t = app.getLightTheme();   % v-style
+            t = app.getLightTheme();   % v2-D1: 외부 label 가독성 강화
             grid = uigridlayout(parentPnl, [2 1]);
-            grid.RowHeight = {20, '1x'};
+            grid.RowHeight = {28, '1x'};
             grid.Padding = [0 0 0 0];
             grid.RowSpacing = 0;
+            try, grid.BackgroundColor = t.surfaceBg; catch, end
 
-            lbl = uilabel(grid, 'Text', [titleStr ' +0.000'], 'FontWeight', 'bold', 'FontSize', 12, ...
+            lbl = uilabel(grid, 'Text', [titleStr ' +0.000'], 'FontWeight', 'bold', 'FontSize', 15, ...
                 'FontColor', t.textPrimary, 'HorizontalAlignment', 'center');
-            axPnl = uipanel(grid, 'BorderType', 'none', 'BackgroundColor', [1 1 1]);
+            axPnl = uipanel(grid, 'BorderType', 'none', 'BackgroundColor', t.surfaceBg);
 
             axGrid = uigridlayout(axPnl, [1 1], 'Padding', [0 0 0 0]);
             ax = uiaxes(axGrid);
