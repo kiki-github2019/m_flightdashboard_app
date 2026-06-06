@@ -278,7 +278,7 @@
             end
 
             app.createLayout();
-            app.applyLightPanelTitleContrast(app.UIFigure);
+            app.applyLightTheme(app.UIFigure);  % v4-Theme: 전체 light 통일
             try
                 app.UIFigure.SizeChangedFcn = @(~,~) app.onFigureSizeChanged();
             catch ME_silent
@@ -5667,7 +5667,7 @@
             app.buildEditTabOptions(tabOpts);
             app.buildEditTabPlot(tabPlot);
             app.buildEditTabExport(tabExport);
-            app.applyLightPanelTitleContrast(fig);
+            app.applyLightTheme(fig);  % v4-Theme
 
             % Bottom button row
             bottom = uigridlayout(outer, [1 4]);
@@ -7739,11 +7739,12 @@
                     plot(hg, [-0.3 0.3], [0.1 0.1], 'y', 'LineWidth', 3);
                     plot(hg, [-0.15 0.15], [-0.3 -0.3], 'y', 'LineWidth', 2);
                 end
+                tg = app.getLightTheme();  % v4-Theme: gauge value bg/text light
                 app.UI(fIdx).(valueField) = text(ax, 0, -1.12, valueText, ...
-                    'Color', 'w', 'BackgroundColor', [0.02 0.02 0.02], ...
-                    'EdgeColor', [0.85 0.85 0.85], 'Margin', 1, ...
+                    'Color', tg.textPrimary, 'BackgroundColor', tg.surfaceBg, ...
+                    'EdgeColor', tg.gridLine, 'Margin', 1, ...
                     'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', ...
-                    'FontWeight', 'bold', 'FontSize', 12, 'HitTest', 'off');
+                    'FontWeight', 'bold', 'FontSize', tg.fontSizeBase, 'HitTest', 'off');
                 axis(ax, 'equal'); axis(ax, [-1.35 1.35 -1.35 1.35]); axis(ax, 'off');
             end
         end
@@ -8512,7 +8513,7 @@
             ctrl.vidFrameAxes = gobjects(0);
             ctrl.vidFrameXLine = gobjects(0);
             ctrl.vidFrameMarker = gobjects(0);
-            app.applyLightPanelTitleContrast(dlg);
+            app.applyLightTheme(dlg);  % v4-Theme
         end
 
         function toggleBoardVisibility(app, fIdx)
@@ -9425,15 +9426,16 @@
                 names = app.getLayoutPresetNames();
                 icons = app.getLayoutPresetIcons();
                 if ~isempty(app.LayoutPresetButtons)
+                    t = app.getLightTheme();  % v4-Theme
                     for k = 1:min(numel(app.LayoutPresetButtons), numel(names))
                         btn = app.LayoutPresetButtons(k);
                         if isempty(btn) || ~isvalid(btn), continue; end
                         if strcmp(app.CurrentLayoutPreset, names{k})
-                            btn.BackgroundColor = [0.80 0.18 0.18];
-                            btn.FontColor = [1 1 1];
+                            btn.BackgroundColor = t.btnActiveBg;
+                            btn.FontColor = t.btnActiveFg;
                         else
-                            btn.BackgroundColor = [0.97 0.97 0.97];
-                            btn.FontColor = [0.08 0.08 0.08];
+                            btn.BackgroundColor = t.btnNormalBg;
+                            btn.FontColor = t.btnNormalFg;
                         end
                         btn.Text = icons{k};
                     end
@@ -9876,6 +9878,145 @@
                 catch ME
                     app.logCaught(ME, 'enforceReadablePanelTitles');
                 end
+            end
+        end
+
+        function t = getLightTheme(~)
+            % v4-Theme: MATLAB Editor 라이트 테마. 중앙 컬러/폰트 정의.
+            % MATLAB Online + 2025a 모두에서 가독성 보장 (white bg + dark text).
+            t = struct();
+            t.windowBg       = [0.96 0.96 0.96];   % uifigure / dialog window
+            t.surfaceBg      = [1.00 1.00 1.00];   % panel surface (Editor-like)
+            t.surfaceAltBg   = [0.97 0.97 0.97];   % inactive button / striped row
+            t.headerBg       = [0.94 0.94 0.94];   % header / toolbar bar
+            t.borderColor    = [0.78 0.78 0.78];
+            t.gridLine       = [0.85 0.85 0.85];
+            t.textPrimary    = [0.10 0.10 0.10];
+            t.textSecondary  = [0.35 0.35 0.35];
+            t.textMuted      = [0.55 0.55 0.55];
+            t.textInverse    = [1.00 1.00 1.00];
+            t.accentBlue     = [0.15 0.38 0.82];
+            t.accentBlueLite = [0.86 0.92 1.00];
+            t.accentBlueText = [0.05 0.15 0.32];
+            t.accentGreen    = [0.06 0.65 0.50];
+            t.warningRed     = [0.80 0.18 0.18];
+            t.successGreen   = [0.06 0.45 0.22];
+            t.disabledBg     = [0.90 0.90 0.90];
+            t.disabledFg     = [0.45 0.45 0.45];
+            t.tableHeaderBg  = [0.93 0.93 0.93];
+            t.tableRowBgA    = [1.00 1.00 1.00];
+            t.tableRowBgB    = [0.96 0.96 0.98];
+            t.axesBg         = [1.00 1.00 1.00];
+            t.fontFamily     = 'Segoe UI';
+            t.fontFamilyMono = 'Consolas';
+            t.fontSizeSmall  = 10;
+            t.fontSizeBase   = 12;
+            t.fontSizeLarge  = 14;
+            % Selected button (active toggle)
+            t.btnActiveBg    = t.warningRed;
+            t.btnActiveFg    = t.textInverse;
+            t.btnAccentBg    = t.accentBlueLite;
+            t.btnAccentFg    = t.accentBlueText;
+            t.btnNormalBg    = t.surfaceAltBg;
+            t.btnNormalFg    = t.textPrimary;
+            t.btnDisabledBg  = t.disabledBg;
+            t.btnDisabledFg  = t.disabledFg;
+        end
+
+        function applyLightTheme(app, root)
+            % v4-Theme: figure/dialog 전체에 light theme 적용 (idempotent recursive sweep).
+            % dark 배경/dark 텍스트 → light theme 컬러로 normalize.
+            % uifigure, uipanel, uigridlayout, uilabel, axes 모두 sweep.
+            try
+                if nargin < 2 || isempty(root) || ~isvalid(root)
+                    root = app.UIFigure;
+                end
+                if isempty(root) || ~isvalid(root), return; end
+                t = app.getLightTheme();
+                % Root (figure/dialog)
+                try
+                    if isprop(root, 'Color'), root.Color = t.windowBg; end
+                    if isprop(root, 'BackgroundColor'), root.BackgroundColor = t.windowBg; end
+                catch
+                end
+                % uipanel sweep
+                panels = findall(root, 'Type', 'uipanel');
+                for k = 1:numel(panels)
+                    p = panels(k);
+                    if isempty(p) || ~isvalid(p), continue; end
+                    try
+                        if isprop(p, 'BackgroundColor')
+                            bg = p.BackgroundColor;
+                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                                p.BackgroundColor = t.surfaceBg;
+                            end
+                        end
+                        if isprop(p, 'ForegroundColor')
+                            fg = p.ForegroundColor;
+                            if isnumeric(fg) && numel(fg) == 3 && all(double(fg) >= 0.85)
+                                p.ForegroundColor = t.textPrimary;
+                            end
+                        end
+                    catch
+                    end
+                end
+                % uigridlayout sweep
+                grids = findall(root, 'Type', 'uigridlayout');
+                for k = 1:numel(grids)
+                    g = grids(k);
+                    if isempty(g) || ~isvalid(g), continue; end
+                    try
+                        if isprop(g, 'BackgroundColor')
+                            bg = g.BackgroundColor;
+                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                                g.BackgroundColor = t.surfaceBg;
+                            end
+                        end
+                    catch
+                    end
+                end
+                % uilabel sweep — white-on-dark → dark-on-light
+                labels = findall(root, 'Type', 'uilabel');
+                for k = 1:numel(labels)
+                    lb = labels(k);
+                    if isempty(lb) || ~isvalid(lb), continue; end
+                    try
+                        if isprop(lb, 'FontColor')
+                            fc = lb.FontColor;
+                            if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
+                                % white text — check parent bg
+                                parentBg = [];
+                                try
+                                    parentBg = lb.Parent.BackgroundColor;
+                                catch
+                                end
+                                if isnumeric(parentBg) && numel(parentBg) == 3 && all(double(parentBg) >= 0.85)
+                                    lb.FontColor = t.textPrimary;
+                                end
+                            end
+                        end
+                    catch
+                    end
+                end
+                % uiaxes/axes sweep — dark axes → light
+                axesAll = findall(root, 'Type', 'axes');
+                for k = 1:numel(axesAll)
+                    ax = axesAll(k);
+                    if isempty(ax) || ~isvalid(ax), continue; end
+                    try
+                        if isprop(ax, 'Color')
+                            c = ax.Color;
+                            if isnumeric(c) && numel(c) == 3 && all(double(c) < 0.5)
+                                ax.Color = t.axesBg;
+                            end
+                        end
+                    catch
+                    end
+                end
+                % Panel title contrast (legacy helper still applies)
+                app.applyLightPanelTitleContrast(root);
+            catch ME
+                app.logCaught(ME, 'applyLightTheme');
             end
         end
 
@@ -10370,10 +10511,12 @@
         end
 
         function styleToolbarButton(app, btn, iconText, labelText, stateName)
+            % v4-Theme: 단일 light theme button state mapping.
             try
                 if isempty(btn) || ~isvalid(btn), return; end
+                t = app.getLightTheme();
                 btn.Text = app.toolbarButtonText(iconText, labelText);
-                btn.FontSize = 10;
+                btn.FontSize = t.fontSizeSmall;
                 btn.FontWeight = 'bold';
                 try
                     btn.WordWrap = 'on';
@@ -10381,17 +10524,17 @@
                 end
                 switch lower(char(stateName))
                     case 'active'
-                        btn.BackgroundColor = [0.80 0.18 0.18];
-                        btn.FontColor = [1 1 1];
+                        btn.BackgroundColor = t.btnActiveBg;
+                        btn.FontColor = t.btnActiveFg;
                     case 'accent'
-                        btn.BackgroundColor = [0.86 0.92 1.00];
-                        btn.FontColor = [0.05 0.15 0.32];
+                        btn.BackgroundColor = t.btnAccentBg;
+                        btn.FontColor = t.btnAccentFg;
                     case 'disabled'
-                        btn.BackgroundColor = [0.90 0.90 0.90];
-                        btn.FontColor = [0.45 0.45 0.45];
+                        btn.BackgroundColor = t.btnDisabledBg;
+                        btn.FontColor = t.btnDisabledFg;
                     otherwise
-                        btn.BackgroundColor = [0.97 0.97 0.97];
-                        btn.FontColor = [0.08 0.08 0.08];
+                        btn.BackgroundColor = t.btnNormalBg;
+                        btn.FontColor = t.btnNormalFg;
                 end
             catch ME_silent
                 app.logCaught(ME_silent, 'toolbarButtonStyle');
