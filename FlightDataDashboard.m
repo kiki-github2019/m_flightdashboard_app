@@ -9429,6 +9429,11 @@
                     nm = placements{k}{1}; col = placements{k}{2};
                     app.setPanelLayoutCell(fIdx, nm, 1, col);
                 end
+                % v3-audit M: normal 복귀 시 attitude col span 해제
+                if isfield(app.UI(fIdx), 'panelAttitude') && ~isempty(app.UI(fIdx).panelAttitude) ...
+                        && isvalid(app.UI(fIdx).panelAttitude)
+                    try, app.UI(fIdx).panelAttitude.Layout.Column = 1; catch, end
+                end
                 % splitters (col 2/4/6) — Layout 복귀 + 가시화 (hsplit 모드에서 hide 한 것 복원)
                 if isfield(app.UI(fIdx), 'colSplitters')
                     sp = app.UI(fIdx).colSplitters;
@@ -9517,7 +9522,14 @@
                 % 자식 패널 reparent (Layout.Row/.Column 재할당)
                 app.setPanelLayoutCell(fIdx, 'panelInfo',     1, 1);
                 app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
-                app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
+                % v3-audit M: lower 가 attitude 단독이면 col 1~3 span (1×3 가로 reflow 확보)
+                if attitudeOn && ~mapColOn && isfield(app.UI(fIdx), 'panelAttitude') ...
+                        && ~isempty(app.UI(fIdx).panelAttitude) && isvalid(app.UI(fIdx).panelAttitude)
+                    try, app.UI(fIdx).panelAttitude.Layout.Row = 3; catch, end
+                    try, app.UI(fIdx).panelAttitude.Layout.Column = [1 3]; catch, end
+                else
+                    app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
+                end
                 app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
 
                 % v3-fix: hsplit 는 shared column 모델 — 패널 width 만으로 hidden 처리 부족.
