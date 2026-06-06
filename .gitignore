@@ -6,3 +6,13 @@ flight_data2.dat
 flight_data2_fps7.avi
 option1.dat
 option2.dat
+
+# Test run artifacts (PNG/ZIP results — large binaries, not versioned)
+cowork auto test/1*/
+cowork auto test/2*/
+
+# Archived Python test suite
+python_gui_tests.zip
+
+# doc: unzipped duplicates (zip already tracked)
+doc/bug_unzip_260606/
