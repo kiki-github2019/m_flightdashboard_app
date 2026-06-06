@@ -33,7 +33,10 @@ function auto_test_runner(varargin)
 %       >> auto_test_runner('CaseList',2,'CaptureMode','none','LoadAvi','never')  % case 2 단독 빠른 실행
 %       >> auto_test_runner('LoadAvi','never')                    % AVI 일체 미로드
 %       >> auto_test_runner('CaptureMode','all','CaptureScale',1) % 원본 캡처
-
+%       2026-06-06 1700 claude code recommandation
+%       >> auto_test_runner('OutputDir','D:\flightdashboard\1. 최초-MVC 전\cowork auto test', ...
+%                 'LoadAvi','never','CaptureMode','fail','CaptureScale',0.6, ...
+%                 'OnlineSafeMode',true,'Order','desc','Skip',[2 5 6 37 48])
     p = inputParser;
     p.addParameter('Start',   1,      @(x) isnumeric(x) && isscalar(x) && x >= 1);
     p.addParameter('End',     Inf,    @(x) isnumeric(x) && isscalar(x));
@@ -94,12 +97,12 @@ function auto_test_runner(varargin)
     iStart  = max(1, round(opts.Start));
     iEnd    = min(nCases, round(opts.End));
     caseOrder = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, opts.Skip, opts.CaseList);
-    progressFile = fullfile(outDir, 'progress.md');
-    i_initProgressMd(progressFile, opts, nCases, caseOrder);
-    % v3-fix: OnlineSafeMode 경고를 progress.md 에도 영구 기록
-    for sw = 1:numel(safeWarnings)
-        i_appendProgressMd(progressFile, 0, 0, 'ONLINE_SAFE_WARN', safeWarnings{sw});
-    end
+    % v-chunk: 10 케이스 단위 progress/index 분할. 파일명에 시작~끝 케이스 번호 포함.
+    chunkSize = 10;
+    chunkStartIdx = 1;          % 현 chunk 의 caseOrder 시작 인덱스
+    progressFile = '';          % 현 chunk 의 progress 파일
+    indexFile = '';             % 현 chunk 의 index 파일
+    pendingSafeWarnings = safeWarnings;
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', ''), nCases, 1);
@@ -112,6 +115,20 @@ function auto_test_runner(varargin)
     for ii = 1:numel(caseOrder)
         i = caseOrder(ii);
         tc = cases(i);
+        % v-chunk: 새 chunk 시작 시 progress/index 파일 신규 생성
+        if ii == chunkStartIdx
+            chunkEndIdx = min(ii + chunkSize - 1, numel(caseOrder));
+            firstCase = caseOrder(ii);
+            lastCase  = caseOrder(chunkEndIdx);
+            lo = min(firstCase, lastCase); hi = max(firstCase, lastCase);
+            progressFile = fullfile(outDir, sprintf('progress_%03d-%03d.md', lo, hi));
+            indexFile    = fullfile(outDir, sprintf('index_%03d-%03d.md',    lo, hi));
+            i_initProgressMd(progressFile, opts, nCases, caseOrder(ii:chunkEndIdx));
+            for sw = 1:numel(pendingSafeWarnings)
+                i_appendProgressMd(progressFile, 0, 0, 'ONLINE_SAFE_WARN', pendingSafeWarnings{sw});
+            end
+            pendingSafeWarnings = {};   % 첫 chunk 에만 기록
+        end
         fprintf('\n[%02d/%02d] %s | %s\n', i, nCases, tc.group, tc.title);
         i_appendProgressMd(progressFile, i, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
 
@@ -165,12 +182,17 @@ function auto_test_runner(varargin)
         results(i) = r;
         i_writeCaseMd(outDir, i, tc, r);
         i_appendProgressMd(progressFile, i, r.steps, r.status, r.error);
-        % v4-crash-resilient: 매 케이스 완료 후 index.md 즉시 갱신 (MATLAB Online hard-crash 대비)
-        try; i_writeIndexMd(outDir, results); catch; end
+        % v-chunk: 현 chunk 의 index 즉시 갱신 (중간 crash 대비)
+        chunkCases = caseOrder(chunkStartIdx:chunkEndIdx);
+        try; i_writeIndexMd(outDir, results(chunkCases), indexFile, progressFile); catch; end
+        % v-chunk: chunk 끝 도달 시 finalize + 다음 chunk 준비
+        if ii == chunkEndIdx
+            chunkSubset = results(chunkCases);
+            i_appendProgressMd(progressFile, 0, 0, 'CHUNK_FINISHED', sprintf('PASS=%d FAIL=%d', ...
+                sum(strcmp({chunkSubset.status}, 'PASS')), sum(strcmp({chunkSubset.status}, 'FAIL'))));
+            chunkStartIdx = ii + 1;
+        end
     end
-    i_writeIndexMd(outDir, results);
-    i_appendProgressMd(progressFile, 0, 0, 'FINISHED', sprintf('PASS=%d FAIL=%d', ...
-        sum(strcmp({results.status}, 'PASS')), sum(strcmp({results.status}, 'FAIL'))));
 
     nPass = sum(strcmp({results.status}, 'PASS'));
     nFail = sum(strcmp({results.status}, 'FAIL'));
@@ -180,27 +202,21 @@ function auto_test_runner(varargin)
     nSkip = sum(strcmp({results.status}, 'SKIPPED'));
     fprintf('\nDone. %d cases. PASS=%d FAIL=%d EXCEPTION=%d CAPTURE_FAIL=%d SETUP_FAIL=%d SKIPPED=%d\n', ...
         nCases, nPass, nFail, nExc, nCap, nSF, nSkip);
-    fprintf('See: %s\n', fullfile(outDir, 'index.md'));
+    fprintf('See: %s\\index_*.md (chunked by 10)\n', outDir);
 end
 
 % =========================================================================
 % Output dir resolution
 % =========================================================================
 function outDir = i_resolveOutputDir()
+    % v-local: 로컬 MATLAB 환경 전용. 프로젝트 내 cowork auto test 폴더 우선.
     candidates = {};
-    if ~isempty(getenv('HOME'))
-        candidates{end + 1} = fullfile(getenv('HOME'), 'MATLAB Drive', 'cowork_auto_test');
-    end
-    if ~isempty(getenv('USERPROFILE'))
-        candidates{end + 1} = fullfile(getenv('USERPROFILE'), 'MATLAB Drive', 'cowork_auto_test');
-    end
-    candidates{end + 1} = fullfile('/MATLAB Drive', 'cowork_auto_test');
+    candidates{end + 1} = fullfile(pwd, 'cowork auto test');
+    candidates{end + 1} = fullfile(pwd, 'cowork_auto_test');
     try
-        candidates{end + 1} = fullfile(userpath, '..', 'MATLAB Drive', 'cowork_auto_test');
+        candidates{end + 1} = fullfile(userpath, 'cowork_auto_test');
     catch
     end
-    candidates{end + 1} = fullfile(pwd, 'cowork_auto_test');
-
     for k = 1:numel(candidates)
         parent = fileparts(candidates{k});
         if isfolder(parent)
@@ -679,6 +695,14 @@ function i_applyAction(app, act, beforeState)
             app.testHook('roundTripProjectLayoutState');
         case 'setVideoSync'
             app.testHook('setVideoSync', act.args{:});
+        % v-runner: EditDialog dispatch (모든 boardOff 상태에서 허용)
+        case {'openEditDialog','closeEditDialog','applyPendingDialogChanges', ...
+              'editDialogSaveProject','editDialogSaveProjectAs','editDialogApplyOptionDraft', ...
+              'capturePlotConfigAndRefresh','editDialogRebuildPlots','editDialogApplyPlotProps', ...
+              'editDialogSyncTabXLimAll','editDialogSyncSelectedPlotXLimAll'}
+            app.testHook(act.fn);
+        case {'editDialogToggleXAuto','editDialogToggleYAuto','switchEditDialogTab'}
+            app.testHook(act.fn, act.args{:});
         otherwise
             error('AutoTest:UnknownAction', 'Unknown action: %s', act.fn);
     end
@@ -1421,22 +1445,33 @@ function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
     end
 end
 
-function i_writeIndexMd(outDir, results)
-    fname = fullfile(outDir, 'index.md');
+function i_writeIndexMd(outDir, results, indexFile, progressFile)
+    % v-chunk: chunk 별 index 파일. indexFile/progressFile 미지정 시 legacy 'index.md'/'progress.md'.
+    if nargin < 3 || isempty(indexFile)
+        fname = fullfile(outDir, 'index.md');
+    else
+        fname = indexFile;
+    end
+    if nargin < 4 || isempty(progressFile)
+        progressLinkName = 'progress.md';
+    else
+        [~, baseName, ext] = fileparts(progressFile);
+        progressLinkName = [baseName, ext];
+    end
     fid = fopen(fname, 'w', 'n', 'UTF-8');
     if fid < 0, return; end
     closeFid = onCleanup(@() fclose(fid));
 
     fprintf(fid, '# Cowork Auto Test — 결과 인덱스\n\n');
     fprintf(fid, '- 실행 시각: %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
-    fprintf(fid, '- 총 케이스 수: %d\n', numel(results));
+    fprintf(fid, '- 이 chunk 케이스 수: %d\n', numel(results));
     fprintf(fid, '- PASS: %d\n', sum(strcmp({results.status}, 'PASS')));
     fprintf(fid, '- FAIL: %d\n', sum(strcmp({results.status}, 'FAIL')));
     fprintf(fid, '- EXCEPTION: %d\n', sum(strcmp({results.status}, 'EXCEPTION')));
     fprintf(fid, '- CAPTURE_FAIL: %d\n', sum(strcmp({results.status}, 'CAPTURE_FAIL')));
     fprintf(fid, '- SETUP_FAIL: %d\n', sum(strcmp({results.status}, 'SETUP_FAIL')));
     fprintf(fid, '- SKIPPED: %d\n\n', sum(strcmp({results.status}, 'SKIPPED')));
-    fprintf(fid, '- Progress log: [progress.md](progress.md)\n\n');
+    fprintf(fid, '- Progress log: [%s](%s)\n\n', progressLinkName, progressLinkName);
 
     fprintf(fid, '## 그룹 요약\n\n');
     fprintf(fid, '| Group | Total | PASS | FAIL | SKIPPED |\n|---|---|---|---|---|\n');
@@ -1481,6 +1516,20 @@ function cases = i_buildCaseMatrix()
     RTL = @(lbl)               struct('fn','roundTripProjectLayoutState',  'args',{{}},          'label',lbl, 'row',NaN);
     SVS = @(fIdx, fr, t, vf, df, lbl) struct('fn','setVideoSync', ...
                                               'args',{{fIdx, fr, t, vf, df, true}}, 'label',lbl, 'row',NaN);
+    % v-runner: EditDialog dispatch macros
+    OED = @(lbl)               struct('fn','openEditDialog',                'args',{{}},          'label',lbl, 'row',NaN);
+    CED = @(lbl)               struct('fn','closeEditDialog',               'args',{{}},          'label',lbl, 'row',NaN);
+    APD = @(lbl)               struct('fn','applyPendingDialogChanges',     'args',{{}},          'label',lbl, 'row',NaN);
+    EDS = @(lbl)               struct('fn','editDialogSaveProject',         'args',{{}},          'label',lbl, 'row',NaN);
+    EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
+    CPC = @(lbl)               struct('fn','capturePlotConfigAndRefresh',   'args',{{}},          'label',lbl, 'row',NaN);
+    EDR = @(lbl)               struct('fn','editDialogRebuildPlots',        'args',{{}},          'label',lbl, 'row',NaN);
+    EXA = @(v, lbl)            struct('fn','editDialogToggleXAuto',         'args',{{v}},         'label',lbl, 'row',NaN);
+    EYA = @(v, lbl)            struct('fn','editDialogToggleYAuto',         'args',{{v}},         'label',lbl, 'row',NaN);
+    EAP = @(lbl)               struct('fn','editDialogApplyPlotProps',      'args',{{}},          'label',lbl, 'row',NaN);
+    ESA = @(lbl)               struct('fn','editDialogSyncTabXLimAll',      'args',{{}},          'label',lbl, 'row',NaN);
+    ESP = @(lbl)               struct('fn','editDialogSyncSelectedPlotXLimAll', 'args',{{}},      'label',lbl, 'row',NaN);
+    SET = @(tabName, lbl)      struct('fn','switchEditDialogTab',           'args',{{tabName}},   'label',lbl, 'row',NaN);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
         'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false);
@@ -1698,6 +1747,44 @@ function cases = i_buildCaseMatrix()
         'panel toggle during board-off persists after board-on', 'v-final P8', ...
         {BV(1,'upper board off'), P(2,'altOnly','source flight2 altOnly toggle'), ...
          BV(1,'upper board on')});
+
+    % v-runner: G-EDIT — EditDialog 6 탭 자동 회귀
+    cases(end + 1) = mk('G-EDIT','G-EDIT-01 open + close EditDialog', ...
+        'dialog lifecycle', 'open/close 정상', ...
+        {OED('open EditDialog'), CED('close EditDialog')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-02 switch all 6 tabs', ...
+        '6 tab traversal', 'Project/Files/Sync/Options/Plot Manager/Export 탐색', ...
+        {OED('open'), SET('Project','tab=Project'), SET('Files','tab=Files'), ...
+         SET('Sync','tab=Sync'), SET('Options','tab=Options'), ...
+         SET('Plot Manager','tab=Plot Manager'), SET('Export','tab=Export'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-03 Plot Manager capture + rebuild', ...
+        'Plot Manager apply path', 'capture/rebuild 정상', ...
+        {OED('open'), SET('Plot Manager','tab=Plot Manager'), ...
+         CPC('capturePlotConfig'), EDR('rebuildPlots'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-04 Plot Manager X/Y auto toggle', ...
+        'XLimMode/YLimMode auto', 'X/Y auto on/off cycle', ...
+        {OED('open'), SET('Plot Manager','tab=Plot Manager'), ...
+         EXA(true,'X auto on'), EXA(false,'X auto off'), ...
+         EYA(false,'Y auto off'), EYA(true,'Y auto on'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-05 Plot Manager Apply plot props', ...
+        'EDPlotApply', 'apply preserves selection', ...
+        {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply props'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-06 Sync X→All Tabs / X→Plot', ...
+        'sync helpers', 'all-tabs + selected-plot sync', ...
+        {OED('open'), SET('Plot Manager','tab=Plot Manager'), ...
+         ESA('Sync X→All Tabs'), ESP('Sync X→Plot'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-07 Options apply draft', ...
+        'option apply', 'editDialogApplyOptionDraft 호출', ...
+        {OED('open'), SET('Options','tab=Options'), EAO('apply option draft'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-08 Apply pending dialog changes', ...
+        'apply pending', 'applyPendingDialogChanges 호출', ...
+        {OED('open'), APD('apply pending'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-09 project save through EditDialog', ...
+        'project save', 'editDialogSaveProject 호출', ...
+        {OED('open'), SET('Project','tab=Project'), EDS('save project'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-10 close auto-applies pending changes', ...
+        'close finalize', 'close 시 pending apply', ...
+        {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply'), CED('close')});
 
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)

@@ -519,6 +519,38 @@
                 case 'setSelectedRow'
                     fIdx = varargin{1}; row = varargin{2};
                     app.Models(fIdx).selectedRow = row;
+                % v-runner: EditDialog 자동 테스트 dispatch
+                case 'openEditDialog',                app.openEditDialog();
+                case 'closeEditDialog',               app.closeEditDialog();
+                case 'applyPendingDialogChanges',     app.applyPendingDialogChanges();
+                case 'editDialogSaveProject',         app.editDialogSaveProject();
+                case 'editDialogSaveProjectAs',       app.editDialogSaveProjectAs();
+                case 'editDialogApplyOptionDraft',    app.editDialogApplyOptionDraft();
+                case 'capturePlotConfigAndRefresh',   app.capturePlotConfigAndRefresh();
+                case 'editDialogRebuildPlots',        app.editDialogRebuildPlots();
+                case 'editDialogToggleXAuto',         app.editDialogToggleXAuto(varargin{:});
+                case 'editDialogToggleYAuto',         app.editDialogToggleYAuto(varargin{:});
+                case 'editDialogApplyPlotProps',      app.editDialogApplyPlotProps();
+                case 'editDialogSyncTabXLimAll',      app.editDialogSyncTabXLimAll();
+                case 'editDialogSyncSelectedPlotXLimAll', app.editDialogSyncSelectedPlotXLimAll();
+                case 'switchEditDialogTab'
+                    % varargin{1} = tab title ('Project'/'Files'/'Sync'/'Options'/'Plot Manager'/'Export')
+                    if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                        tg = findall(app.EditDialog, 'Type', 'uitabgroup');
+                        if ~isempty(tg)
+                            tabs = tg(1).Children;
+                            target = char(varargin{1});
+                            for tI = 1:numel(tabs)
+                                try
+                                    if strcmp(char(tabs(tI).Title), target)
+                                        tg(1).SelectedTab = tabs(tI);
+                                        break;
+                                    end
+                                catch
+                                end
+                            end
+                        end
+                    end
                 otherwise
                     error('FlightDataDashboard:UnknownTestHook', ...
                           'Unknown testHook method: %s', methodName);
