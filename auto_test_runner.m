@@ -129,7 +129,6 @@ function auto_test_runner(varargin)
                 i_closeAppDialogs(app);
                 i_settleUi(1);
                 delete(app);
-                app = [];
                 i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_APP_DONE', 'app deleted');
             end
         catch ME
@@ -145,7 +144,7 @@ function auto_test_runner(varargin)
         i_writeCaseMd(outDir, i, tc, r);
         i_appendProgressMd(progressFile, i, r.steps, r.status, r.error);
         % v4-crash-resilient: 매 케이스 완료 후 index.md 즉시 갱신 (MATLAB Online hard-crash 대비)
-        try, i_writeIndexMd(outDir, results); catch, end
+        try; i_writeIndexMd(outDir, results); catch; end
     end
     i_writeIndexMd(outDir, results);
     i_appendProgressMd(progressFile, 0, 0, 'FINISHED', sprintf('PASS=%d FAIL=%d', ...
@@ -371,7 +370,6 @@ function txt = i_cleanupSummary(stats)
 end
 
 function tf = i_isDashboardRelatedTimer(t)
-    tf = false;
     try
         keys = {'FlightDataDashboard', 'applyPendingDialogChanges', 'saveProjectAutosave'};
         tf = i_containsAny(i_timerDescriptor(t), keys);
@@ -823,17 +821,8 @@ function exp = i_updateExpectedLayoutPreset(exp, presetName)
     % v4: exp.panel, exp.boardOff, exp.summaryVisible, exp.sourceColumnsHidden 변경 금지
 end
 
-function s = i_makePanelState(attitude, mapOnly, altOnly, video, info, dataView)
-    s = struct('attitude', logical(attitude), ...
-        'map', logical(mapOnly) || logical(altOnly), ...
-        'mapOnly', logical(mapOnly), ...
-        'altOnly', logical(altOnly), ...
-        'video', logical(video), ...
-        'info', logical(info), ...
-        'dataView', logical(dataView));
-end
-
-function [ok, msg] = i_validateState(st, exp)
+function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
+    % v3-lint: i_makePanelState / i_hasButtonText 제거 — board-off 새 policy 에서 미사용.
     issues = {};
     if sum(st.BoardOffState) > 1
         issues{end + 1} = 'both boards are off';
@@ -1003,16 +992,6 @@ function [ok, msg] = i_validateState(st, exp)
     end
 end
 
-function tf = i_hasButtonText(buttonTexts, needle)
-    tf = false;
-    for k = 1:numel(buttonTexts)
-        if contains(buttonTexts{k}, needle)
-            tf = true;
-            return;
-        end
-    end
-end
-
 function s = i_boolVecString(v)
     try
         s = mat2str(logical(v));
@@ -1114,7 +1093,7 @@ function w = i_rowWeight(spec)
     end
 end
 
-function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues)
+function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<*AGROW>
     if ~st.boards(fIdx).exists || isempty(st.boards(fIdx).dataGridColumnWidth)
         return;
     end
@@ -1364,7 +1343,6 @@ function out = i_mdEscape(in)
     end
     out = strrep(out, newline, '<br>');
     out = strrep(out, sprintf('\r'), '<br>');
-    out = strrep(out, sprintf('\n'), '<br>');
     out = strrep(out, '|', '\|');
     if isempty(out), out = '&nbsp;'; end
 end
