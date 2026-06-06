@@ -10681,7 +10681,7 @@
             end
         end
 
-        function applyThemeToTrees(app, root, t)
+        function applyThemeToTrees(app, root, t) %#ok<INUSL>
             % v3-B7: uitree light bg + readable text.
             try
                 trees = findall(root, 'Type', 'uitree');
@@ -10699,6 +10699,7 @@
                     if isprop(tr, 'FontColor'), tr.FontColor = t.treeFg; end
                 catch
                 end
+            end
         end
 
         function offUi = createBoardOffSummaryPanel(app, parentGrid, fIdx)
