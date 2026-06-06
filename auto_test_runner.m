@@ -58,14 +58,26 @@ function auto_test_runner(varargin)
     if ~ismember(orderMode, {'asc', 'desc'})
         error('auto_test_runner:BadOrder', 'Order must be ''asc'' or ''desc''.');
     end
-    captureOpts = struct('mode', captureMode, 'scale', double(opts.CaptureScale));
-
-    % v3 P9: OnlineSafeMode — MATLAB Online OOM/render hard-crash 회피용 권고
-    if logical(opts.OnlineSafeMode) && strcmp(captureMode, 'all') && strcmp(loadAviMode, 'always')
-        warning('auto_test_runner:OnlineSafeMode', ...
-            ['CaptureMode=all + LoadAvi=always 는 MATLAB Online 광범위 실행 시 hard-crash 위험. ' ...
-             '권장: LoadAvi=never/lazy, CaptureMode=fail/none, CaptureScale<=0.6.']);
+    captureScale = double(opts.CaptureScale);
+    safeWarnings = {};
+    % v3 P9-strengthened: OnlineSafeMode — 실질 보호 (clamp + 강한 경고)
+    if logical(opts.OnlineSafeMode)
+        if captureScale > 0.6
+            safeWarnings{end + 1} = sprintf('OnlineSafeMode: CaptureScale %.2f → 0.6 자동 클램프', captureScale);
+            captureScale = 0.6;
+        end
+        if strcmp(captureMode, 'all') && strcmp(loadAviMode, 'always')
+            safeWarnings{end + 1} = ['OnlineSafeMode: CaptureMode=all + LoadAvi=always 광범위 실행은 ' ...
+                'MATLAB Online hard-crash 위험. 권장: LoadAvi=never/lazy, CaptureMode=fail/none.'];
+        end
+        if strcmp(loadAviMode, 'always')
+            safeWarnings{end + 1} = 'OnlineSafeMode: LoadAvi=always 는 video-specific 케이스에만 권장 (CaseList 명시).';
+        end
+        for sw = 1:numel(safeWarnings)
+            warning('auto_test_runner:OnlineSafeMode', '%s', safeWarnings{sw});
+        end
     end
+    captureOpts = struct('mode', captureMode, 'scale', captureScale);
 
     outDir = i_resolveOutputDir();
     if ~isfolder(outDir), mkdir(outDir); end
@@ -78,6 +90,10 @@ function auto_test_runner(varargin)
     caseOrder = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, opts.Skip, opts.CaseList);
     progressFile = fullfile(outDir, 'progress.md');
     i_initProgressMd(progressFile, opts, nCases, caseOrder);
+    % v3-fix: OnlineSafeMode 경고를 progress.md 에도 영구 기록
+    for sw = 1:numel(safeWarnings)
+        i_appendProgressMd(progressFile, 0, 0, 'ONLINE_SAFE_WARN', safeWarnings{sw});
+    end
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', ''), nCases, 1);
@@ -1031,7 +1047,9 @@ function tf = i_buttonStateOk(btn, labelNeedle, enableValue)
     end
 end
 
-function issues = i_validateBodyRows(st, exp, issues)
+function issues = i_validateBodyRows(st, exp, issues) %#ok<*AGROW>
+    % v3-new: board-off = active source hsplit + summary 폐기.
+    % row4 (summary row) 는 collapsed (0) 이 정상. row2 (splitter row) 도 board-off 시 0 허용.
     if ~isfield(st, 'BodyRowHeight') || numel(st.BodyRowHeight) ~= 4
         issues{end + 1} = 'BodyGrid RowHeight is not a 4-row board/summary layout';
         return;
@@ -1061,16 +1079,16 @@ function issues = i_validateBodyRows(st, exp, issues)
         issues{end + 1} = 'row splitter visible while one board is off';
     end
     row1 = i_rowWeight(st.BodyRowHeight{1});
-    row2 = i_rowWeight(st.BodyRowHeight{2});
     row3 = i_rowWeight(st.BodyRowHeight{3});
-    row4 = i_rowWeight(st.BodyRowHeight{4});
     if activeOff == 1
-        if row1 ~= 0 || row2 ~= 0 || row3 <= 0 || row4 <= 0
-            issues{end + 1} = sprintf('upper-off rows invalid: [%g %g %g %g]', row1, row2, row3, row4);
+        % upper off: row1/row2=0, row3>0 (source 100%), row4 may be 0 (summary 폐기)
+        if row1 ~= 0 || row3 <= 0
+            issues{end + 1} = sprintf('upper-off rows invalid: row1=%g row3=%g', row1, row3);
         end
     elseif activeOff == 2
-        if row1 <= 0 || row2 <= 0 || row3 ~= 0 || row4 ~= 0
-            issues{end + 1} = sprintf('lower-off rows invalid: [%g %g %g %g]', row1, row2, row3, row4);
+        % lower off: row1>0 (source 100%), row3/row4=0, row2 may be 0
+        if row1 <= 0 || row3 ~= 0
+            issues{end + 1} = sprintf('lower-off rows invalid: row1=%g row3=%g', row1, row3);
         end
     end
 end
@@ -1212,12 +1230,16 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
             img = i_resizeImageNearest(img, captureOpts.scale);
         end
         imwrite(img, file);
+        % v3-fix: capture 후 큰 이미지 변수 즉시 해제 + renderer 안정화 (MATLAB Online OOM 방지)
+        clear f img;
+        try; drawnow limitrate; catch; end
         captured = isfile(file);
         if captured, return; end
     catch
     end
     try
         exportapp(app.UIFigure, file);
+        try; drawnow limitrate; catch; end
         captured = isfile(file);
         if captured, return; end
     catch
@@ -1464,11 +1486,11 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('A','A02 보드1 자세 off','','보드1 자세 숨김', ...
         {P(1,'attitude','보드1 자세 off')});
     cases(end + 1) = mk('A','A03 보드1 지도/고도 off','','보드1 map 숨김', ...
-        {P(1,'map','보드1 지도/고도 off')});
+        {P(1,'mapOnly','보드1 지도/고도 off')});
     cases(end + 1) = mk('A','A04 보드1 비디오 off','','보드1 비디오 숨김', ...
         {P(1,'video','보드1 비디오 off')});
     cases(end + 1) = mk('A','A05 보드1 자세+지도+비디오 모두 off','','3개 동시 숨김, H 1x 흡수', ...
-        {P(1,'attitude','자세 off'), P(1,'map','지도/고도 off'), P(1,'video','비디오 off')});
+        {P(1,'attitude','자세 off'), P(1,'mapOnly','지도/고도 off'), P(1,'video','비디오 off')});
 
     %% Group B — 보드1 off 시나리오 (15)
     cases(end + 1) = mk('B','B01 보드1 off→on','','왕복 정상', ...
@@ -1476,13 +1498,13 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('B','B02 보드1 off + 보드2 자세 off → on','mid-off 영속성','보드2 자세 off 유지', ...
         {BV(1,'보드1 off'), P(2,'attitude','보드2 자세 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B03 보드1 off + 보드2 지도 off → on','mid-off 영속성','보드2 지도 off 유지', ...
-        {BV(1,'보드1 off'), P(2,'map','보드2 지도/고도 off'), BV(1,'보드1 on')});
+        {BV(1,'보드1 off'), P(2,'mapOnly','보드2 지도/고도 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B04 보드1 off + 보드2 비디오 off → on','mid-off 영속성','보드2 비디오 off 유지', ...
         {BV(1,'보드1 off'), P(2,'video','보드2 비디오 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B05 보드1 off + 비디오 off→on 토글 → 보드1 on','비정상#2 회귀','보드2 비디오 visible', ...
         {BV(1,'보드1 off'), P(2,'video','보드2 비디오 off'), P(2,'video','보드2 비디오 on'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B06 보드1 off + 보드2 자세+지도 off → on','','복합 mid-off 영속성', ...
-        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'map','지도 off'), BV(1,'보드1 on')});
+        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'mapOnly','지도 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B07 보드1 off + off-summary +빈 탭 추가','off-summary 버튼 가시성','새 탭 추가', ...
         {BV(1,'보드1 off'), BOA(1,'off-summary +빈 탭 추가')});
     cases(end + 1) = mk('B','B08 보드1 off + off-summary 현재 탭 지우기','','현재 탭 클리어', ...
@@ -1494,11 +1516,11 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('B','B11 보드2 비디오 off → 보드1 off → on','snapshot 영속성','보드2 비디오 off 유지', ...
         {P(2,'video','보드2 비디오 off'), BV(1,'보드1 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B12 보드2 지도 off → 보드1 off → on','','보드2 지도 off 유지', ...
-        {P(2,'map','보드2 지도 off'), BV(1,'보드1 off'), BV(1,'보드1 on')});
+        {P(2,'mapOnly','보드2 지도 off'), BV(1,'보드1 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B13 보드1 off + 보드2 자세 off→on','','즉시 토글 반응', ...
         {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'attitude','자세 on')});
     cases(end + 1) = mk('B','B14 보드1 off + 보드2 3개 모두 off','source 1x flex','widths 폴백 작동', ...
-        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'map','지도 off'), P(2,'video','비디오 off')});
+        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'mapOnly','지도 off'), P(2,'video','비디오 off')});
     cases(end + 1) = mk('B','B15 보드1 off + applyTimeChange','드래그 결과 동기','source 시간 + off-summary 추종', ...
         {BV(1,'보드1 off'), ATC(2, 50, 'applyTimeChange(2,50)'), ATC(2, 200, 'applyTimeChange(2,200)')});
 
@@ -1508,13 +1530,13 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('C','C02 보드2 off + 보드1 자세 off → on','mid-off 영속성','보드1 자세 off 유지', ...
         {BV(2,'보드2 off'), P(1,'attitude','보드1 자세 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C03 보드2 off + 보드1 지도 off → on','mid-off 영속성','보드1 지도 off 유지', ...
-        {BV(2,'보드2 off'), P(1,'map','보드1 지도/고도 off'), BV(2,'보드2 on')});
+        {BV(2,'보드2 off'), P(1,'mapOnly','보드1 지도/고도 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C04 보드2 off + 보드1 비디오 off → on','mid-off 영속성','보드1 비디오 off 유지', ...
         {BV(2,'보드2 off'), P(1,'video','보드1 비디오 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C05 보드2 off + 비디오 off→on 토글 → 보드2 on','비정상#2 회귀','보드1 비디오 visible', ...
         {BV(2,'보드2 off'), P(1,'video','보드1 비디오 off'), P(1,'video','보드1 비디오 on'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C06 보드2 off + 보드1 자세+지도 off → on','','복합 mid-off', ...
-        {BV(2,'보드2 off'), P(1,'attitude','자세 off'), P(1,'map','지도 off'), BV(2,'보드2 on')});
+        {BV(2,'보드2 off'), P(1,'attitude','자세 off'), P(1,'mapOnly','지도 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C07 보드2 off + off-summary +빈 탭 추가','','새 탭 추가', ...
         {BV(2,'보드2 off'), BOA(2,'+빈 탭 추가')});
     cases(end + 1) = mk('C','C08 보드2 off + off-summary 현재 탭 지우기','','현재 탭 클리어', ...
@@ -1526,11 +1548,11 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('C','C11 보드1 비디오 off → 보드2 off → on','','보드1 비디오 off 유지', ...
         {P(1,'video','보드1 비디오 off'), BV(2,'보드2 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C12 보드1 지도 off → 보드2 off → on','','보드1 지도 off 유지', ...
-        {P(1,'map','보드1 지도 off'), BV(2,'보드2 off'), BV(2,'보드2 on')});
+        {P(1,'mapOnly','보드1 지도 off'), BV(2,'보드2 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C13 보드2 off + 보드1 자세 off→on','','즉시 토글 반응', ...
         {BV(2,'보드2 off'), P(1,'attitude','자세 off'), P(1,'attitude','자세 on')});
     cases(end + 1) = mk('C','C14 보드2 off + 보드1 3개 모두 off','source 1x flex','widths 폴백', ...
-        {BV(2,'보드2 off'), P(1,'attitude','자세 off'), P(1,'map','지도 off'), P(1,'video','비디오 off')});
+        {BV(2,'보드2 off'), P(1,'attitude','자세 off'), P(1,'mapOnly','지도 off'), P(1,'video','비디오 off')});
     cases(end + 1) = mk('C','C15 보드2 off + applyTimeChange','드래그 결과 동기','source 시간 변화', ...
         {BV(2,'보드2 off'), ATC(1, 50, 'applyTimeChange(1,50)'), ATC(1, 200, 'applyTimeChange(1,200)')});
 
@@ -1548,9 +1570,9 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('D','D06 보드1 off 중 보드1 자세 off 시도','','hidden 이므로 무영향', ...
         {BV(1,'보드1 off'), P(1,'attitude','보드1 자세 off (off 상태)')});
     cases(end + 1) = mk('D','D07 보드1 off + source 3개 순차 off','단일 1x flex','widths 정확 수렴', ...
-        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'map','지도 off'), P(2,'video','비디오 off')});
+        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'mapOnly','지도 off'), P(2,'video','비디오 off')});
     cases(end + 1) = mk('D','D08 보드1 off + source 2단계 hide','','폭 흡수', ...
-        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'map','지도 off')});
+        {BV(1,'보드1 off'), P(2,'attitude','자세 off'), P(2,'mapOnly','지도 off')});
     cases(end + 1) = mk('D','D09 보드2 off + 보드1 비디오 on→off→on','반대 보드 회귀','마지막 on 유지', ...
         {BV(2,'보드2 off'), P(1,'video','비디오 off'), P(1,'video','비디오 on')});
     cases(end + 1) = mk('D','D10 보드1 off 후 off-summary 버튼 가시성','4014bf9 회귀','+빈 탭 추가 보임', ...

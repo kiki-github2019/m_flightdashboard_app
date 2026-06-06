@@ -738,20 +738,28 @@
                 if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
                         && isvalid(app.UI(fIdx).boardOffPanel)
                     s.boardOffPanelVisible = app.isUiVisible(app.UI(fIdx).boardOffPanel);
-                    allKids = findall(app.UI(fIdx).boardOffPanel);
-                    for iKid = 1:numel(allKids)
-                        h = allKids(iKid);
-                        try
-                            if isprop(h, 'Text') && isprop(h, 'ButtonPushedFcn')
-                                txt = char(h.Text);
-                                if ~isempty(txt)
-                                    s.boardOff.buttonTexts{end + 1} = txt;
+                    % v3-fix: 새 board-off policy 에서 boardOffPanel 은 비-primary (hidden).
+                    % hidden/non-primary 시 무거운 findall 스캔 skip (case 48 hard-crash 방지).
+                    if s.boardOffPanelVisible
+                        allKids = findall(app.UI(fIdx).boardOffPanel);
+                        for iKid = 1:numel(allKids)
+                            h = allKids(iKid);
+                            try
+                                if isprop(h, 'Text') && isprop(h, 'ButtonPushedFcn')
+                                    txt = char(h.Text);
+                                    if ~isempty(txt)
+                                        s.boardOff.buttonTexts{end + 1} = txt;
+                                    end
                                 end
+                            catch ME_silent
+                                app.logCaught(ME_silent, 'testState:board-toggle-text');
                             end
-                        catch ME_silent
-                            app.logCaught(ME_silent, 'testState:board-toggle-text');
                         end
                     end
+                end
+                % v3-fix: boardOffPanel 이 hidden 이면 하위 스캔 전부 skip (Online crash 방지)
+                if ~s.boardOffPanelVisible
+                    return;
                 end
                 if isfield(app.UI(fIdx), 'boardOffTable') && ~isempty(app.UI(fIdx).boardOffTable) ...
                         && isvalid(app.UI(fIdx).boardOffTable)
@@ -9504,6 +9512,13 @@
                 app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
                 app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
                 app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
+
+                % v3-fix: hsplit 는 shared column 모델 — 패널 width 만으로 hidden 처리 부족.
+                % 각 패널 Visible 을 PanelVisible state 에 명시적으로 동기화.
+                try, app.setUiVisible(app.UI(fIdx).panelInfo,     infoOn); catch, end
+                try, app.setUiVisible(app.UI(fIdx).panelDataView, dataViewOn); catch, end
+                try, app.setUiVisible(app.UI(fIdx).panelAttitude, attitudeOn); catch, end
+                try, app.setUiVisible(app.UI(fIdx).panelMapAlt,   mapColOn); catch, end
 
                 % splitters: 외부 column splitter 는 hsplit 모드에서 hide
                 if isfield(app.UI(fIdx), 'colSplitters')
