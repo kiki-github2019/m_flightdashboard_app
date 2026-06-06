@@ -16,20 +16,30 @@ function auto_test_runner(varargin)
 %
 %   옵션 (MATLAB Online OOM 회피용):
 %       'Start' (default 1)    : 시작 케이스 번호
-%       'End'   (default 50)   : 종료 케이스 번호 (양 끝 포함)
+%       'End'   (default Inf)  : 종료 케이스 번호 (양 끝 포함)
+%       'Order' (default 'asc'): 'asc' | 'desc' — 실행 순서
+%       'Skip'  (default [])   : 스킵할 케이스 번호 벡터
+%       'CaseList' (default []): 명시적 실행 순서 벡터 (지정 시 Start/End/Order 무시)
 %       'LoadAvi' (default 'lazy') : 'lazy' | 'always' | 'never'
 %       'CaptureMode' (default 'baseline') : 'all' | 'baseline' | 'fail' | 'none'
 %       'CaptureScale' (default 0.60) : PNG 축소 비율, 0 < value <= 1
 %
 %   사용:
-%       >> auto_test_runner                      % 전체 50개, lazy AVI
-%       >> auto_test_runner('Start',1,'End',10) % 1~10 만 실행 (OOM 회피)
-%       >> auto_test_runner('LoadAvi','never')   % AVI 일체 미로드
+%       >> auto_test_runner                                       % 전체, asc
+%       >> auto_test_runner('Start',1,'End',10)                   % 1~10 만 실행
+%       >> auto_test_runner('Order','desc','Skip',2)              % 전체 desc, case 2 skip
+%       >> auto_test_runner('Start',65,'End',3,'Order','desc')    % 65→3 역순
+%       >> auto_test_runner('CaseList',[65:-1:3 1])               % 명시적 순서
+%       >> auto_test_runner('CaseList',2,'CaptureMode','none','LoadAvi','never')  % case 2 단독 빠른 실행
+%       >> auto_test_runner('LoadAvi','never')                    % AVI 일체 미로드
 %       >> auto_test_runner('CaptureMode','all','CaptureScale',1) % 원본 캡처
 
     p = inputParser;
     p.addParameter('Start',   1,      @(x) isnumeric(x) && isscalar(x) && x >= 1);
     p.addParameter('End',     Inf,    @(x) isnumeric(x) && isscalar(x));
+    p.addParameter('Order',   'asc',  @(s) ischar(s) || isstring(s));
+    p.addParameter('Skip',    [],     @(x) isempty(x) || (isnumeric(x) && isvector(x)));
+    p.addParameter('CaseList',[],     @(x) isempty(x) || (isnumeric(x) && isvector(x)));
     p.addParameter('LoadAvi', 'lazy', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureMode', 'baseline', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureScale', 0.60, @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0 && x <= 1);
@@ -43,6 +53,10 @@ function auto_test_runner(varargin)
     if ~ismember(captureMode, {'all', 'baseline', 'fail', 'none'})
         error('auto_test_runner:BadCaptureMode', 'CaptureMode must be all, baseline, fail, or none.');
     end
+    orderMode = lower(char(opts.Order));
+    if ~ismember(orderMode, {'asc', 'desc'})
+        error('auto_test_runner:BadOrder', 'Order must be ''asc'' or ''desc''.');
+    end
     captureOpts = struct('mode', captureMode, 'scale', double(opts.CaptureScale));
 
     outDir = i_resolveOutputDir();
@@ -53,8 +67,9 @@ function auto_test_runner(varargin)
     nCases  = numel(cases);
     iStart  = max(1, round(opts.Start));
     iEnd    = min(nCases, round(opts.End));
+    caseOrder = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, opts.Skip, opts.CaseList);
     progressFile = fullfile(outDir, 'progress.md');
-    i_initProgressMd(progressFile, opts, nCases);
+    i_initProgressMd(progressFile, opts, nCases, caseOrder);
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', ''), nCases, 1);
@@ -64,7 +79,8 @@ function auto_test_runner(varargin)
         results(i).title = cases(i).title;
     end
 
-    for i = iStart:iEnd
+    for ii = 1:numel(caseOrder)
+        i = caseOrder(ii);
         tc = cases(i);
         fprintf('\n[%02d/%02d] %s | %s\n', i, nCases, tc.group, tc.title);
         i_appendProgressMd(progressFile, i, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
@@ -120,6 +136,8 @@ function auto_test_runner(varargin)
         results(i) = r;
         i_writeCaseMd(outDir, i, tc, r);
         i_appendProgressMd(progressFile, i, r.steps, r.status, r.error);
+        % v4-crash-resilient: 매 케이스 완료 후 index.md 즉시 갱신 (MATLAB Online hard-crash 대비)
+        try, i_writeIndexMd(outDir, results); catch, end
     end
     i_writeIndexMd(outDir, results);
     i_appendProgressMd(progressFile, 0, 0, 'FINISHED', sprintf('PASS=%d FAIL=%d', ...
@@ -1302,7 +1320,8 @@ end
 % =========================================================================
 % Crash-resilient progress writer
 % =========================================================================
-function i_initProgressMd(progressFile, opts, nCases)
+function i_initProgressMd(progressFile, opts, nCases, caseOrder)
+    if nargin < 4, caseOrder = []; end
     fid = fopen(progressFile, 'w', 'n', 'UTF-8');
     if fid < 0, return; end
     try
@@ -1310,15 +1329,55 @@ function i_initProgressMd(progressFile, opts, nCases)
         fprintf(fid, '- Started: %s\n', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
         fprintf(fid, '- Start option: %g\n', opts.Start);
         fprintf(fid, '- End option: %g\n', opts.End);
+        fprintf(fid, '- Order: %s\n', char(opts.Order));
+        fprintf(fid, '- Skip: %s\n', i_vecToStr(opts.Skip));
+        fprintf(fid, '- CaseList: %s\n', i_vecToStr(opts.CaseList));
         fprintf(fid, '- LoadAvi: %s\n', char(opts.LoadAvi));
         fprintf(fid, '- CaptureMode: %s\n', char(opts.CaptureMode));
         fprintf(fid, '- CaptureScale: %.3g\n', opts.CaptureScale);
-        fprintf(fid, '- Total cases: %d\n\n', nCases);
+        fprintf(fid, '- Total cases: %d\n', nCases);
+        fprintf(fid, '- Actual caseOrder (%d): %s\n\n', numel(caseOrder), i_vecToStr(caseOrder));
         fprintf(fid, '| Time | Case | Step | Status | Detail |\n');
         fprintf(fid, '|---|---:|---:|---|---|\n');
     catch
     end
     fclose(fid);
+end
+
+function s = i_vecToStr(v)
+    if isempty(v), s = '[]'; return; end
+    s = ['[' strjoin(arrayfun(@(x) sprintf('%g', x), v(:)', 'UniformOutput', false), ' ') ']'];
+end
+
+function order = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, skipList, caseList)
+    % 실행 순서 벡터 구축. CaseList 지정 시 우선, 아니면 Start/End/Order.
+    % Skip 적용 + 중복 제거 (순서 유지) + 1..nCases 범위 clamp.
+    if ~isempty(caseList)
+        order = round(caseList(:)');
+    else
+        s = max(1, min(nCases, round(iStart)));
+        e = max(1, min(nCases, round(iEnd)));
+        if strcmp(orderMode, 'desc')
+            if e > s
+                tmp = s; s = e; e = tmp;
+            end
+            order = s:-1:e;
+        else
+            if e < s
+                tmp = s; s = e; e = tmp;
+            end
+            order = s:e;
+        end
+    end
+    % clamp + valid range
+    order = order(order >= 1 & order <= nCases);
+    % Skip
+    if ~isempty(skipList)
+        order = order(~ismember(order, round(skipList(:)')));
+    end
+    % 중복 제거 (순서 보존)
+    [~, ui] = unique(order, 'stable');
+    order = order(ui);
 end
 
 function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
