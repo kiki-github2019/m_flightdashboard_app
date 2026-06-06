@@ -9063,6 +9063,21 @@
                         ~isvalid(app.UI(fIdx).dataGrid)
                     return;
                 end
+                % v4-L1: board-off 활성 source 보드 → 항상 hsplit (upper info+plot / lower remaining)
+                activeOff = find(app.BoardOffState, 1);
+                if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
+                    app.applyBoardHsplit(fIdx);
+                    return;
+                end
+                % 이전이 hsplit 이었다면 normal 로 복귀
+                if isfield(app.UI(fIdx), 'arrangementMode') && strcmp(app.UI(fIdx).arrangementMode, 'hsplit')
+                    if strcmp(app.CurrentLayoutPreset, 'layout-hsplit')
+                        % 사용자가 hsplit preset 선택 상태 — 양 보드 visible 일 때도 hsplit 유지
+                        app.applyBoardHsplit(fIdx);
+                        return;
+                    end
+                    app.applyBoardNormal(fIdx);
+                end
                 app.syncBoardPanelHandles(fIdx);
                 panelWidths = app.getResponsivePanelWidths();
                 widths = app.getRememberedColumnWidths(fIdx);
@@ -9304,7 +9319,13 @@
                 if strcmp(presetName, 'layout-reset')
                     for k = 1:2
                         app.resetUserColumnWidths(k);
-                        app.reflowBoardColumns(k);
+                        % v4-L1: board-off 활성 보드면 hsplit 유지, 아니면 normal 로 복귀
+                        if any(app.BoardOffState) && k == app.getBoardOffSourceIdx(find(app.BoardOffState, 1))
+                            app.applyBoardHsplit(k);
+                        else
+                            app.applyBoardNormal(k);
+                            app.reflowBoardColumns(k);
+                        end
                         app.refreshBoardOffSummaryPanel(k, true);
                     end
                 else
@@ -9322,43 +9343,47 @@
         end
 
         function applyBoardInternalArrangement(app, fIdx, presetName)
-            % v4: 보드 내부 컬럼 비율만 조정. PanelVisible/BoardOff/RowHeight 불변.
+            % v4: 보드 내부 배치 조정. PanelVisible/BoardOff/BodyGrid.RowHeight 불변.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 if ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ~isvalid(app.UI(fIdx).dataGrid)
                     return;
                 end
                 if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
-                st = app.UI(fIdx).PanelVisible;
 
+                % v4-L1: board-off 활성 source 보드는 항상 hsplit (single-board analysis)
+                activeOff = find(app.BoardOffState, 1);
+                if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
+                    app.applyBoardHsplit(fIdx);
+                    return;
+                end
+                if strcmp(presetName, 'layout-hsplit')
+                    app.applyBoardHsplit(fIdx);  % v4-L1: 양 보드 visible 시에도 진짜 2-row
+                    return;
+                end
+                % 다른 preset 은 1-row normal arrangement
+                app.applyBoardNormal(fIdx);
+
+                st = app.UI(fIdx).PanelVisible;
                 pw = app.getResponsivePanelWidths();
                 widths = {pw(1), 0, pw(2), 0, pw(3), 0, '1x', 0};
                 switch presetName
                     case 'layout-grid'
-                        % default balanced widths; plot flex
+                        % default balanced widths
                     case 'layout-vsplit'
-                        % visual(left) vs data(right) 60:40 → info 를 figure 폭의 ~30% 로 확장
                         figW = max(800, app.getFigurePixelWidth());
                         widths{5} = max(180, round(figW * 0.30));
-                    case 'layout-hsplit'
-                        % v4-R5: dataGrid 가 1-row 라 진짜 상하 split 불가 → fallback:
-                        %   visual(att/map) 좌측 좁게, info+plot 우측 강조 (vsplit 보다 더 넓게)
-                        figW = max(800, app.getFigurePixelWidth());
-                        widths{1} = max(80, round(pw(1) * 0.55));   % attitude 좁게
-                        widths{3} = max(120, round(pw(2) * 0.55));  % map/alt 좁게
-                        widths{5} = max(220, round(figW * 0.38));   % info 더 넓게
                     case 'layout-compact'
-                        % info 좁히고 attitude/map 도 약간 축소
                         widths{1} = max(120, round(pw(1) * 0.8));
                         widths{3} = max(140, round(pw(2) * 0.8));
                         widths{5} = max(140, round(pw(3) * 0.7));
                     case 'layout-reset'
-                        % default 유지 (이미 widths 초기값 default)
+                        % default 유지
                 end
-                widths = app.enforcePanelVisibilityOnColumnWidths(st, widths);
+                widths = app.normalizeColumnWidthsForVisiblePanels(st, widths);
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 app.UI(fIdx).dataGrid.Scrollable = 'on';
-                app.rememberUserColumnWidths(fIdx, widths);  % preset 결과를 user width 로 캐시
+                app.rememberUserColumnWidths(fIdx, widths);
                 app.updateColumnSplitterVisibility(fIdx, widths);
                 app.refreshPanelToggleButtons(fIdx);
                 app.reflowAttitudePanel(fIdx);
@@ -9367,8 +9392,145 @@
             end
         end
 
+        function applyBoardNormal(app, fIdx)
+            % v4-L1: dataGrid 를 1-row 8-col 기본 모드로 복귀.
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                dg = app.UI(fIdx).dataGrid;
+                if isempty(dg) || ~isvalid(dg), return; end
+                if isfield(app.UI(fIdx), 'arrangementMode') && strcmp(app.UI(fIdx).arrangementMode, 'normal')
+                    return;  % idempotent
+                end
+                dg.RowHeight = {'1x'};
+                % 자식 패널 Layout.Row=1 + 원래 Column 복귀
+                placements = {{'panelAttitude', 1}, {'panelMapAlt', 3}, {'panelInfo', 5}, {'panelDataView', 7}};
+                for k = 1:numel(placements)
+                    nm = placements{k}{1}; col = placements{k}{2};
+                    app.setPanelLayoutCell(fIdx, nm, 1, col);
+                end
+                % splitters (col 2/4/6) — Layout 복귀 + 가시화 (hsplit 모드에서 hide 한 것 복원)
+                if isfield(app.UI(fIdx), 'colSplitters')
+                    sp = app.UI(fIdx).colSplitters;
+                    splitCols = [2, 4, 6];
+                    for s = 1:min(numel(sp), 3)
+                        if ~isempty(sp(s)) && isvalid(sp(s))
+                            sp(s).Layout.Row = 1;
+                            sp(s).Layout.Column = splitCols(s);
+                            try, sp(s).Visible = 'on'; catch, end
+                        end
+                    end
+                end
+                if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
+                    try, app.UI(fIdx).hiSplitter.Layout.Row = 1; catch, end
+                    try, app.UI(fIdx).hiSplitter.Visible = 'on'; catch, end
+                end
+                app.UI(fIdx).arrangementMode = 'normal';
+            catch ME
+                app.logCaught(ME, 'boardArrangement:normal');
+            end
+        end
+
+        function applyBoardHsplit(app, fIdx)
+            % v4-L1: dataGrid 를 3-row (upper / splitter / lower) 모드로 전환.
+            %   Row 1: info(col 1) + plot(col 3)
+            %   Row 2: splitter (LAYOUT_SPLITTER_THICKNESS)
+            %   Row 3: attitude(col 1) + map/alt(col 3)
+            % Column 5/7 은 사용 안 함 (width 0).
+            % PanelVisible 불변 — hidden 패널은 width 0 으로 숨김.
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                dg = app.UI(fIdx).dataGrid;
+                if isempty(dg) || ~isvalid(dg), return; end
+                if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
+                st = app.UI(fIdx).PanelVisible;
+                thk = app.LAYOUT_SPLITTER_THICKNESS;
+
+                upperOn = (isfield(st,'info') && st.info) || (isfield(st,'dataView') && st.dataView);
+                lowerOn = (isfield(st,'attitude') && st.attitude) || ...
+                          (isfield(st,'mapOnly') && st.mapOnly) || ...
+                          (isfield(st,'altOnly') && st.altOnly);
+                if upperOn && lowerOn
+                    dg.RowHeight = {'1x', thk, '1x'};
+                elseif upperOn
+                    dg.RowHeight = {'1x', 0, 0};
+                elseif lowerOn
+                    dg.RowHeight = {0, 0, '1x'};
+                else
+                    dg.RowHeight = {'1x'};
+                    app.UI(fIdx).arrangementMode = 'hsplit';
+                    return;
+                end
+
+                figW = max(800, app.getFigurePixelWidth());
+                leftFixed = max(160, round(figW * 0.22));
+                infoOn = isfield(st,'info') && st.info;
+                dataViewOn = isfield(st,'dataView') && st.dataView;
+                attitudeOn = isfield(st,'attitude') && st.attitude;
+                mapColOn = (isfield(st,'mapOnly') && st.mapOnly) || (isfield(st,'altOnly') && st.altOnly);
+
+                % 양 영역 모두 visible 인 케이스가 대부분 — 좌 fixed, 우 flex.
+                % 단독 영역만 visible 인 경우는 좌측을 flex 로 확장.
+                widths = {leftFixed, thk, '1x', 0, 0, 0, 0, 0};
+                upperLeftOn  = infoOn;
+                upperRightOn = dataViewOn;
+                lowerLeftOn  = attitudeOn;
+                lowerRightOn = mapColOn;
+                anyLeft  = upperLeftOn  || lowerLeftOn;
+                anyRight = upperRightOn || lowerRightOn;
+                if anyLeft && ~anyRight
+                    widths = {'1x', 0, 0, 0, 0, 0, 0, 0};
+                elseif anyRight && ~anyLeft
+                    widths = {0, 0, '1x', 0, 0, 0, 0, 0};
+                end
+                % plot/dataView 가 visible 이면 Col 3 은 항상 '1x' (이미 그렇게 설정).
+                dg.ColumnWidth = widths;
+                dg.Scrollable = 'on';
+
+                % 자식 패널 reparent (Layout.Row/.Column 재할당)
+                app.setPanelLayoutCell(fIdx, 'panelInfo',     1, 1);
+                app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
+                app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
+                app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
+
+                % splitters: 외부 column splitter 는 hsplit 모드에서 hide
+                if isfield(app.UI(fIdx), 'colSplitters')
+                    sp = app.UI(fIdx).colSplitters;
+                    for s = 1:numel(sp)
+                        if ~isempty(sp(s)) && isvalid(sp(s))
+                            try
+                                sp(s).Visible = 'off';
+                            catch
+                            end
+                        end
+                    end
+                end
+                if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
+                    try, app.UI(fIdx).hiSplitter.Visible = 'off'; catch, end
+                end
+
+                app.UI(fIdx).arrangementMode = 'hsplit';
+                app.refreshPanelToggleButtons(fIdx);
+                app.reflowAttitudePanel(fIdx);
+            catch ME
+                app.logCaught(ME, 'boardArrangement:hsplit');
+            end
+        end
+
+        function setPanelLayoutCell(app, fIdx, fieldName, rowIdx, colIdx)
+            % v4-L1: 자식 패널 Layout.Row/.Column 재할당. Visible 은 호출자/syncBoardPanelHandles 가 관리.
+            try
+                if ~isfield(app.UI(fIdx), fieldName), return; end
+                h = app.UI(fIdx).(fieldName);
+                if isempty(h) || ~isvalid(h), return; end
+                try, h.Layout.Row = rowIdx; catch, end
+                try, h.Layout.Column = colIdx; catch, end
+            catch ME
+                app.logCaught(ME, 'setPanelLayoutCell');
+            end
+        end
+
         function setBoardOffDirect(app, offIdx)
-            % v4-R1: boardOffPanel summary 폐기. active 보드 100% 단독 표시.
+            % v4-R1/L1: summary 폐기. active source 보드에 hsplit (upper info+plot / lower remaining).
             try
                 app.BoardOffState = [false, false];
                 for k = 1:min(2, numel(app.UI))
@@ -9386,6 +9548,16 @@
                 if offIdx >= 1 && offIdx <= 2
                     app.BoardOffState(offIdx) = true;
                     app.setUiVisible(app.UI(offIdx).panel, false);
+                    sourceIdx = app.getBoardOffSourceIdx(offIdx);
+                    if sourceIdx >= 1 && sourceIdx <= numel(app.UI)
+                        app.applyBoardNormal(offIdx);   % off 보드는 정상 모드 (어차피 hidden)
+                        app.applyBoardHsplit(sourceIdx);  % v4-L1: 활성 source 보드 = upper/lower
+                    end
+                else
+                    % board on 복귀: 양 보드 정상 모드
+                    for k = 1:min(2, numel(app.UI))
+                        app.applyBoardNormal(k);
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:boardOff');
@@ -9912,8 +10084,8 @@
             t.fontSizeSmall  = 10;
             t.fontSizeBase   = 12;
             t.fontSizeLarge  = 14;
-            % Selected button (active toggle)
-            t.btnActiveBg    = t.warningRed;
+            % Button states — MATLAB Editor: blue accent for active/selected, red 은 warning 전용
+            t.btnActiveBg    = t.accentBlue;       % v4-L2: 활성 토글 = 파란색 accent (red 아님)
             t.btnActiveFg    = t.textInverse;
             t.btnAccentBg    = t.accentBlueLite;
             t.btnAccentFg    = t.accentBlueText;
@@ -9921,25 +10093,39 @@
             t.btnNormalFg    = t.textPrimary;
             t.btnDisabledBg  = t.disabledBg;
             t.btnDisabledFg  = t.disabledFg;
+            t.btnWarningBg   = t.warningRed;       % 명시적 경고/위험 액션 전용
+            t.btnWarningFg   = t.textInverse;
         end
 
         function applyLightTheme(app, root)
-            % v4-Theme: figure/dialog 전체에 light theme 적용 (idempotent recursive sweep).
-            % dark 배경/dark 텍스트 → light theme 컬러로 normalize.
-            % uifigure, uipanel, uigridlayout, uilabel, axes 모두 sweep.
+            % v4-L2: 역할 기반 light theme. dispatcher.
             try
                 if nargin < 2 || isempty(root) || ~isvalid(root)
                     root = app.UIFigure;
                 end
                 if isempty(root) || ~isvalid(root), return; end
                 t = app.getLightTheme();
-                % Root (figure/dialog)
                 try
                     if isprop(root, 'Color'), root.Color = t.windowBg; end
                     if isprop(root, 'BackgroundColor'), root.BackgroundColor = t.windowBg; end
                 catch
                 end
-                % uipanel sweep
+                app.applyThemeToPanels(root, t);
+                app.applyThemeToButtons(root, t);
+                app.applyThemeToLabels(root, t);
+                app.applyThemeToTables(root, t);
+                app.applyThemeToAxes(root, t);
+                app.applyThemeToInputs(root, t);
+                app.applyThemeToTabs(root, t);
+                app.applyLightPanelTitleContrast(root);
+            catch ME
+                app.logCaught(ME, 'applyLightTheme');
+            end
+        end
+
+        function applyThemeToPanels(app, root, t)
+            % v4-L2: uipanel + uigridlayout 배경 light normalize.
+            try
                 panels = findall(root, 'Type', 'uipanel');
                 for k = 1:numel(panels)
                     p = panels(k);
@@ -9951,16 +10137,15 @@
                                 p.BackgroundColor = t.surfaceBg;
                             end
                         end
-                        if isprop(p, 'ForegroundColor')
-                            fg = p.ForegroundColor;
-                            if isnumeric(fg) && numel(fg) == 3 && all(double(fg) >= 0.85)
-                                p.ForegroundColor = t.textPrimary;
+                        if isprop(p, 'BorderColor') && isprop(p, 'BorderType') && ~strcmp(char(p.BorderType), 'none')
+                            bc = p.BorderColor;
+                            if isnumeric(bc) && numel(bc) == 3 && all(double(bc) < 0.4)
+                                p.BorderColor = t.borderColor;
                             end
                         end
                     catch
                     end
                 end
-                % uigridlayout sweep
                 grids = findall(root, 'Type', 'uigridlayout');
                 for k = 1:numel(grids)
                     g = grids(k);
@@ -9975,7 +10160,47 @@
                     catch
                     end
                 end
-                % uilabel sweep — white-on-dark → dark-on-light
+            catch ME
+                app.logCaught(ME, 'theme:panels');
+            end
+        end
+
+        function applyThemeToButtons(app, root, t)
+            % v4-L2: 기본 buttons (styleToolbarButton 처리 안된 것) 만 light normalize.
+            % active/accent/disabled 상태는 styleToolbarButton 가 이미 theme 참조.
+            try
+                btns = findall(root, 'Type', 'uibutton');
+                for k = 1:numel(btns)
+                    b = btns(k);
+                    if isempty(b) || ~isvalid(b), continue; end
+                    try
+                        if isprop(b, 'BackgroundColor')
+                            bg = b.BackgroundColor;
+                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                                b.BackgroundColor = t.btnNormalBg;
+                            end
+                        end
+                        if isprop(b, 'FontColor')
+                            fc = b.FontColor;
+                            if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
+                                parentBg = [];
+                                try, parentBg = b.BackgroundColor; catch, end
+                                if isnumeric(parentBg) && numel(parentBg) == 3 && all(double(parentBg) >= 0.80)
+                                    b.FontColor = t.btnNormalFg;
+                                end
+                            end
+                        end
+                    catch
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'theme:buttons');
+            end
+        end
+
+        function applyThemeToLabels(app, root, t)
+            % v4-L2: uilabel — light bg 위 white text 만 dark 로 normalize.
+            try
                 labels = findall(root, 'Type', 'uilabel');
                 for k = 1:numel(labels)
                     lb = labels(k);
@@ -9984,12 +10209,8 @@
                         if isprop(lb, 'FontColor')
                             fc = lb.FontColor;
                             if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
-                                % white text — check parent bg
                                 parentBg = [];
-                                try
-                                    parentBg = lb.Parent.BackgroundColor;
-                                catch
-                                end
+                                try, parentBg = lb.Parent.BackgroundColor; catch, end
                                 if isnumeric(parentBg) && numel(parentBg) == 3 && all(double(parentBg) >= 0.85)
                                     lb.FontColor = t.textPrimary;
                                 end
@@ -9998,11 +10219,59 @@
                     catch
                     end
                 end
-                % uiaxes/axes sweep — dark axes → light
+            catch ME
+                app.logCaught(ME, 'theme:labels');
+            end
+        end
+
+        function applyThemeToTables(app, root, t)
+            % v4-L2: uitable — dark bg 가 비행 identity 컬러가 아니라면 light normalize.
+            try
+                tbls = findall(root, 'Type', 'uitable');
+                for k = 1:numel(tbls)
+                    tb = tbls(k);
+                    if isempty(tb) || ~isvalid(tb), continue; end
+                    try
+                        % BackgroundColor: 매우 어두운 경우만 (비행 identity 컬러는 보존)
+                        if isprop(tb, 'BackgroundColor')
+                            bg = tb.BackgroundColor;
+                            if isnumeric(bg) && size(bg, 2) == 3 && all(bg(1, :) < 0.20)
+                                tb.BackgroundColor = t.tableRowBgA;
+                            end
+                        end
+                        if isprop(tb, 'ForegroundColor')
+                            fg = tb.ForegroundColor;
+                            if isnumeric(fg) && numel(fg) == 3 && all(double(fg) >= 0.95)
+                                % 비행 identity 컬러 위 흰 글씨인 경우는 유지 (가독성 OK)
+                                bgCheck = [];
+                                try, bgCheck = tb.BackgroundColor(1, :); catch, end
+                                if isnumeric(bgCheck) && numel(bgCheck) == 3 && all(double(bgCheck) >= 0.85)
+                                    tb.ForegroundColor = t.textPrimary;
+                                end
+                            end
+                        end
+                    catch
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'theme:tables');
+            end
+        end
+
+        function applyThemeToAxes(app, root, t)
+            % v4-L2: axes — dark bg → white. 외부 vidViewer image axes 는 건드리지 않음.
+            try
                 axesAll = findall(root, 'Type', 'axes');
                 for k = 1:numel(axesAll)
                     ax = axesAll(k);
                     if isempty(ax) || ~isvalid(ax), continue; end
+                    % video image axes 보호: NextPlot='replace' 이거나 Tag='video' 인 경우 skip
+                    try
+                        if isprop(ax, 'Tag') && ~isempty(char(ax.Tag)) && contains(lower(char(ax.Tag)), 'video')
+                            continue;
+                        end
+                    catch
+                    end
                     try
                         if isprop(ax, 'Color')
                             c = ax.Color;
@@ -10010,13 +10279,98 @@
                                 ax.Color = t.axesBg;
                             end
                         end
+                        if isprop(ax, 'XColor')
+                            xc = ax.XColor;
+                            if isnumeric(xc) && numel(xc) == 3 && all(double(xc) >= 0.90)
+                                ax.XColor = t.textSecondary;
+                            end
+                        end
+                        if isprop(ax, 'YColor')
+                            yc = ax.YColor;
+                            if isnumeric(yc) && numel(yc) == 3 && all(double(yc) >= 0.90)
+                                ax.YColor = t.textSecondary;
+                            end
+                        end
+                        if isprop(ax, 'GridColor')
+                            try, ax.GridColor = t.gridLine; catch, end
+                        end
                     catch
                     end
                 end
-                % Panel title contrast (legacy helper still applies)
-                app.applyLightPanelTitleContrast(root);
             catch ME
-                app.logCaught(ME, 'applyLightTheme');
+                app.logCaught(ME, 'theme:axes');
+            end
+        end
+
+        function applyThemeToInputs(app, root, t)
+            % v4-L2: uidropdown / uieditfield / uispinner / uitextarea / uicheckbox light bg.
+            try
+                inputTypes = {'uidropdown', 'uieditfield', 'uinumericeditfield', 'uispinner', 'uitextarea', 'uicheckbox'};
+                for ti = 1:numel(inputTypes)
+                    try
+                        ctrls = findall(root, 'Type', inputTypes{ti});
+                    catch
+                        ctrls = [];
+                    end
+                    for k = 1:numel(ctrls)
+                        c = ctrls(k);
+                        if isempty(c) || ~isvalid(c), continue; end
+                        try
+                            if isprop(c, 'BackgroundColor')
+                                bg = c.BackgroundColor;
+                                if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                                    c.BackgroundColor = t.surfaceBg;
+                                end
+                            end
+                            if isprop(c, 'FontColor')
+                                fc = c.FontColor;
+                                if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
+                                    c.FontColor = t.textPrimary;
+                                end
+                            end
+                        catch
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'theme:inputs');
+            end
+        end
+
+        function applyThemeToTabs(app, root, t)
+            % v4-L2: uitabgroup/uitab — 배경 light normalize.
+            try
+                tgs = findall(root, 'Type', 'uitabgroup');
+                for k = 1:numel(tgs)
+                    tg = tgs(k);
+                    if isempty(tg) || ~isvalid(tg), continue; end
+                    % uitabgroup 자체는 BackgroundColor 없음. tab 들만 처리.
+                    try
+                        tabs = tg.Children;
+                        for s = 1:numel(tabs)
+                            tb = tabs(s);
+                            if isempty(tb) || ~isvalid(tb), continue; end
+                            try
+                                if isprop(tb, 'BackgroundColor')
+                                    bg = tb.BackgroundColor;
+                                    if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                                        tb.BackgroundColor = t.surfaceBg;
+                                    end
+                                end
+                                if isprop(tb, 'ForegroundColor')
+                                    fg = tb.ForegroundColor;
+                                    if isnumeric(fg) && numel(fg) == 3 && all(double(fg) >= 0.95)
+                                        tb.ForegroundColor = t.textPrimary;
+                                    end
+                                end
+                            catch
+                            end
+                        end
+                    catch
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'theme:tabs');
             end
         end
 
@@ -10117,7 +10471,8 @@
                         'timeLines', {}, 'timeMarkers', {}, 'plotData', {}, 'xLimListeners', {}, 'altXLimListener', {}, 'vidAxes', {}, 'vidImageHandle', {}, ...
                         'dataGrid', {}, 'panelAttitude', {}, 'panelAttitudeGrid', {}, ...
                         'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
-                        'panelMapAlt', {}, 'panelVideo', {}, 'colSplitters', {}, ...
+                        'panelMapAlt', {}, 'panelInfo', {}, 'panelDataView', {}, 'panelVideo', {}, 'colSplitters', {}, ...
+                        'arrangementMode', {}, ...
                         'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnInfo', {}, 'btnDataView', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
@@ -10254,6 +10609,7 @@
                 % --- (d) Col 3: 현재 비행 정보 (데이터 테이블) ---
                 infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
                 infoPanel.Layout.Column = 5;
+                UI_temp(fIdx).panelInfo = infoPanel;        % [v4-L1] hsplit reparent 용 핸들
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
                 tblBgColor = app.getFlightTableBgColor(fIdx);
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', [1 1 1], 'FontWeight', 'bold', ...
@@ -10267,6 +10623,7 @@
                 % --- (e) Col 4: H 패널 (플롯 tabGroup) ---
                 hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
                 hPnl.Layout.Column = 7;
+                UI_temp(fIdx).panelDataView = hPnl;         % [v4-L1] hsplit reparent 용 핸들
                 hGrid2 = uigridlayout(hPnl, [2 1]);
                 hGrid2.RowHeight = {30, '1x'};
                 hGrid2.Padding = [2 2 2 2];
