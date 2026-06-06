@@ -8865,6 +8865,11 @@
                     return;
                 end
                 widths = app.UI(fIdx).dataGrid.ColumnWidth;
+                % v-final P3: splitter drag end 후 normalize 명시 호출 (plot=1x/splitter visibility 일관성)
+                if isfield(app.UI(fIdx), 'PanelVisible')
+                    widths = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, widths);
+                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                end
                 app.updateColumnSplitterVisibility(fIdx, widths);
                 app.reflowAttitudePanel(fIdx);
                 activeOff = find(app.BoardOffState, 1);
@@ -10272,29 +10277,24 @@
         end
 
         function applyThemeToTables(app, root, t)
-            % v4-L2: uitable — dark bg 가 비행 identity 컬러가 아니라면 light normalize.
+            % v-final P11: role-based — dashboard 소유 uitable 은 white bg + dark text 강제.
+            % 채도 높은 (mean<0.85) bg 는 모두 white 로 교체. flight identity 는 accent strip 별도.
             try
                 tbls = findall(root, 'Type', 'uitable');
                 for k = 1:numel(tbls)
                     tb = tbls(k);
                     if isempty(tb) || ~isvalid(tb), continue; end
                     try
-                        % BackgroundColor: 매우 어두운 경우만 (비행 identity 컬러는 보존)
                         if isprop(tb, 'BackgroundColor')
                             bg = tb.BackgroundColor;
-                            if isnumeric(bg) && size(bg, 2) == 3 && all(bg(1, :) < 0.20)
+                            if isnumeric(bg) && size(bg, 2) == 3 && mean(bg(1, :)) < 0.85
                                 tb.BackgroundColor = t.tableRowBgA;
                             end
                         end
                         if isprop(tb, 'ForegroundColor')
                             fg = tb.ForegroundColor;
-                            if isnumeric(fg) && numel(fg) == 3 && all(double(fg) >= 0.95)
-                                % 비행 identity 컬러 위 흰 글씨인 경우는 유지 (가독성 OK)
-                                bgCheck = [];
-                                try, bgCheck = tb.BackgroundColor(1, :); catch, end
-                                if isnumeric(bgCheck) && numel(bgCheck) == 3 && all(double(bgCheck) >= 0.85)
-                                    tb.ForegroundColor = t.textPrimary;
-                                end
+                            if isnumeric(fg) && numel(fg) == 3 && mean(double(fg)) >= 0.80
+                                tb.ForegroundColor = t.textPrimary;
                             end
                         end
                     catch
