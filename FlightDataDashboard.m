@@ -8433,7 +8433,7 @@
                 end
                 app.UI(fIdx).vidAxes.Units = 'pixels';
                 app.UI(fIdx).vidAxes.Position = [pad, pad, sizePx(1), sizePx(2)];
-                app.UI(fIdx).vidAxes.Color = [0 0 0];
+                app.UI(fIdx).vidAxes.Color = app.getLightTheme().videoAxesBg;   % v3-sample: 검은색 제거
                 app.UI(fIdx).vidAxes.XColor = 'none';
                 app.UI(fIdx).vidAxes.YColor = 'none';
                 try
@@ -10283,7 +10283,7 @@
             t.gaugeTickFg    = [0.03 0.05 0.07];
             t.gaugeNeedleFg  = [0.95 0.67 0.10];
             t.videoPlaceholderBg = [0.94 0.96 0.98];
-            t.videoAxesBg        = [0.02 0.02 0.02];
+            t.videoAxesBg        = [0.94 0.96 0.98];   % v3-sample: black 제거 (image 가 픽셀 표시)
             t.panelBg            = [1.00 1.00 1.00];
             t.panelAltBg         = [0.97 0.98 1.00];
             t.panelTitleBg       = [0.86 0.92 0.97];
@@ -10322,31 +10322,36 @@
             t.fontSizeSmall  = 11;
             t.fontSizeBase   = 12;
             t.fontSizeLarge  = 14;
-            % Button states
-            t.btnActiveBg    = [0.00 0.42 0.72];
-            t.btnActiveFg    = [1.00 1.00 1.00];
-            t.btnAccentBg    = [0.96 0.78 0.20];
-            t.btnAccentFg    = [0.05 0.05 0.05];
-            t.btnNormalBg    = [0.90 0.92 0.95];
-            t.btnNormalFg    = [0.05 0.05 0.05];
-            t.btnDisabledBg  = [0.82 0.85 0.88];
-            t.btnDisabledFg  = [0.32 0.36 0.40];
-            t.btnWarningBg   = [0.78 0.16 0.12];
-            t.btnWarningFg   = [1.00 1.00 1.00];
-            % v3-style: panel header → 연한 blue strip (sample 일관)
+            % v3-sample: 버튼 bg = panel bg (harmonized). 기능 구분은 fg color 로만.
+            t.btnActiveBg    = [0.86 0.92 0.97];   % 선택 강조는 옅은 blue tint
+            t.btnActiveFg    = [0.00 0.18 0.32];
+            t.btnAccentBg    = [1.00 1.00 1.00];
+            t.btnAccentFg    = [0.78 0.55 0.05];   % 강조 yellow text
+            t.btnNormalBg    = [1.00 1.00 1.00];   % panel(white) 과 동일
+            t.btnNormalFg    = [0.05 0.10 0.18];
+            t.btnDisabledBg  = [0.94 0.95 0.96];
+            t.btnDisabledFg  = [0.55 0.60 0.65];
+            t.btnWarningBg   = [1.00 1.00 1.00];
+            t.btnWarningFg   = [0.78 0.16 0.12];   % warning red text on white
+            % v3-sample: panel header → 연한 blue strip (sample 일관)
             t.panelBlueBg    = [0.86 0.92 0.97];
             t.panelBlueBg2   = [0.82 0.89 0.95];
             t.panelBlueFg    = [0.05 0.12 0.20];
-            t.toolbarYellowBg = [0.98 0.78 0.18];
-            t.toolbarYellowFg = [0.05 0.05 0.05];
-            t.toolbarGreenBg  = [0.00 0.58 0.22];
-            t.toolbarGreenFg  = [1.00 1.00 1.00];
-            t.toolbarBlueBg   = [0.00 0.45 0.74];
-            t.toolbarBlueFg   = [1.00 1.00 1.00];
-            t.toolbarGrayBg   = [0.86 0.88 0.90];
-            t.toolbarGrayFg   = [0.05 0.05 0.05];
-            t.toolbarDarkBg   = [0.16 0.46 0.70];   % v2: 비-블랙 blue 변환 (no near-black)
-            t.toolbarDarkFg   = [1.00 1.00 1.00];
+            % v3-sample: 모든 toolbar bg = panel(white). 기능 구분은 fg color 만.
+            t.toolbarYellowBg = [1.00 1.00 1.00];
+            t.toolbarYellowFg = [0.78 0.55 0.05];   % 짙은 노랑 (파일/import)
+            t.toolbarGreenBg  = [1.00 1.00 1.00];
+            t.toolbarGreenFg  = [0.00 0.50 0.20];   % 진초록 (동기/apply)
+            t.toolbarBlueBg   = [1.00 1.00 1.00];
+            t.toolbarBlueFg   = [0.00 0.32 0.62];   % 진파랑 (보드/액션)
+            t.toolbarGrayBg   = [1.00 1.00 1.00];
+            t.toolbarGrayFg   = [0.18 0.24 0.30];   % 짙은 회색 (default)
+            t.toolbarDarkBg   = [1.00 1.00 1.00];
+            t.toolbarDarkFg   = [0.30 0.16 0.50];   % 짙은 보라 (설정/편집)
+            % 추가 accent text 컬러 (panel 위 fg 전용)
+            t.accentOrangeFg = [0.85 0.42 0.10];
+            t.accentRedFg    = [0.78 0.16 0.12];
+            t.accentPurpleFg = [0.45 0.18 0.62];
         end
 
         function tf = isNearBlackColor(~, c)
@@ -10858,7 +10863,7 @@
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'mapOnly'));
                 UI_temp(fIdx).btnMap.Layout.Column = 7;
                 UI_temp(fIdx).btnAlt = uibutton(glCtrl, 'Text', '고도 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
-                    'BackgroundColor', [0.00 0.42 0.72], 'FontColor', [1 1 1], ...
+                    'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
                 % v2-B: btnInfo/btnDataView 제거 (PanelVisible.info/dataView 는 내부적으로 true 유지)
@@ -11048,7 +11053,7 @@
                 UI_temp(fIdx).vidContainer.Layout.Row = 2;
                 UI_temp(fIdx).vidAxes = uiaxes(UI_temp(fIdx).vidContainer, ...
                     'Units', 'pixels', 'Position', [0 0 720 512]);
-                UI_temp(fIdx).vidAxes.Color = [0 0 0];
+                UI_temp(fIdx).vidAxes.Color = tT.videoAxesBg;   % v3-sample: 검은색 제거 (image 가 픽셀 표시)
                 UI_temp(fIdx).vidAxes.XColor = 'none';
                 UI_temp(fIdx).vidAxes.YColor = 'none';
                 try
@@ -11226,19 +11231,19 @@
                 lbl = char(labelText);
                 switch lower(char(stateName))
                     case 'active'
+                        % v3-sample: active = 옅은 blue tint bg + role fg (눌린 상태만 background 변화)
+                        btn.BackgroundColor = t.btnActiveBg;
                         if contains(lbl, '보드')
-                            btn.BackgroundColor = t.toolbarBlueBg;
                             btn.FontColor = t.toolbarBlueFg;
                         else
-                            btn.BackgroundColor = t.toolbarGreenBg;
                             btn.FontColor = t.toolbarGreenFg;
                         end
                     case 'accent'
-                        btn.BackgroundColor = t.toolbarGreenBg;
+                        btn.BackgroundColor = t.btnActiveBg;
                         btn.FontColor = t.toolbarGreenFg;
                     case 'disabled'
-                        btn.BackgroundColor = t.disabledBg;
-                        btn.FontColor = t.disabledFg;
+                        btn.BackgroundColor = t.btnDisabledBg;
+                        btn.FontColor = t.btnDisabledFg;
                     otherwise
                         if contains(lbl, '비행경로')
                             btn.BackgroundColor = t.toolbarYellowBg;
