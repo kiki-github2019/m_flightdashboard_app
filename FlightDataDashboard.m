@@ -167,7 +167,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.9             % [L1 C-1] off 시 source 보드가 차지하는 비율 (0.5~1.0)
+        BoardOffSourceRatio  = 0.6             % [v4 P3] off 시 source 비율. 0.9 는 극단 확대로 사용자 불만 → 0.6 (clamp 0.5~0.9)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -8584,7 +8584,7 @@
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
-                srcW = max(0.5, min(1.0, double(app.BoardOffSourceRatio)));
+                srcW = max(0.5, min(0.9, double(app.BoardOffSourceRatio)));
                 summaryW = max(0, 1 - srcW);
                 srcStr = sprintf('%dx', max(1, round(srcW * 100)));
                 if summaryW <= eps
@@ -8753,8 +8753,17 @@
                     newRight = max(minW, total - newLeft);
                 end
                 live = dg.ColumnWidth;
-                live{leftCol} = round(newLeft);
-                live{rightCol} = round(newRight);
+                % v4 P2: plot/dataView 컬럼은 fixed pixel 로 변경하지 않음 — 항상 '1x'
+                if leftCol == 7
+                    live{leftCol} = '1x';
+                else
+                    live{leftCol} = round(newLeft);
+                end
+                if rightCol == 7
+                    live{rightCol} = '1x';
+                else
+                    live{rightCol} = round(newRight);
+                end
                 dg.ColumnWidth = live;
                 app.rememberUserColumnWidths(fIdx, live);
                 app.refreshAfterColumnWidthChange(fIdx, false);
@@ -8809,8 +8818,17 @@
                     newLeft = max(minW, min(total - minW, newLeft));
                     newRight = max(minW, total - newLeft);
                 end
-                cw{leftCol} = round(newLeft);
-                cw{rightCol} = round(newRight);
+                % v4 P2: plot/dataView 컬럼은 fixed pixel 로 변경하지 않음 — 항상 '1x'
+                if leftCol == 7
+                    cw{leftCol} = '1x';
+                else
+                    cw{leftCol} = round(newLeft);
+                end
+                if rightCol == 7
+                    cw{rightCol} = '1x';
+                else
+                    cw{rightCol} = round(newRight);
+                end
                 dg.ColumnWidth = cw;
                 app.rememberUserColumnWidths(fIdx, cw);
                 app.updateColumnSplitterVisibility(fIdx, cw);
@@ -8846,6 +8864,12 @@
                 if fIdx < 1 || fIdx > 2, return; end
                 widths = app.normalizeDataGridColumnWidth(widths);
                 if isempty(widths), return; end
+                % v4 P2: plot/dataView 컬럼은 절대 fixed pixel 로 저장하지 않음
+                if numel(widths) >= 7
+                    if isnumeric(widths{7}) && isscalar(widths{7}) && widths{7} > 0
+                        widths{7} = '1x';
+                    end
+                end
                 app.UserColumnWidths{fIdx} = widths;
             catch ME
                 app.logCaught(ME, 'columnWidth:remember');
@@ -9035,7 +9059,8 @@
                     end
                     if ~dataViewOn
                         widths{7} = 0;
-                    elseif app.isTestWidthZero(widths{7})
+                    else
+                        % v4 P2: plot/dataView visible 시 항상 '1x' (fixed pixel drift 방지)
                         widths{7} = '1x';
                     end
                     widths{2} = 0; widths{4} = 0; widths{6} = 0;
@@ -9244,68 +9269,76 @@
         end
 
         function applyLayoutPreset(app, presetName)
+            % v4: arrangement-only. PanelVisible / BoardOffState / BodyGrid.RowHeight /
+            % BodyRowSplitRatio / Video Player 는 변경하지 않음. board 내부 컬럼 배치만 조정.
             try
                 presetName = char(presetName);
+                validNames = app.getLayoutPresetNames();
+                if ~any(strcmp(presetName, validNames))
+                    % Legacy preset name (single-top/data-focus/video-focus 등) → reset 으로 안전 매핑
+                    presetName = 'layout-reset';
+                end
                 app.CurrentLayoutPreset = presetName;
-                switch presetName
-                    case 'single-top'
-                        app.setBoardOffDirect(2);
-                        app.setFlightPanelVisiblePreset(1, true, true, true, true, true, true);
-                    case 'single-bot'
-                        app.setBoardOffDirect(1);
-                        app.setFlightPanelVisiblePreset(2, true, true, true, true, true, true);
-                    case 'dual-equal'
-                        app.setBoardOffDirect(0);
-                        app.BodyRowSplitRatio = 0.5;
-                        app.setBodyGridRowsDirect({'1x', '1x'});
-                    case 'dual-3:1-top'
-                        app.setBoardOffDirect(0);
-                        app.BodyRowSplitRatio = 0.75;
-                        app.setBodyGridRowsDirect({'3x', '1x'});
-                    case 'dual-3:1-bot'
-                        app.setBoardOffDirect(0);
-                        app.BodyRowSplitRatio = 0.25;
-                        app.setBodyGridRowsDirect({'1x', '3x'});
-                    case 'data-focus'
-                        app.setBoardOffDirect(0);
-                        for k = 1:2
-                            app.setFlightPanelVisiblePreset(k, false, false, false, false, true, true);
-                        end
-                    case 'gauges-only'
-                        app.setBoardOffDirect(0);
-                        for k = 1:2
-                            app.setFlightPanelVisiblePreset(k, true, false, false, false, false, false);
-                        end
-                    case 'map-focus'
-                        app.setBoardOffDirect(0);
-                        for k = 1:2
-                            app.setFlightPanelVisiblePreset(k, false, true, false, false, false, false);
-                        end
-                    case 'video-focus'
-                        app.setBoardOffDirect(0);
-                        for k = 1:2
-                            app.setFlightPanelVisiblePreset(k, false, false, false, true, false, true);
-                        end
-                    otherwise
-                        app.CurrentLayoutPreset = 'custom';
-                end
 
-                for k = 1:2
-                    app.applyMapAltVisibility(k);
-                    app.reflowBoardColumns(k);
-                    app.refreshBoardOffSummaryPanel(k, true);
-                end
-                app.applyBodyGridRowHeights();
-                if strcmp(presetName, 'dual-3:1-top')
-                    app.setBodyGridRowsDirect({'3x', '1x'});
-                elseif strcmp(presetName, 'dual-3:1-bot')
-                    app.setBodyGridRowsDirect({'1x', '3x'});
+                if strcmp(presetName, 'layout-reset')
+                    for k = 1:2
+                        app.resetUserColumnWidths(k);
+                        app.reflowBoardColumns(k);
+                        app.refreshBoardOffSummaryPanel(k, true);
+                    end
+                else
+                    for k = 1:2
+                        app.applyBoardInternalArrangement(k, presetName);
+                        app.refreshBoardOffSummaryPanel(k, true);
+                    end
                 end
                 app.updateBoardToggleButtons();
                 app.updateLayoutPresetButtons();
                 drawnow limitrate;
             catch ME
                 app.logCaught(ME, 'layoutPreset');
+            end
+        end
+
+        function applyBoardInternalArrangement(app, fIdx, presetName)
+            % v4: 보드 내부 컬럼 비율만 조정. PanelVisible/BoardOff/RowHeight 불변.
+            try
+                if isempty(app.UI) || fIdx > numel(app.UI), return; end
+                if ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ~isvalid(app.UI(fIdx).dataGrid)
+                    return;
+                end
+                if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
+                st = app.UI(fIdx).PanelVisible;
+
+                pw = app.getResponsivePanelWidths();
+                widths = {pw(1), 0, pw(2), 0, pw(3), 0, '1x', 0};
+                switch presetName
+                    case 'layout-grid'
+                        % default balanced widths; plot flex
+                    case 'layout-vsplit'
+                        % visual(left) vs data(right) 60:40 → info 를 figure 폭의 ~30% 로 확장
+                        figW = max(800, app.getFigurePixelWidth());
+                        widths{5} = max(180, round(figW * 0.30));
+                    case 'layout-hsplit'
+                        % 양 보드 visible 일 때는 board height 변경 불가 → grid 와 동일
+                        % board-off 시에는 별도 refreshBoardOffSummaryPanel 경로가 상/하 배치 담당
+                    case 'layout-compact'
+                        % info 좁히고 attitude/map 도 약간 축소
+                        widths{1} = max(120, round(pw(1) * 0.8));
+                        widths{3} = max(140, round(pw(2) * 0.8));
+                        widths{5} = max(140, round(pw(3) * 0.7));
+                    case 'layout-reset'
+                        % default 유지 (이미 widths 초기값 default)
+                end
+                widths = app.enforcePanelVisibilityOnColumnWidths(st, widths);
+                app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                app.UI(fIdx).dataGrid.Scrollable = 'on';
+                app.rememberUserColumnWidths(fIdx, widths);  % preset 결과를 user width 로 캐시
+                app.updateColumnSplitterVisibility(fIdx, widths);
+                app.refreshPanelToggleButtons(fIdx);
+                app.reflowAttitudePanel(fIdx);
+            catch ME
+                app.logCaught(ME, 'boardArrangement');
             end
         end
 
@@ -9388,12 +9421,12 @@
         end
 
         function names = getLayoutPresetNames(~)
-            names = {'single-top', 'single-bot', 'dual-equal', 'dual-3:1-top', ...
-                     'dual-3:1-bot', 'data-focus', 'gauges-only', 'map-focus', 'video-focus'};
+            % v4: arrangement-only presets (V/focus-style 제거)
+            names = {'layout-grid', 'layout-vsplit', 'layout-hsplit', 'layout-compact', 'layout-reset'};
         end
 
         function icons = getLayoutPresetIcons(~)
-            icons = {'□↑', '□↓', '▣', '▥', '▧', 'D', 'G', 'M', 'V'};
+            icons = {'⊞', '▥', '▤', '▦', '↺'};
         end
 
         function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
@@ -10419,8 +10452,8 @@
                     'ColumnWidth', [repmat({32}, 1, numel(names)), {110}], ...
                     'RowHeight', {'1x'}, ...
                     'Padding', [2 1 2 1], 'ColumnSpacing', 2);
-                tips = {'상단 집중', '하단 집중', '상하 동일', '상단 3:1', '하단 3:1', ...
-                        '데이터 집중', '자세 집중', '지도 집중', '비디오 집중'};
+                tips = {'Grid (균형)', 'V-Split (좌우 분할)', 'H-Split (수평 배치)', ...
+                        'Compact (작은 화면)', 'Reset (폭 초기화)'};
                 app.LayoutPresetButtons = gobjects(1, numel(names));
                 for k = 1:numel(names)
                     presetName = names{k};
@@ -10541,7 +10574,7 @@
             layout = struct( ...
                 'CurrentLayoutPreset', 'custom', ...
                 'BoardOffState', [false, false], ...
-                'BoardOffSourceRatio', 0.9, ...
+                'BoardOffSourceRatio', 0.6, ...
                 'BodyRowSplitRatio', 0.5, ...
                 'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
                 'PanelVisible', [panel, panel]);
@@ -10753,7 +10786,7 @@
                 if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
                     app.UserLayoutPresets = layout.LayoutPresets;
                 end
-                app.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
+                app.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
@@ -10826,7 +10859,7 @@
                 bos(2) = false;
             end
             layout.BoardOffState = bos;
-            layout.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
+            layout.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
@@ -10988,7 +11021,8 @@
             end
             if ~panelState.dataView
                 widths{7} = 0;
-            elseif app.isTestWidthZero(widths{7})
+            else
+                % v4 P2: plot/dataView visible 시 항상 flex '1x' 강제 (fixed pixel 저장 금지)
                 widths{7} = '1x';
             end
             widths{2} = 0; widths{4} = 0; widths{6} = 0; widths{8} = 0;
