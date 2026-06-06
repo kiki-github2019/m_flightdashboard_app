@@ -115,7 +115,7 @@
         DraggedColumnSplitterInfo = struct('fIdx', 0, 'leftCol', 0, 'rightCol', 0)
         ColumnSplitterStartPoint = [0, 0]
         ColumnSplitterStartWidths = {}
-        UserColumnWidths = {[], []}           % [Layout] user-adjusted dataGrid ColumnWidth cache
+        UserColumnWidths = {struct(), struct()}   % [v4-R3] adjustable fixed-width struct fIdx 별 (attitudeWidth/mapAltWidth/infoWidth). plot/splitter/hidden 안 저장.
         FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
         FrameCacheKeys      = {[], []}      % [V3.13 C-1] 비행경로별 캐시 키 순서 (LRU)
         DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
@@ -167,7 +167,7 @@
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 0.6             % [v4 P3] off 시 source 비율. 0.9 는 극단 확대로 사용자 불만 → 0.6 (clamp 0.5~0.9)
+        BoardOffSourceRatio  = 1.0             % [v4-R1] off 시 source 100% (summary 폐기). active 보드 단독 표시. (clamp 0.5~1.0)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
@@ -1815,10 +1815,8 @@
 
         % [V3.12 2.1] 영상 가로:세로 비율에 따라 비디오 패널 너비 동적 조정
         function adjustVideoPanelWidth(app, fIdx)
+            % v4-R2: dialog 자동 표시 제거. resize 시 display size 만 조정.
             try
-                if app.UI(fIdx).PanelVisible.video
-                    app.setVideoViewerVisible(fIdx, true, false);
-                end
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
                 app.logCaught(ME_silent, 'adjustVideoPanelWidth');
@@ -8277,11 +8275,9 @@
         end
 
         function onVideoResolutionChanged(app, fIdx)
+            % v4-R2: resolution 변경 시 dialog 자동 표시 제거. frame/display 만 갱신.
             try
                 app.setVideoImageFrame(fIdx, app.CurrentVideoFrame{fIdx});
-                if app.UI(fIdx).PanelVisible.video
-                    app.setVideoViewerVisible(fIdx, true, false);
-                end
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
                 app.logCaught(ME_silent, 'videoResolution');
@@ -8584,7 +8580,7 @@
                     return;
                 end
                 app.setUiVisible(app.BodyRowSplitter, false);
-                srcW = max(0.5, min(0.9, double(app.BoardOffSourceRatio)));
+                srcW = max(0.5, min(1.0, double(app.BoardOffSourceRatio)));
                 summaryW = max(0, 1 - srcW);
                 srcStr = sprintf('%dx', max(1, round(srcW * 100)));
                 if summaryW <= eps
@@ -8860,36 +8856,78 @@
         end
 
         function rememberUserColumnWidths(app, fIdx, widths)
+            % v4-R3: adjustable fixed-width fields(att/mapAlt/info) 만 추출 저장.
+            % plot/splitter/hidden/legacy video 컬럼은 절대 저장하지 않음.
             try
                 if fIdx < 1 || fIdx > 2, return; end
                 widths = app.normalizeDataGridColumnWidth(widths);
                 if isempty(widths), return; end
-                % v4 P2: plot/dataView 컬럼은 절대 fixed pixel 로 저장하지 않음
-                if numel(widths) >= 7
-                    if isnumeric(widths{7}) && isscalar(widths{7}) && widths{7} > 0
-                        widths{7} = '1x';
+                s = app.getEmptyUserColumnWidthsStruct();
+                if numel(widths) >= 5
+                    if isnumeric(widths{1}) && isscalar(widths{1}) && widths{1} > 0
+                        s.attitudeWidth = max(80, double(widths{1}));   % v4 28.2 clamp
+                    end
+                    if isnumeric(widths{3}) && isscalar(widths{3}) && widths{3} > 0
+                        s.mapAltWidth = max(120, double(widths{3}));
+                    end
+                    if isnumeric(widths{5}) && isscalar(widths{5}) && widths{5} > 0
+                        s.infoWidth = max(100, double(widths{5}));
                     end
                 end
-                app.UserColumnWidths{fIdx} = widths;
+                app.UserColumnWidths{fIdx} = s;
             catch ME
                 app.logCaught(ME, 'columnWidth:remember');
             end
         end
 
+        function s = getEmptyUserColumnWidthsStruct(~)
+            s = struct('attitudeWidth', [], 'mapAltWidth', [], 'infoWidth', []);
+        end
+
         function resetUserColumnWidths(app, fIdx)
             try
                 if fIdx < 1 || fIdx > numel(app.UserColumnWidths), return; end
-                app.UserColumnWidths{fIdx} = [];
+                app.UserColumnWidths{fIdx} = app.getEmptyUserColumnWidthsStruct();
             catch ME
                 app.logCaught(ME, 'columnWidth:reset');
             end
         end
 
         function widths = getRememberedColumnWidths(app, fIdx)
+            % v4-R3: struct → 8-cell 재구성. plot=`1x`, splitter=0 자동.
             widths = {};
             try
                 if fIdx < 1 || fIdx > numel(app.UserColumnWidths), return; end
-                widths = app.normalizeDataGridColumnWidth(app.UserColumnWidths{fIdx});
+                s = app.UserColumnWidths{fIdx};
+                % legacy upgrade: 이전 cell 캐시 → 1회 struct 변환
+                if iscell(s) && ~isempty(s)
+                    legacy = app.normalizeDataGridColumnWidth(s);
+                    migrated = app.getEmptyUserColumnWidthsStruct();
+                    if numel(legacy) >= 5
+                        if isnumeric(legacy{1}) && isscalar(legacy{1}) && legacy{1} > 0
+                            migrated.attitudeWidth = max(80, double(legacy{1}));
+                        end
+                        if isnumeric(legacy{3}) && isscalar(legacy{3}) && legacy{3} > 0
+                            migrated.mapAltWidth = max(120, double(legacy{3}));
+                        end
+                        if isnumeric(legacy{5}) && isscalar(legacy{5}) && legacy{5} > 0
+                            migrated.infoWidth = max(100, double(legacy{5}));
+                        end
+                    end
+                    s = migrated;
+                    app.UserColumnWidths{fIdx} = s;
+                end
+                if ~isstruct(s), return; end
+                aW = []; mW = []; iW = [];
+                if isfield(s, 'attitudeWidth'), aW = s.attitudeWidth; end
+                if isfield(s, 'mapAltWidth'), mW = s.mapAltWidth; end
+                if isfield(s, 'infoWidth'), iW = s.infoWidth; end
+                if isempty(aW) && isempty(mW) && isempty(iW), return; end
+                pw = app.getResponsivePanelWidths();
+                if isempty(aW), aW = pw(1); end
+                if isempty(mW), mW = pw(2); end
+                if isempty(iW), iW = pw(3); end
+                widths = {aW, 0, mW, 0, iW, 0, '1x', 0};
             catch
                 widths = {};
             end
@@ -9011,9 +9049,7 @@
                 if isfield(app.UI(fIdx), 'panelAlt') && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt)
                     app.UI(fIdx).panelAlt.Visible = hasAltOnly;
                 end
-                if isfield(st, 'video')
-                    app.setVideoViewerVisible(fIdx, st.video, false);
-                end
+                % v4-R2: video dialog 자동 동기화 제거. dialog visibility 는 사용자 토글로만 변경.
             catch ME
                 app.logCaught(ME, 'boardSyncPanelHandles');
             end
@@ -9079,25 +9115,9 @@
                         end
                     end
                 end
-                activeOff = find(app.BoardOffState, 1);
-                if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
-                    widths{4} = 0;
-                    widths{5} = 0;
-                    widths{6} = 0;
-                    widths{7} = 0;
-                    if isfield(app.UI(fIdx), 'PanelVisible')
-                        st = app.UI(fIdx).PanelVisible;
-                        mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
-                                   (isfield(st, 'altOnly') && st.altOnly) || ...
-                                   (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
-                        if mapColOn
-                            widths{3} = '1x';
-                            if ~app.isTestWidthZero(widths{1}), widths{2} = 4; end
-                        elseif isfield(st, 'attitude') && st.attitude
-                            widths{1} = '1x';
-                        end
-                    end
-                end
+                % v4-R1: board-off source override 제거. source 는 자신의 PanelVisible 그대로 표시.
+                % v4-R4: 단일 normalize helper 로 마지막 일관성 보장 (idempotent).
+                widths = app.normalizeColumnWidthsForVisiblePanels(st, widths);
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 app.UI(fIdx).dataGrid.Scrollable = 'on';
                 app.updateColumnSplitterVisibility(fIdx, widths);
@@ -9320,8 +9340,12 @@
                         figW = max(800, app.getFigurePixelWidth());
                         widths{5} = max(180, round(figW * 0.30));
                     case 'layout-hsplit'
-                        % 양 보드 visible 일 때는 board height 변경 불가 → grid 와 동일
-                        % board-off 시에는 별도 refreshBoardOffSummaryPanel 경로가 상/하 배치 담당
+                        % v4-R5: dataGrid 가 1-row 라 진짜 상하 split 불가 → fallback:
+                        %   visual(att/map) 좌측 좁게, info+plot 우측 강조 (vsplit 보다 더 넓게)
+                        figW = max(800, app.getFigurePixelWidth());
+                        widths{1} = max(80, round(pw(1) * 0.55));   % attitude 좁게
+                        widths{3} = max(120, round(pw(2) * 0.55));  % map/alt 좁게
+                        widths{5} = max(220, round(figW * 0.38));   % info 더 넓게
                     case 'layout-compact'
                         % info 좁히고 attitude/map 도 약간 축소
                         widths{1} = max(120, round(pw(1) * 0.8));
@@ -9343,13 +9367,15 @@
         end
 
         function setBoardOffDirect(app, offIdx)
+            % v4-R1: boardOffPanel summary 폐기. active 보드 100% 단독 표시.
             try
                 app.BoardOffState = [false, false];
                 for k = 1:min(2, numel(app.UI))
                     if isfield(app.UI(k), 'panel')
                         app.setUiVisible(app.UI(k).panel, true);
                     end
-                    if isfield(app.UI(k), 'boardOffPanel')
+                    if isfield(app.UI(k), 'boardOffPanel') && ~isempty(app.UI(k).boardOffPanel) ...
+                            && isvalid(app.UI(k).boardOffPanel)
                         app.setUiVisible(app.UI(k).boardOffPanel, false);
                     end
                     if isfield(app.UI(k), 'boardOffSignature')
@@ -9359,8 +9385,6 @@
                 if offIdx >= 1 && offIdx <= 2
                     app.BoardOffState(offIdx) = true;
                     app.setUiVisible(app.UI(offIdx).panel, false);
-                    app.setUiVisible(app.UI(offIdx).boardOffPanel, true);
-                    app.refreshBoardOffSummaryPanel(offIdx, true);
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:boardOff');
@@ -9429,45 +9453,14 @@
             icons = {'⊞', '▥', '▤', '▦', '↺'};
         end
 
-        function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
-            if nargin < 3, forceRebuild = false; end
+        function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild) %#ok<INUSD>
+            % v4-R1: summary panel 폐기. NO-OP wrapper (호출자 호환성만 유지).
+            % active 보드는 source 100% 단독 표시 — source 의 info/plot 컬럼은 보존.
             try
-                if isempty(app.UI) || fIdx > numel(app.UI)
-                    return;
-                end
-                if ~app.BoardOffState(fIdx)
-                    otherIdx = app.getBoardOffSourceIdx(fIdx);
-                    if otherIdx >= 1 && otherIdx <= numel(app.BoardOffState) && app.BoardOffState(otherIdx)
-                        app.refreshBoardOffSummaryPanel(otherIdx, forceRebuild);
-                    end
-                    return;
-                end
-                sourceIdx = app.getBoardOffSourceIdx(fIdx);
-                if sourceIdx < 1 || sourceIdx > numel(app.UI), return; end
-                if ~isfield(app.UI(fIdx), 'boardOffPanel') || isempty(app.UI(fIdx).boardOffPanel) || ...
-                        ~isvalid(app.UI(fIdx).boardOffPanel)
-                    return;
-                end
-                try
-                    app.UI(fIdx).boardOffPanel.Title = sprintf( ...
-                        'Flight Data %d - Board Off Summary (Flight Data %d info)', fIdx, sourceIdx);
-                catch
-                end
-                app.hideBoardInfoPlotColumns(sourceIdx);
-
-                if isfield(app.UI(sourceIdx), 'dataTable') && ~isempty(app.UI(sourceIdx).dataTable) && ...
-                        isvalid(app.UI(sourceIdx).dataTable) && isfield(app.UI(fIdx), 'boardOffTable') && ...
-                        ~isempty(app.UI(fIdx).boardOffTable) && isvalid(app.UI(fIdx).boardOffTable)
-                    app.UI(fIdx).boardOffTable.Data = app.UI(sourceIdx).dataTable.Data;
-                    app.UI(fIdx).boardOffTable.BackgroundColor = app.getFlightTableBgColor(sourceIdx);
-                end
-
-                sig = app.getBoardOffPlotSignature(sourceIdx);
-                if forceRebuild || ~strcmp(sig, app.UI(fIdx).boardOffSignature)
-                    app.rebuildBoardOffPlots(fIdx, sourceIdx);
-                    app.UI(fIdx).boardOffSignature = sig;
-                else
-                    app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
+                if isempty(app.UI) || fIdx < 1 || fIdx > numel(app.UI), return; end
+                if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
+                        && isvalid(app.UI(fIdx).boardOffPanel)
+                    app.setUiVisible(app.UI(fIdx).boardOffPanel, false);
                 end
             catch ME
                 app.logCaught(ME, 'boardSummary');
@@ -10574,7 +10567,7 @@
             layout = struct( ...
                 'CurrentLayoutPreset', 'custom', ...
                 'BoardOffState', [false, false], ...
-                'BoardOffSourceRatio', 0.6, ...
+                'BoardOffSourceRatio', 1.0, ...
                 'BodyRowSplitRatio', 0.5, ...
                 'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
                 'PanelVisible', [panel, panel]);
@@ -10786,7 +10779,7 @@
                 if isfield(layout, 'LayoutPresets') && ~isempty(layout.LayoutPresets)
                     app.UserLayoutPresets = layout.LayoutPresets;
                 end
-                app.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+                app.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
                 app.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
                 for fIdx = 1:2
                     if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'PanelVisible')
@@ -10859,7 +10852,7 @@
                 bos(2) = false;
             end
             layout.BoardOffState = bos;
-            layout.BoardOffSourceRatio = max(0.5, min(0.9, double(layout.BoardOffSourceRatio)));
+            layout.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
@@ -11000,6 +10993,17 @@
         end
 
         function widths = enforcePanelVisibilityOnColumnWidths(app, panelState, widths)
+            % v4-R4: alias to single canonical normalizer.
+            widths = app.normalizeColumnWidthsForVisiblePanels(panelState, widths);
+        end
+
+        function widths = normalizeColumnWidthsForVisiblePanels(app, panelState, widths)
+            % v4-R4: single idempotent normalizer.
+            % - plot/dataView visible -> column 7 always '1x'
+            % - hidden panel column -> 0; adjacent splitter -> 0
+            % - both neighbors visible -> splitter = LAYOUT_SPLITTER_THICKNESS
+            % - widths{8} (legacy video column) always 0
+            % - repeated calls with same panelState + same adjustable widths -> identical result
             widths = app.normalizeDataGridColumnWidth(widths);
             if isempty(widths), return; end
             panelState = app.normalizePanelVisibleState(panelState);
@@ -11026,9 +11030,10 @@
                 widths{7} = '1x';
             end
             widths{2} = 0; widths{4} = 0; widths{6} = 0; widths{8} = 0;
-            if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
-            if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
-            if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = 4; end
+            thk = app.LAYOUT_SPLITTER_THICKNESS;
+            if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = thk; end
+            if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = thk; end
+            if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = thk; end
         end
 
         function st = migrateProjectState(app, st)
