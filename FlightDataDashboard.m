@@ -6117,12 +6117,19 @@
 
             % Row 2: tree (left) + property panel (right)
             mid = uigridlayout(outer, [1 2]);
+            mid.BackgroundColor = tPm.surfaceBg;   % v3-C: 트리 주변 light
             mid.RowHeight   = {'1x'};
             mid.ColumnWidth = {'1x', 320};
             mid.ColumnSpacing = 6;
 
-            app.EDPlotTree = uitree(mid, ...
+            % v3-C: uitree 를 light panel 로 감싸 black 배경 제거
+            treeWrap = uipanel(mid, 'BorderType', 'line', 'BackgroundColor', tPm.treeBg, ...
+                'BorderColor', tPm.borderColor);
+            treeWrapGrid = uigridlayout(treeWrap, [1 1], 'Padding', [2 2 2 2], 'BackgroundColor', tPm.treeBg);
+            app.EDPlotTree = uitree(treeWrapGrid, ...
                 'SelectionChangedFcn', @(~,~) app.onPlotTreeSelectionChanged());
+            try, app.EDPlotTree.BackgroundColor = tPm.treeBg; catch; end
+            try, app.EDPlotTree.FontColor = tPm.treeFg; catch; end
 
             propPanel = uipanel(mid, 'Title', '선택 항목 속성', ...
                 'FontWeight', 'bold', 'Scrollable', 'on');
@@ -8422,7 +8429,7 @@
                 pad = 0;
                 if isfield(app.UI(fIdx), 'vidContainer') && ~isempty(app.UI(fIdx).vidContainer) && ...
                         isvalid(app.UI(fIdx).vidContainer)
-                    app.UI(fIdx).vidContainer.BackgroundColor = [0 0 0];
+                    app.UI(fIdx).vidContainer.BackgroundColor = app.getLightTheme().videoPanelBg;   % v3-D: 외부 컨테이너 light
                 end
                 app.UI(fIdx).vidAxes.Units = 'pixels';
                 app.UI(fIdx).vidAxes.Position = [pad, pad, sizePx(1), sizePx(2)];
@@ -10240,13 +10247,15 @@
         end
 
         function t = getLightTheme(~)
-            % v2-style: 샘플.png 기반 light blue window + white surface.
+            % v3-style: sample.png 기반 light/calm 팔레트. saturated blue 는 accent 전용.
             t = struct();
-            t.windowBg       = [0.92 0.96 1.00];
+            t.windowBg       = [0.94 0.96 0.98];
+            t.appShellBg     = [0.94 0.96 0.98];
             t.surfaceBg      = [1.00 1.00 1.00];
-            t.surfaceAltBg   = [0.95 0.98 1.00];
-            t.headerBg       = [0.00 0.36 0.58];
-            t.borderColor    = [0.35 0.58 0.76];
+            t.surfaceAltBg   = [0.97 0.98 1.00];
+            t.headerBg       = [0.82 0.88 0.95];   % v3: 연한 blue strip (saturated 아님)
+            t.dividerColor   = [0.78 0.83 0.88];
+            t.borderColor    = [0.62 0.72 0.82];
             t.gridLine       = [0.74 0.84 0.92];
             t.textPrimary    = [0.03 0.05 0.07];
             t.textSecondary  = [0.10 0.18 0.25];
@@ -10273,8 +10282,41 @@
             t.gaugeHeadingBg = [0.82 0.94 0.84];
             t.gaugeTickFg    = [0.03 0.05 0.07];
             t.gaugeNeedleFg  = [0.95 0.67 0.10];
-            t.videoPlaceholderBg = [0.92 0.96 1.00];
+            t.videoPlaceholderBg = [0.94 0.96 0.98];
             t.videoAxesBg        = [0.02 0.02 0.02];
+            t.panelBg            = [1.00 1.00 1.00];
+            t.panelAltBg         = [0.97 0.98 1.00];
+            t.panelTitleBg       = [0.86 0.92 0.97];
+            t.panelTitleFg       = [0.05 0.12 0.20];
+            t.tabActiveBg        = [1.00 1.00 1.00];
+            t.tabActiveFg        = [0.05 0.12 0.20];
+            t.tabInactiveBg      = [0.88 0.92 0.96];
+            t.tabInactiveFg      = [0.18 0.24 0.30];
+            t.buttonBg           = [0.93 0.95 0.97];
+            t.buttonFg           = [0.05 0.10 0.18];
+            t.buttonActiveBg     = [0.82 0.89 0.96];
+            t.buttonActiveFg     = [0.00 0.18 0.32];
+            t.buttonDisabledBg   = [0.86 0.88 0.90];
+            t.buttonDisabledFg   = [0.45 0.50 0.55];
+            t.fieldBg            = [1.00 1.00 1.00];
+            t.fieldFg            = [0.05 0.10 0.18];
+            t.tableHeaderFg      = [0.05 0.12 0.20];
+            t.mapAxesBg          = [1.00 1.00 1.00];
+            t.altAxesBg          = [1.00 1.00 1.00];
+            t.gaugePanelBg       = [1.00 1.00 1.00];
+            t.gaugeAxesBg        = [1.00 1.00 1.00];
+            t.gaugeTextFg        = [0.05 0.10 0.18];
+            t.videoPanelBg       = [0.94 0.96 0.98];
+            t.dialogBg           = [0.95 0.97 0.99];
+            t.dialogHeaderBg     = [0.86 0.92 0.97];
+            t.dialogTabBg        = [0.88 0.92 0.96];
+            t.dialogTabSelectedBg= [1.00 1.00 1.00];
+            t.treeBg             = [1.00 1.00 1.00];
+            t.treeFg             = [0.05 0.10 0.18];
+            t.plotTitleFg        = [0.05 0.10 0.18];
+            t.plotLabelFg        = [0.18 0.24 0.30];
+            t.plotTickFg         = [0.30 0.36 0.42];
+            t.plotGridColor      = [0.78 0.84 0.92];
             t.fontFamily     = 'Segoe UI';
             t.fontFamilyMono = 'Consolas';
             t.fontSizeSmall  = 11;
@@ -10291,10 +10333,10 @@
             t.btnDisabledFg  = [0.32 0.36 0.40];
             t.btnWarningBg   = [0.78 0.16 0.12];
             t.btnWarningFg   = [1.00 1.00 1.00];
-            % v2-style: blue panel + role-based toolbar palette
-            t.panelBlueBg    = [0.00 0.36 0.58];
-            t.panelBlueBg2   = [0.02 0.43 0.68];
-            t.panelBlueFg    = [1.00 1.00 1.00];
+            % v3-style: panel header → 연한 blue strip (sample 일관)
+            t.panelBlueBg    = [0.86 0.92 0.97];
+            t.panelBlueBg2   = [0.82 0.89 0.95];
+            t.panelBlueFg    = [0.05 0.12 0.20];
             t.toolbarYellowBg = [0.98 0.78 0.18];
             t.toolbarYellowFg = [0.05 0.05 0.05];
             t.toolbarGreenBg  = [0.00 0.58 0.22];
@@ -10386,6 +10428,7 @@
                 app.applyThemeToAxes(root, t);
                 app.applyThemeToInputs(root, t);
                 app.applyThemeToTabs(root, t);
+                app.applyThemeToTrees(root, t);
                 app.applyLightPanelTitleContrast(root);
             catch ME
                 app.logCaught(ME, 'applyLightTheme');
@@ -10633,6 +10676,26 @@
             end
         end
 
+        function applyThemeToTrees(app, root, t)
+            % v3-B7: uitree light bg + readable text.
+            try
+                trees = findall(root, 'Type', 'uitree');
+            catch
+                trees = [];
+            end
+            for k = 1:numel(trees)
+                tr = trees(k);
+                if isempty(tr) || ~isvalid(tr), continue; end
+                try
+                    if isprop(tr, 'BackgroundColor'), tr.BackgroundColor = t.treeBg; end
+                catch
+                end
+                try
+                    if isprop(tr, 'FontColor'), tr.FontColor = t.treeFg; end
+                catch
+                end
+        end
+
         function offUi = createBoardOffSummaryPanel(app, parentGrid, fIdx)
             themeT = app.getLightTheme();   % v-style
             pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
@@ -10777,13 +10840,13 @@
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
 
-                uilabel(glCtrl, 'Text', '입력 시간(s):', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.textInverse);
+                uilabel(glCtrl, 'Text', '입력 시간(s):', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.panelTitleFg);
                 UI_temp(fIdx).spinner = uispinner(glCtrl, 'Enable', 'off', 'FontSize', 13, 'ValueDisplayFormat', '%.3f', ...
                                              'BackgroundColor', [1 1 1], 'FontColor', tT.textPrimary, ...
                                              'ValueChangedFcn', @(~, event) app.handleSpinnerChange(fIdx, event.Value));
-                uilabel(glCtrl, 'Text', '실시간 현재값:', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.textInverse);
-                UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', [1.00 0.90 0.25]);
-                UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', [1 1 1], 'FontSize', 11, 'FontWeight', 'bold');
+                uilabel(glCtrl, 'Text', '실시간 현재값:', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.panelTitleFg);
+                UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', tT.warningRed);
+                UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', tT.textSecondary, 'FontSize', 11, 'FontWeight', 'bold');
 
                 % v-style: 패널 토글 버튼 role 컬러 (Att=blue, Map=green, Alt=blue, Info=yellow, Plot=purple, Vid=dark)
                 UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
@@ -10981,7 +11044,7 @@
 
                 % Row 2: 고정 표시 해상도 영상 영역(컨테이너 스크롤 가능)
                 UI_temp(fIdx).vidContainer = uipanel(iGrid2, 'BorderType', 'none', ...
-                    'Scrollable', 'on', 'BackgroundColor', [0 0 0]);
+                    'Scrollable', 'on', 'BackgroundColor', tT.videoPanelBg);   % v3-D: 외부 컨테이너 light, vidAxes 만 black
                 UI_temp(fIdx).vidContainer.Layout.Row = 2;
                 UI_temp(fIdx).vidAxes = uiaxes(UI_temp(fIdx).vidContainer, ...
                     'Units', 'pixels', 'Position', [0 0 720 512]);
@@ -11203,7 +11266,7 @@
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
             t = app.getLightTheme();   % v-style
-            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', t.headerBg, 'ForegroundColor', t.textInverse, 'BorderType', 'line');
+            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', t.headerBg, 'ForegroundColor', t.textPrimary, 'BorderType', 'line');
             glHeader = uigridlayout(hHeaderPanel, [1 12]);
             glHeader.BackgroundColor = t.headerBg;
             glHeader.ColumnWidth = {110, 110, 100, 104, 104, 430, '1x', 150, 120, 72, 72, 104};
