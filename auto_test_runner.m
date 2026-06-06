@@ -44,6 +44,7 @@ function auto_test_runner(varargin)
     p.addParameter('CaptureMode', 'baseline', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureScale', 0.60, @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0 && x <= 1);
     p.addParameter('OnlineSafeMode', false, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+    p.addParameter('OutputDir', '', @(s) ischar(s) || isstring(s));
     p.parse(varargin{:});
     opts = p.Results;
     loadAviMode = lower(char(opts.LoadAvi));
@@ -79,7 +80,12 @@ function auto_test_runner(varargin)
     end
     captureOpts = struct('mode', captureMode, 'scale', captureScale);
 
-    outDir = i_resolveOutputDir();
+    % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
+    if ~isempty(char(opts.OutputDir))
+        outDir = char(opts.OutputDir);
+    else
+        outDir = i_resolveOutputDir();
+    end
     if ~isfolder(outDir), mkdir(outDir); end
     fprintf('[auto_test_runner] output dir: %s\n', outDir);
 

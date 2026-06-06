@@ -9466,6 +9466,13 @@
                 st = app.UI(fIdx).PanelVisible;
                 thk = app.LAYOUT_SPLITTER_THICKNESS;
 
+                % v3-audit B: board-off active 시 single-board analysis 목적 — info+plot 강제 visible
+                activeOff = find(app.BoardOffState, 1);
+                isBoardOffSource = ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff);
+                if isBoardOffSource
+                    if isfield(st, 'info'), st.info = true; app.UI(fIdx).PanelVisible.info = true; end
+                    if isfield(st, 'dataView'), st.dataView = true; app.UI(fIdx).PanelVisible.dataView = true; end
+                end
                 upperOn = (isfield(st,'info') && st.info) || (isfield(st,'dataView') && st.dataView);
                 lowerOn = (isfield(st,'attitude') && st.attitude) || ...
                           (isfield(st,'mapOnly') && st.mapOnly) || ...
