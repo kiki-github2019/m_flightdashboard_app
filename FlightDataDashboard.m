@@ -260,7 +260,7 @@
             app.UIFigure = uifigure('Name', '비행 데이터 리뷰 대시보드 (Dual)', ...
                                     'Units', 'pixels', ...
                                     'Position', app.NormalWindowPosition, ...
-                                    'Color', [0.94 0.94 0.96], ...
+                                    'Color', app.getLightTheme().windowBg, ...
                                     'CloseRequestFcn', @app.UIFigureCloseRequest);
             try
                 if isprop(app.UIFigure, 'Resize')
@@ -3804,7 +3804,9 @@
                 return;
             end
 
-            newTab = uitab(app.UI(fIdx).tabGroup, 'Title', sprintf('Tab %d', nTabs+1));
+            tTheme = app.getLightTheme();   % v-style
+            newTab = uitab(app.UI(fIdx).tabGroup, 'Title', sprintf('Tab %d', nTabs+1), ...
+                'BackgroundColor', [1 1 1], 'ForegroundColor', tTheme.textPrimary);
             app.UI(fIdx).plotTabs(end+1) = newTab;
 
             plotLayout = uigridlayout(newTab, 'ColumnWidth', {'1x'}, 'RowHeight', {}, ...
@@ -4002,7 +4004,8 @@
             targetLayout.RowHeight{end+1} = app.PLOT_ROW_HEIGHT;
             newRowIdx = numel(targetLayout.RowHeight);
 
-            p = uipanel(targetLayout, 'BorderType', 'line', 'BackgroundColor', 'w');
+            tTheme = app.getLightTheme();   % v-style
+            p = uipanel(targetLayout, 'BorderType', 'line', 'BackgroundColor', [1 1 1]);
             p.Layout.Row = newRowIdx;
             p.Layout.Column = 1;
 
@@ -4010,6 +4013,10 @@
             ax = uiaxes(axGrid);
             ax.Layout.Row = 1;
             ax.Layout.Column = 1;
+            try, ax.Color = [1 1 1]; catch, end
+            try, ax.XColor = tTheme.textSecondary; catch, end
+            try, ax.YColor = tTheme.textSecondary; catch, end
+            try, ax.GridColor = tTheme.gridLine; catch, end
 
             % [V3.10] H 패널 Tab 플롯 전용 커스텀 툴바 (Restore/ZoomIn/ZoomOut/Pan)
             %         Map/Altitude/비디오/게이지 axes는 툴바 숨김 유지
@@ -5751,12 +5758,13 @@
             try
                 if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
                 if ~isempty(app.EditDialogDirtyLbl) && isvalid(app.EditDialogDirtyLbl)
+                    tEd = app.getLightTheme();   % v-style
                     if app.ProjectDirty
                         app.EditDialogDirtyLbl.Text = '변경됨 ●';
-                        app.EditDialogDirtyLbl.FontColor = [0.8 0.2 0.2];
+                        app.EditDialogDirtyLbl.FontColor = tEd.warningRed;
                     else
                         app.EditDialogDirtyLbl.Text = '변경 없음';
-                        app.EditDialogDirtyLbl.FontColor = [0.4 0.4 0.4];
+                        app.EditDialogDirtyLbl.FontColor = tEd.textSecondary;
                     end
                 end
                 if ~isempty(app.EditDialogTimeLbl) && isvalid(app.EditDialogTimeLbl) ...
@@ -5808,7 +5816,7 @@
             gl.RowSpacing = 6; gl.Padding = [10 10 10 10];
 
             uilabel(gl, 'Text', 'Project 파일:', 'FontWeight', 'bold');
-            app.EDProjectPathLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectPathLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', app.getLightTheme().accentBlueText);
             app.EDProjectPathLbl.Layout.Column = 2;
             uibutton(gl, 'Text', '열기...', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogOpenProject());
@@ -5816,7 +5824,7 @@
                 'ButtonPushedFcn', @(~,~) app.editDialogSaveProjectAs());
 
             uilabel(gl, 'Text', '저장:', 'FontWeight', 'bold');
-            app.EDProjectStatusLbl = uilabel(gl, 'Text', '미저장', 'FontColor', [0.4 0.4 0.4]);
+            app.EDProjectStatusLbl = uilabel(gl, 'Text', '미저장', 'FontColor', app.getLightTheme().textSecondary);
             app.EDProjectStatusLbl.Layout.Column = 2;
             uibutton(gl, 'Text', '저장', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSaveProject());
@@ -5836,11 +5844,11 @@
             app.EDProjectConfirmCloseCB.Layout.Column = [2 4];
 
             uilabel(gl, 'Text', '마지막 저장:', 'FontWeight', 'bold');
-            app.EDProjectLastSaveLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectLastSaveLbl = uilabel(gl, 'Text', '(없음)', 'FontColor', app.getLightTheme().accentBlueText);
             app.EDProjectLastSaveLbl.Layout.Column = [2 4];
 
             uilabel(gl, 'Text', 'Layout preset:', 'FontWeight', 'bold');
-            app.EDProjectLayoutLbl = uilabel(gl, 'Text', '0개 / custom', 'FontColor', [0.3 0.3 0.7]);
+            app.EDProjectLayoutLbl = uilabel(gl, 'Text', '0개 / custom', 'FontColor', app.getLightTheme().accentBlueText);
             app.EDProjectLayoutLbl.Layout.Column = 2;
             btn = uibutton(gl, 'Text', '현재 레이아웃 저장', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogSaveLayoutPreset());
@@ -5867,7 +5875,7 @@
                 for k = 1:numel(pairs)
                     kind = pairs{k}{1};
                     uilabel(gl, 'Text', [pairs{k}{2} ':'], 'FontWeight', 'bold');
-                    lbl = uilabel(gl, 'Text', '(없음)', 'FontColor', [0.3 0.3 0.7]);
+                    lbl = uilabel(gl, 'Text', '(없음)', 'FontColor', app.getLightTheme().accentBlueText);
                     lbl.Layout.Column = 2;
                     app.EDFilesPathLbl.(sprintf('f%d_%s', fIdx, kind)) = lbl;
                     uibutton(gl, 'Text', '변경...', ...
@@ -5908,7 +5916,7 @@
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyFlightSync(false));
             % [F-04] Offset preview spans full row.
             app.EDSyncOffsetLbl = uilabel(gl, 'Text', 'Offset (t2 - t1): 0.000 s', ...
-                'FontColor', [0.3 0.3 0.7], 'FontWeight', 'bold');
+                'FontColor', app.getLightTheme().accentBlueText, 'FontWeight', 'bold');
             app.EDSyncOffsetLbl.Layout.Column = [1 5];
 
             for fIdx = 1:2
@@ -6101,7 +6109,7 @@
                 'ButtonPushedFcn', @(~,~) app.editDialogPickExportFolder());
 
             uilabel(gl, 'Text', '생성될 폴더:', 'FontWeight', 'bold');
-            app.EDExpPreviewLbl = uilabel(gl, 'Text', '(자동 생성)', 'FontColor', [0.3 0.3 0.7]);
+            app.EDExpPreviewLbl = uilabel(gl, 'Text', '(자동 생성)', 'FontColor', app.getLightTheme().accentBlueText);
             uilabel(gl, 'Text', '');
 
             uilabel(gl, 'Text', 'SHA256 검증:', 'FontWeight', 'bold');
@@ -6122,7 +6130,7 @@
             app.EDExpFileTable.Layout.Column = [1 3];
 
             uilabel(gl, 'Text', '누락/요약:', 'FontWeight', 'bold');
-            app.EDExpMissingLbl = uilabel(gl, 'Text', '파일 0개', 'FontColor', [0.3 0.3 0.7]);
+            app.EDExpMissingLbl = uilabel(gl, 'Text', '파일 0개', 'FontColor', app.getLightTheme().accentBlueText);
             app.EDExpMissingLbl.Layout.Column = [2 3];
 
             uilabel(gl, 'Text', 'Progress log:', 'FontWeight', 'bold');
@@ -8449,7 +8457,8 @@
             root.Padding = [6 6 6 6];
             root.RowSpacing = 5;
 
-            syncPnl = uipanel(root, 'Title', '동기 설정', 'BackgroundColor', 'w', 'FontSize', ctrlSmallFont);
+            tT = app.getLightTheme();   % v-style
+            syncPnl = uipanel(root, 'Title', '동기 설정', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary, 'FontSize', ctrlSmallFont);
             glSync = uigridlayout(syncPnl, [1 6], ...
                 'ColumnWidth', {70, 105, 74, 120, '1x', 100}, ...
                 'Padding', [6 4 6 4], 'ColumnSpacing', 6);
@@ -8461,14 +8470,14 @@
                 'ValueDisplayFormat', '%.3f', 'FontSize', ctrlFont);
             uilabel(glSync, 'Text', '');
             ctrl.vidSyncBtn = uibutton(glSync, 'Text', '동기', ...
-                'BackgroundColor', [0.58 0.0 0.83], 'FontColor', 'w', ...
+                'BackgroundColor', tT.toolbarGreenBg, 'FontColor', tT.toolbarGreenFg, ...
                 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.applyVideoSync(fIdx));
 
             vdubGroupPnl = uipanel(root, 'Title', 'Frame Navigator', ...
                 'FontSize', ctrlSmallFont, 'FontWeight', 'bold', ...
-                'BackgroundColor', [0.97 0.97 0.99], ...
-                'BorderType', 'line', 'ForegroundColor', [0.1 0.2 0.5]);
+                'BackgroundColor', [0.94 0.96 0.98], ...
+                'BorderType', 'line', 'ForegroundColor', tT.textPrimary);
             vdubGrid = uigridlayout(vdubGroupPnl, [3 1]);
             vdubGrid.RowHeight = {24, 48, 36};
             vdubGrid.Padding = [8 3 8 2];
@@ -8476,7 +8485,7 @@
             ctrl.vidVdubLabel = uilabel(vdubGrid, ...
                 'Text', 'Frame 1 / 1  (00:00:00.000)', ...
                 'FontSize', ctrlFont, 'FontWeight', 'bold', ...
-                'FontName', 'Consolas', 'FontColor', [0.1 0.2 0.5], ...
+                'FontName', 'Consolas', 'FontColor', tT.accentBlueText, ...
                 'HorizontalAlignment', 'center');
             ctrl.vidVdubSlider = uislider(vdubGrid, ...
                 'Limits', [1 100], 'Value', 1, ...
@@ -8484,7 +8493,7 @@
                 'MinorTicks', [], ...
                 'ValueChangingFcn', @(~,evt) app.onVdubSliderChanging(fIdx, evt.Value), ...
                 'ValueChangedFcn',  @(src,~) app.onVdubSliderChanged(fIdx, src));
-            navPnl = uipanel(vdubGrid, 'BorderType', 'none', 'BackgroundColor', [0.97 0.97 0.99]);
+            navPnl = uipanel(vdubGrid, 'BorderType', 'none', 'BackgroundColor', [0.94 0.96 0.98]);
             glNav = uigridlayout(navPnl, [1 4], ...
                 'ColumnWidth', {'1x', '1x', '1x', '1x'}, ...
                 'Padding', [0 0 0 0], 'ColumnSpacing', 8);
@@ -8501,7 +8510,7 @@
                 'Tooltip', '10 프레임 앞으로 (+10)', ...
                 'ButtonPushedFcn', @(~,~) app.onVdubNav(fIdx, 'last'));
 
-            hzPnl = uipanel(root, 'BackgroundColor', 'w', 'BorderType', 'line');
+            hzPnl = uipanel(root, 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary, 'BorderType', 'line');
             glHz = uigridlayout(hzPnl, [1 12], ...
                 'ColumnWidth', {80, 30, 56, 30, 12, 68, 30, 56, 30, 12, 60, 100}, ...
                 'Padding', [6 4 6 4], 'ColumnSpacing', 4);
@@ -9655,11 +9664,11 @@
                         btn = app.LayoutPresetButtons(k);
                         if isempty(btn) || ~isvalid(btn), continue; end
                         if strcmp(app.CurrentLayoutPreset, names{k})
-                            btn.BackgroundColor = t.btnActiveBg;
-                            btn.FontColor = t.btnActiveFg;
+                            btn.BackgroundColor = t.toolbarYellowBg;
+                            btn.FontColor = t.toolbarYellowFg;
                         else
-                            btn.BackgroundColor = t.btnNormalBg;
-                            btn.FontColor = t.btnNormalFg;
+                            btn.BackgroundColor = t.toolbarGrayBg;
+                            btn.FontColor = t.toolbarGrayFg;
                         end
                         btn.Text = icons{k};
                     end
@@ -10075,10 +10084,12 @@
         end
 
         function applyLightPanelTitleContrast(app, root)
+            % v-style: light bg → dark title, dark/blue bg → white title.
             try
+                t = app.getLightTheme();
                 panels = findall(root, 'Type', 'uipanel');
             catch
-                panels = [];
+                panels = []; t = struct();
             end
             for k = 1:numel(panels)
                 p = panels(k);
@@ -10087,17 +10098,19 @@
                             || isempty(char(p.Title)) || ~isprop(p, 'ForegroundColor')
                         continue;
                     end
-                    isLightBg = false;
                     if isprop(p, 'BackgroundColor')
                         bg = p.BackgroundColor;
+                        bgIsLight = false;
                         if isnumeric(bg) && numel(bg) == 3
-                            isLightBg = all(double(bg) >= 0.90);
+                            bgIsLight = mean(double(bg)) >= 0.70;
                         elseif ischar(bg) || isstring(bg)
-                            isLightBg = any(strcmpi(char(bg), {'w', 'white'}));
+                            bgIsLight = any(strcmpi(char(bg), {'w', 'white'}));
                         end
-                    end
-                    if isLightBg
-                        p.ForegroundColor = [0 0 0];
+                        if bgIsLight
+                            p.ForegroundColor = t.textPrimary;
+                        else
+                            p.ForegroundColor = t.panelBlueFg;
+                        end
                     end
                 catch ME
                     app.logCaught(ME, 'enforceReadablePanelTitles');
@@ -10106,47 +10119,60 @@
         end
 
         function t = getLightTheme(~)
-            % v4-Theme: MATLAB Editor 라이트 테마. 중앙 컬러/폰트 정의.
-            % MATLAB Online + 2025a 모두에서 가독성 보장 (white bg + dark text).
+            % v-style: MATLAB desktop blue-header + light content. 중앙 컬러/폰트 정의.
             t = struct();
-            t.windowBg       = [0.96 0.96 0.96];   % uifigure / dialog window
-            t.surfaceBg      = [1.00 1.00 1.00];   % panel surface (Editor-like)
-            t.surfaceAltBg   = [0.97 0.97 0.97];   % inactive button / striped row
-            t.headerBg       = [0.94 0.94 0.94];   % header / toolbar bar
-            t.borderColor    = [0.78 0.78 0.78];
-            t.gridLine       = [0.85 0.85 0.85];
-            t.textPrimary    = [0.10 0.10 0.10];
-            t.textSecondary  = [0.35 0.35 0.35];
-            t.textMuted      = [0.55 0.55 0.55];
+            t.windowBg       = [0.90 0.93 0.96];
+            t.surfaceBg      = [1.00 1.00 1.00];
+            t.surfaceAltBg   = [0.94 0.96 0.98];
+            t.headerBg       = [0.00 0.30 0.50];   % dark MATLAB-like blue header
+            t.borderColor    = [0.30 0.48 0.65];
+            t.gridLine       = [0.78 0.84 0.90];
+            t.textPrimary    = [0.05 0.05 0.05];
+            t.textSecondary  = [0.18 0.24 0.30];
+            t.textMuted      = [0.42 0.48 0.55];
             t.textInverse    = [1.00 1.00 1.00];
-            t.accentBlue     = [0.15 0.38 0.82];
-            t.accentBlueLite = [0.86 0.92 1.00];
-            t.accentBlueText = [0.05 0.15 0.32];
-            t.accentGreen    = [0.06 0.65 0.50];
-            t.warningRed     = [0.80 0.18 0.18];
-            t.successGreen   = [0.06 0.45 0.22];
-            t.disabledBg     = [0.90 0.90 0.90];
-            t.disabledFg     = [0.45 0.45 0.45];
-            t.tableHeaderBg  = [0.93 0.93 0.93];
+            t.accentBlue     = [0.00 0.42 0.72];
+            t.accentBlueLite = [0.82 0.91 1.00];
+            t.accentBlueText = [0.00 0.18 0.35];
+            t.accentGreen    = [0.00 0.58 0.22];
+            t.warningRed     = [0.78 0.16 0.12];
+            t.successGreen   = [0.00 0.48 0.20];
+            t.disabledBg     = [0.82 0.85 0.88];
+            t.disabledFg     = [0.32 0.36 0.40];
+            t.tableHeaderBg  = [0.91 0.94 0.97];
             t.tableRowBgA    = [1.00 1.00 1.00];
-            t.tableRowBgB    = [0.96 0.96 0.98];
+            t.tableRowBgB    = [0.94 0.97 1.00];
             t.axesBg         = [1.00 1.00 1.00];
             t.fontFamily     = 'Segoe UI';
             t.fontFamilyMono = 'Consolas';
-            t.fontSizeSmall  = 10;
+            t.fontSizeSmall  = 11;
             t.fontSizeBase   = 12;
             t.fontSizeLarge  = 14;
-            % Button states — MATLAB Editor: blue accent for active/selected, red 은 warning 전용
-            t.btnActiveBg    = t.accentBlue;       % v4-L2: 활성 토글 = 파란색 accent (red 아님)
-            t.btnActiveFg    = t.textInverse;
-            t.btnAccentBg    = t.accentBlueLite;
-            t.btnAccentFg    = t.accentBlueText;
-            t.btnNormalBg    = t.surfaceAltBg;
-            t.btnNormalFg    = t.textPrimary;
-            t.btnDisabledBg  = t.disabledBg;
-            t.btnDisabledFg  = t.disabledFg;
-            t.btnWarningBg   = t.warningRed;       % 명시적 경고/위험 액션 전용
-            t.btnWarningFg   = t.textInverse;
+            % Button states
+            t.btnActiveBg    = [0.00 0.42 0.72];
+            t.btnActiveFg    = [1.00 1.00 1.00];
+            t.btnAccentBg    = [0.96 0.78 0.20];
+            t.btnAccentFg    = [0.05 0.05 0.05];
+            t.btnNormalBg    = [0.90 0.92 0.95];
+            t.btnNormalFg    = [0.05 0.05 0.05];
+            t.btnDisabledBg  = [0.82 0.85 0.88];
+            t.btnDisabledFg  = [0.32 0.36 0.40];
+            t.btnWarningBg   = [0.78 0.16 0.12];
+            t.btnWarningFg   = [1.00 1.00 1.00];
+            % v-style: blue panel + role-based toolbar palette
+            t.panelBlueBg    = [0.00 0.30 0.50];
+            t.panelBlueBg2   = [0.02 0.37 0.60];
+            t.panelBlueFg    = [1.00 1.00 1.00];
+            t.toolbarYellowBg = [0.98 0.78 0.18];
+            t.toolbarYellowFg = [0.05 0.05 0.05];
+            t.toolbarGreenBg  = [0.00 0.58 0.22];
+            t.toolbarGreenFg  = [1.00 1.00 1.00];
+            t.toolbarBlueBg   = [0.00 0.42 0.72];
+            t.toolbarBlueFg   = [1.00 1.00 1.00];
+            t.toolbarGrayBg   = [0.86 0.88 0.90];
+            t.toolbarGrayFg   = [0.05 0.05 0.05];
+            t.toolbarDarkBg   = [0.04 0.10 0.16];
+            t.toolbarDarkFg   = [1.00 1.00 1.00];
         end
 
         function applyLightTheme(app, root)
@@ -10176,42 +10202,20 @@
         end
 
         function applyThemeToPanels(app, root, t)
-            % v4-L2: uipanel + uigridlayout 배경 light normalize.
+            % v-style: 의도된 dark/blue 배경은 보존. bordered panel 만 borderColor 통일.
             try
                 panels = findall(root, 'Type', 'uipanel');
                 for k = 1:numel(panels)
                     p = panels(k);
                     if isempty(p) || ~isvalid(p), continue; end
                     try
-                        if isprop(p, 'BackgroundColor')
-                            bg = p.BackgroundColor;
-                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
-                                p.BackgroundColor = t.surfaceBg;
-                            end
-                        end
                         if isprop(p, 'BorderColor') && isprop(p, 'BorderType') && ~strcmp(char(p.BorderType), 'none')
-                            bc = p.BorderColor;
-                            if isnumeric(bc) && numel(bc) == 3 && all(double(bc) < 0.4)
-                                p.BorderColor = t.borderColor;
-                            end
+                            p.BorderColor = t.borderColor;
                         end
                     catch
                     end
                 end
-                grids = findall(root, 'Type', 'uigridlayout');
-                for k = 1:numel(grids)
-                    g = grids(k);
-                    if isempty(g) || ~isvalid(g), continue; end
-                    try
-                        if isprop(g, 'BackgroundColor')
-                            bg = g.BackgroundColor;
-                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
-                                g.BackgroundColor = t.surfaceBg;
-                            end
-                        end
-                    catch
-                    end
-                end
+                % uigridlayout: 의도 dark 도 보존 (NO normalize)
             catch ME
                 app.logCaught(ME, 'theme:panels');
             end
@@ -10422,26 +10426,27 @@
         end
 
         function offUi = createBoardOffSummaryPanel(app, parentGrid, fIdx)
+            themeT = app.getLightTheme();   % v-style
             pnl = uipanel(parentGrid, 'Title', sprintf('Flight Data %d - Board Off Summary', fIdx), ...
-                'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', [0.98 0.98 0.98], ...
+                'FontWeight', 'bold', 'FontSize', 14, ...
+                'BackgroundColor', themeT.panelBlueBg, 'ForegroundColor', themeT.panelBlueFg, ...
                 'Visible', 'off');
             pnl.Layout.Row = app.getBoardOffSummaryGridRow(fIdx);
             pnl.Layout.Column = 1;
 
             root = uigridlayout(pnl, [1 2]);
+            root.BackgroundColor = themeT.panelBlueBg;
             root.ColumnWidth = {300, '1x'};
             root.RowHeight = {'1x'};
             root.Padding = [4 4 4 4];
             root.ColumnSpacing = 6;
 
             infoPanel = uipanel(root, 'Title', '현재 비행 정보', ...
-                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
+                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', themeT.textPrimary, 'Scrollable', 'on');
             infoPanel.Layout.Column = 1;
             infoGrid = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
-            tblBgColor = app.getFlightTableBgColor(fIdx);
-            themeT = app.getLightTheme();
-            tbl = uitable(infoGrid, 'BackgroundColor', tblBgColor, 'ForegroundColor', themeT.textPrimary, ...
-                'FontWeight', 'bold', 'RowStriping', 'off', 'ColumnName', {'항목', '값'}, ...
+            tbl = uitable(infoGrid, 'BackgroundColor', [1.00 1.00 1.00; 0.94 0.97 1.00], 'ForegroundColor', themeT.textPrimary, ...
+                'FontWeight', 'bold', 'RowStriping', 'on', 'ColumnName', {'항목', '값'}, ...
                 'RowName', [], 'ColumnWidth', {'26x', '24x'}, 'FontSize', 11, 'FontName', 'Consolas');
             cm = uicontextmenu(app.UIFigure);
             uimenu(cm, 'Text', 'H 영역에 Plot 추가 (현재 행)', ...
@@ -10450,15 +10455,12 @@
             tbl.CellSelectionCallback = @(~, event) app.boardOffTableSelection(fIdx, event);
 
             plotPanel = uipanel(root, 'Title', 'plot 데이터', ...
-                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', themeT.textPrimary);
             plotPanel.Layout.Column = 2;
             plotGrid = uigridlayout(plotPanel, [2 1], 'Padding', [2 2 2 2]);
             plotGrid.RowHeight = {28, '1x'};
             plotGrid.RowSpacing = 4;
-            % [Bug fix] Use uigridlayout for the button row instead of an absolute-positioned
-            % uipanel. A uipanel nested in a uigridlayout auto-normalizes child positions and
-            % the previous [5 5 90 22] pixel layout was collapsing the two buttons out of view.
-            btnRow = uigridlayout(plotGrid, [1 3], 'Padding', [2 2 2 2], 'ColumnSpacing', 4);
+            btnRow = uigridlayout(plotGrid, [1 3], 'Padding', [2 2 2 2], 'ColumnSpacing', 4, 'BackgroundColor', [0.94 0.96 0.98]);
             btnRow.Layout.Row = 1;
             btnRow.ColumnWidth = {110, 120, '1x'};
             uibutton(btnRow, 'Text', '+ 빈 탭 추가', ...
@@ -10470,10 +10472,10 @@
             tg = uitabgroup(plotGrid);
             tg.Layout.Row = 2;
             tg.SelectionChangedFcn = @(~,~) app.syncBoardOffSelectedTab(fIdx);
-            blankTab = uitab(tg, 'Title', 'Tab 1');
+            blankTab = uitab(tg, 'Title', 'Tab 1', 'BackgroundColor', [1 1 1]);
             blankGrid = uigridlayout(blankTab, [1 1], 'Padding', [8 8 8 8]);
             uilabel(blankGrid, 'Text', '표시할 plot 없음', ...
-                'HorizontalAlignment', 'center', 'FontColor', [0.45 0.45 0.45], 'FontWeight', 'bold');
+                'HorizontalAlignment', 'center', 'FontColor', themeT.textSecondary, 'FontWeight', 'bold');
 
             % [R-10] Off-summary panels are late-created, so apply title contrast here.
             app.applyLightPanelTitleContrast(pnl);
@@ -10492,21 +10494,23 @@
             app.buildHeaderBar(mainLayout);
 
             % --- Body (2 비행경로 vertical stack) ---
-            scrollBody = uipanel(mainLayout, 'Scrollable', 'on', 'BorderType', 'none', 'BackgroundColor', [0.94 0.94 0.96]);
+            tT = app.getLightTheme();   % v-style
+            scrollBody = uipanel(mainLayout, 'Scrollable', 'on', 'BorderType', 'none', 'BackgroundColor', tT.windowBg);
             bodyGrid = uigridlayout(scrollBody, [4 1]);
+            bodyGrid.BackgroundColor = tT.windowBg;
             bodyGrid.ColumnWidth = {'1x'};
             bodyGrid.RowHeight = {'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0};
             bodyGrid.Padding = [2 2 2 2];
             bodyGrid.RowSpacing = 2;
             app.BodyGrid = bodyGrid;   % [L1 C-1] retain for runtime RowHeight reflow
-            app.BodyRowSplitter = uipanel(bodyGrid, 'BackgroundColor', [0.55 0.55 0.58], ...
+            app.BodyRowSplitter = uipanel(bodyGrid, 'BackgroundColor', [0.18 0.36 0.52], ...
                 'BorderType', 'none');
             app.BodyRowSplitter.Layout.Row = 2;
             app.BodyRowSplitter.Layout.Column = 1;
             app.BodyRowSplitter.ButtonDownFcn = @(~,~) app.startBodyRowSplitterDrag();
 
             titleStrs = {'Flight Data 1', 'Flight Data 2'};
-            panelColors = {[0.98 0.98 0.98], [0.98 0.98 0.98]};
+            panelColors = {tT.panelBlueBg, tT.panelBlueBg2};   % v-style: blue panel
             panelWidths = app.getResponsivePanelWidths();
 
             UI_temp = struct('panel', {}, 'dataTable', {}, 'spinner', {}, 'currentTimeLabel', {}, 'fileNameLabel', {}, ...
@@ -10543,41 +10547,57 @@
                 %   (g) Col 6: 비디오 + Frame Navigator
 
                 % --- (a) 메인 패널 + 컨트롤바 ---
-                UI_temp(fIdx).panel = uipanel(bodyGrid, 'Title', titleStrs{fIdx}, 'FontWeight', 'bold', 'FontSize', 14, 'BackgroundColor', panelColors{fIdx});
+                UI_temp(fIdx).panel = uipanel(bodyGrid, 'Title', titleStrs{fIdx}, 'FontWeight', 'bold', 'FontSize', 14, ...
+                    'BackgroundColor', panelColors{fIdx}, 'ForegroundColor', tT.panelBlueFg);
                 UI_temp(fIdx).panel.Layout.Row = app.getBodyGridRowForFlight(fIdx);
                 UI_temp(fIdx).panel.Layout.Column = 1;
                 fGrid = uigridlayout(UI_temp(fIdx).panel, [2 1]);
+                fGrid.BackgroundColor = panelColors{fIdx};
                 fGrid.ColumnWidth = {'1x'};
                 fGrid.RowHeight = {45, '1x'};
                 fGrid.Padding = [2 2 2 2];
                 fGrid.RowSpacing = 2;
 
-                controlPanel = uipanel(fGrid, 'BackgroundColor', 'w', 'BorderType', 'line');
+                controlPanel = uipanel(fGrid, 'BackgroundColor', tT.headerBg, 'ForegroundColor', tT.textInverse, 'BorderType', 'line');
                 % [L1 B-1/L2] 지도/고도/정보/plot/비디오 독립 토글.
                 glCtrl = uigridlayout(controlPanel, [1 11]);
+                glCtrl.BackgroundColor = tT.headerBg;
                 glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70, 78, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
 
-                uilabel(glCtrl, 'Text', '입력 시간(s):', 'FontWeight', 'bold', 'FontSize', 12);
+                uilabel(glCtrl, 'Text', '입력 시간(s):', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.textInverse);
                 UI_temp(fIdx).spinner = uispinner(glCtrl, 'Enable', 'off', 'FontSize', 13, 'ValueDisplayFormat', '%.3f', ...
+                                             'BackgroundColor', [1 1 1], 'FontColor', tT.textPrimary, ...
                                              'ValueChangedFcn', @(~, event) app.handleSpinnerChange(fIdx, event.Value));
-                uilabel(glCtrl, 'Text', '실시간 현재값:', 'FontWeight', 'bold', 'FontSize', 12);
-                UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', [0.8 0.1 0.1]);
-                UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', [0.2 0.2 0.2], 'FontSize', 11, 'FontWeight', 'bold');
+                uilabel(glCtrl, 'Text', '실시간 현재값:', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.textInverse);
+                UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', [1.00 0.90 0.25]);
+                UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', [1 1 1], 'FontSize', 11, 'FontWeight', 'bold');
 
-                UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
+                % v-style: 패널 토글 버튼 role 컬러 (Att=blue, Map=green, Alt=blue, Info=yellow, Plot=purple, Vid=dark)
+                UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
                 UI_temp(fIdx).btnAtt.Layout.Column = 6;
-                % [L1 B-1] '지도/고도' 단일 버튼 → '지도'/'고도' 2개로 분리.
-                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'mapOnly'));
+                UI_temp(fIdx).btnMap = uibutton(glCtrl, 'Text', '지도 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', tT.toolbarGreenBg, 'FontColor', tT.toolbarGreenFg, ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'mapOnly'));
                 UI_temp(fIdx).btnMap.Layout.Column = 7;
-                UI_temp(fIdx).btnAlt = uibutton(glCtrl, 'Text', '고도 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
+                UI_temp(fIdx).btnAlt = uibutton(glCtrl, 'Text', '고도 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', [0.00 0.42 0.72], 'FontColor', [1 1 1], ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
-                UI_temp(fIdx).btnInfo = uibutton(glCtrl, 'Text', '정보 ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'info'));
+                UI_temp(fIdx).btnInfo = uibutton(glCtrl, 'Text', '정보 ▾', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', tT.toolbarYellowBg, 'FontColor', tT.toolbarYellowFg, ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'info'));
                 UI_temp(fIdx).btnInfo.Layout.Column = 9;
-                UI_temp(fIdx).btnDataView = uibutton(glCtrl, 'Text', 'plot ▾', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'dataView'));
+                UI_temp(fIdx).btnDataView = uibutton(glCtrl, 'Text', 'plot ▾', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', [0.55 0.32 0.80], 'FontColor', [1 1 1], ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'dataView'));
                 UI_temp(fIdx).btnDataView.Layout.Column = 10;
-                UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
+                UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', [0.12 0.12 0.12], 'FontColor', [1 1 1], ...
+                    'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
                 UI_temp(fIdx).btnVid.Layout.Column = 11;
                 UI_temp(fIdx).PanelVisible = struct( ...
                     'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
@@ -10587,6 +10607,7 @@
                 % 1 attitude | 2 splitter | 3 map/alt | 4 splitter |
                 % 5 info table | 6 splitter | 7 plot data | 8 reserved legacy H/I
                 UI_temp(fIdx).dataGrid = uigridlayout(fGrid, [1 8]);
+                UI_temp(fIdx).dataGrid.BackgroundColor = panelColors{fIdx};   % v-style
                 UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, 0, 0, panelWidths(3), 4, '1x', 0};
                 UI_temp(fIdx).dataGrid.RowHeight = {'1x'};
                 UI_temp(fIdx).dataGrid.Padding = [0 0 0 0];
@@ -10596,14 +10617,14 @@
                 UI_temp(fIdx).colSplitters = gobjects(1, 3);
                 splitCols = [2, 4, 6];
                 for sIdx = 1:numel(splitCols)
-                    sp = uipanel(UI_temp(fIdx).dataGrid, 'BackgroundColor', [0.50 0.50 0.54], 'BorderType', 'none');
+                    sp = uipanel(UI_temp(fIdx).dataGrid, 'BackgroundColor', [0.18 0.36 0.52], 'BorderType', 'none');
                     sp.Layout.Column = splitCols(sIdx);
                     sp.ButtonDownFcn = @(~,event) app.startColumnSplitterDrag(fIdx, sIdx, event);
                     UI_temp(fIdx).colSplitters(sIdx) = sp;
                 end
 
                 % --- (b) Col 1: 비행 자세 (Pitch / Roll / Heading 게이지) ---
-                UI_temp(fIdx).panelAttitude = uipanel(UI_temp(fIdx).dataGrid, 'Title', '비행 자세', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                UI_temp(fIdx).panelAttitude = uipanel(UI_temp(fIdx).dataGrid, 'Title', '비행 자세', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 UI_temp(fIdx).panelAttitude.Layout.Column = 1;
                 UI_temp(fIdx).panelAttitude.Visible = 'off';
                 gGrid = uigridlayout(UI_temp(fIdx).panelAttitude, [3 1]);
@@ -10625,7 +10646,7 @@
                 pGrid.Padding = [0 0 0 0];
                 UI_temp(fIdx).panelMapAltGrid = pGrid;   % [L1 B-1] sub-row 동적 변경용
 
-                mapPnl = uipanel(pGrid, 'Title', 'Map', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                mapPnl = uipanel(pGrid, 'Title', 'Map', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 mapGrid = uigridlayout(mapPnl, [1 1], 'Padding', [5 5 5 5]);
                 UI_temp(fIdx).mapAxes = uiaxes(mapGrid);
                 hold(UI_temp(fIdx).mapAxes, 'on');
@@ -10638,7 +10659,7 @@
                 UI_temp(fIdx).mapAxes.Toolbar.Visible = 'off';
                 UI_temp(fIdx).mapAxes.Interactions = [panInteraction, zoomInteraction];
 
-                altPnl = uipanel(pGrid, 'Title', 'Altitude', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                altPnl = uipanel(pGrid, 'Title', 'Altitude', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 UI_temp(fIdx).panelMap = mapPnl;          % [L1 B-1] 독립 토글용 핸들
                 UI_temp(fIdx).panelAlt = altPnl;
                 altGrid = uigridlayout(altPnl, [1 1], 'Padding', [5 5 5 5]);
@@ -10655,14 +10676,13 @@
                 UI_temp(fIdx).altAxes.Interactions = [panInteraction, zoomInteraction];
 
                 % --- (d) Col 3: 현재 비행 정보 (데이터 테이블) ---
-                infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', 'w', 'Scrollable', 'on');
+                infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary, 'Scrollable', 'on');
                 infoPanel.Layout.Column = 5;
                 UI_temp(fIdx).panelInfo = infoPanel;        % [v4-L1] hsplit reparent 용 핸들
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
-                tblBgColor = app.getFlightTableBgColor(fIdx);
-                themeT = app.getLightTheme();  % v3 P14: white bg + dark text
-                UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', tblBgColor, 'ForegroundColor', themeT.textPrimary, 'FontWeight', 'bold', ...
-                                             'RowStriping', 'off', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
+                themeT = app.getLightTheme();  % v-style: alternating white/light row striping
+                UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', [1.00 1.00 1.00; 0.94 0.97 1.00], 'ForegroundColor', themeT.textPrimary, 'FontWeight', 'bold', ...
+                                             'RowStriping', 'on', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
                                              'ColumnWidth', {'29x', '20x'}, 'FontSize', 11, 'FontName', 'Consolas');
                 cm = uicontextmenu(app.UIFigure);
                 uimenu(cm, 'Text', 'H 영역에 Plot 추가 (현재 탭)', 'MenuSelectedFcn', @(~,~) app.plotSelectedVariable(fIdx));
@@ -10670,14 +10690,14 @@
                 UI_temp(fIdx).dataTable.CellSelectionCallback = @(~, event) app.handleTableSelection(fIdx, event);
 
                 % --- (e) Col 4: H 패널 (플롯 tabGroup) ---
-                hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 hPnl.Layout.Column = 7;
                 UI_temp(fIdx).panelDataView = hPnl;         % [v4-L1] hsplit reparent 용 핸들
                 hGrid2 = uigridlayout(hPnl, [2 1]);
                 hGrid2.RowHeight = {30, '1x'};
                 hGrid2.Padding = [2 2 2 2];
 
-                btnPnl = uipanel(hGrid2, 'BorderType', 'none', 'BackgroundColor', 'w');
+                btnPnl = uipanel(hGrid2, 'BorderType', 'none', 'BackgroundColor', [0.94 0.96 0.98]);
                 uibutton(btnPnl, 'Text', '+ 빈 탭 추가', 'Position', [5 5 90 22], 'ButtonPushedFcn', @(~,~) app.addPlotTab(fIdx));
                 uibutton(btnPnl, 'Text', '현재 탭 지우기', 'Position', [100 5 100 22], 'ButtonPushedFcn', @(~,~) app.clearCurrentTab(fIdx));
 
@@ -10700,8 +10720,8 @@
                 %   Row 5 (32px) : Video Hz / Data Hz 입력 + Cache 드롭다운
                 % [PATCH UX-3] H↔I 경계 splitter (Col 5)
                 UI_temp(fIdx).hiSplitter = uipanel(UI_temp(fIdx).dataGrid, ...
-                    'BackgroundColor', [0.75 0.75 0.80], 'BorderType', 'line', ...
-                    'BorderColor', [0.45 0.45 0.55], ...
+                    'BackgroundColor', [0.18 0.36 0.52], 'BorderType', 'line', ...
+                    'BorderColor', [0.30 0.48 0.65], ...
                     'Tooltip', '드래그하여 비디오 패널 너비 조절 (H ↔ I)', ...
                     'HitTest', 'on');
                 UI_temp(fIdx).hiSplitter.Layout.Column = 8;
@@ -10709,7 +10729,7 @@
 
                 UI_temp(fIdx).vidViewerDialog = uifigure('Name', sprintf('Video Player - Flight Data %d', fIdx), ...
                     'Visible', 'off', 'Position', [120, 120, 780, 620], ...
-                    'Color', [0.94 0.94 0.96], ...
+                    'Color', tT.windowBg, ...
                     'CloseRequestFcn', @(~,~) app.setVideoViewerVisible(fIdx, false, true));
                 try
                     if isprop(UI_temp(fIdx).vidViewerDialog, 'AutoResizeChildren')
@@ -10720,7 +10740,7 @@
                 end
                 viewerRoot = uigridlayout(UI_temp(fIdx).vidViewerDialog, [1 1], ...
                     'Padding', [2 2 2 2], 'RowHeight', {'1x'}, 'ColumnWidth', {'1x'});
-                UI_temp(fIdx).panelVideo = uipanel(viewerRoot, 'Title', 'Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', 'w');
+                UI_temp(fIdx).panelVideo = uipanel(viewerRoot, 'Title', 'Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 UI_temp(fIdx).panelVideo.Layout.Row = 1;
                 UI_temp(fIdx).panelVideo.Layout.Column = 1;
                 % 영상 표시 우선: 제어 기능은 별도 다이얼로그로 분리
@@ -10730,7 +10750,7 @@
                 iGrid2.RowSpacing = 2;
 
                 % Row 1: AVI 파일 열기 + 표시 해상도 + 제어창 버튼 + 동기 상태
-                vBtnPnl = uipanel(iGrid2, 'BorderType', 'none', 'BackgroundColor', 'w');
+                vBtnPnl = uipanel(iGrid2, 'BorderType', 'none', 'BackgroundColor', [0.94 0.96 0.98]);
                 vBtnPnl.Layout.Row = 1;
                 glVB = uigridlayout(vBtnPnl, [1 5], ...
                     'ColumnWidth', {110, 42, 95, 80, '1x'}, ...
@@ -10744,7 +10764,7 @@
                 UI_temp(fIdx).vidControlBtn = uibutton(glVB, 'Text', '제어창', ...
                     'FontSize', 11, 'ButtonPushedFcn', @(~,~) app.toggleVideoControlDialog(fIdx));
                 UI_temp(fIdx).vidSyncStatus = uilabel(glVB, 'Text', '동기 미설정', 'FontSize', 11, ...
-                    'FontColor', [0.5 0.5 0.5], 'HorizontalAlignment', 'right');
+                    'FontColor', tT.textSecondary, 'HorizontalAlignment', 'right');
                 UI_temp(fIdx).vidSyncStatus.Layout.Column = 5;
 
                 % Row 2: 고정 표시 해상도 영상 영역(컨테이너 스크롤 가능)
@@ -10917,30 +10937,50 @@
         end
 
         function styleToolbarButton(app, btn, iconText, labelText, stateName)
-            % v4-Theme: 단일 light theme button state mapping.
+            % v-style: 키워드 기반 role 컬러 매핑 (비행경로=yellow, 보드=blue, 해안선/win=gray, 설정/편집=dark).
             try
                 if isempty(btn) || ~isvalid(btn), return; end
                 t = app.getLightTheme();
                 btn.Text = app.toolbarButtonText(iconText, labelText);
-                btn.FontSize = t.fontSizeSmall;
+                btn.FontSize = 11;
                 btn.FontWeight = 'bold';
                 try
                     btn.WordWrap = 'on';
                 catch
                 end
+                lbl = char(labelText);
                 switch lower(char(stateName))
                     case 'active'
-                        btn.BackgroundColor = t.btnActiveBg;
-                        btn.FontColor = t.btnActiveFg;
+                        if contains(lbl, '보드')
+                            btn.BackgroundColor = t.toolbarBlueBg;
+                            btn.FontColor = t.toolbarBlueFg;
+                        else
+                            btn.BackgroundColor = t.toolbarGreenBg;
+                            btn.FontColor = t.toolbarGreenFg;
+                        end
                     case 'accent'
-                        btn.BackgroundColor = t.btnAccentBg;
-                        btn.FontColor = t.btnAccentFg;
+                        btn.BackgroundColor = t.toolbarGreenBg;
+                        btn.FontColor = t.toolbarGreenFg;
                     case 'disabled'
-                        btn.BackgroundColor = t.btnDisabledBg;
-                        btn.FontColor = t.btnDisabledFg;
+                        btn.BackgroundColor = t.disabledBg;
+                        btn.FontColor = t.disabledFg;
                     otherwise
-                        btn.BackgroundColor = t.btnNormalBg;
-                        btn.FontColor = t.btnNormalFg;
+                        if contains(lbl, '비행경로')
+                            btn.BackgroundColor = t.toolbarYellowBg;
+                            btn.FontColor = t.toolbarYellowFg;
+                        elseif contains(lbl, '해안선')
+                            btn.BackgroundColor = t.toolbarGrayBg;
+                            btn.FontColor = t.toolbarGrayFg;
+                        elseif contains(lbl, '보드')
+                            btn.BackgroundColor = t.toolbarBlueBg;
+                            btn.FontColor = t.toolbarBlueFg;
+                        elseif contains(lbl, '설정') || contains(lbl, '편집')
+                            btn.BackgroundColor = t.toolbarDarkBg;
+                            btn.FontColor = t.toolbarDarkFg;
+                        else
+                            btn.BackgroundColor = t.toolbarGrayBg;
+                            btn.FontColor = t.toolbarGrayFg;
+                        end
                 end
             catch ME_silent
                 app.logCaught(ME_silent, 'toolbarButtonStyle');
@@ -10950,11 +10990,13 @@
         % [V3.22 #7] 메인 윈도우 상단 헤더 바 (파일 선택 / Sync 입력)
         % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
         function buildHeaderBar(app, mainLayout)
-            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', [0.94 0.94 0.94], 'BorderType', 'line');
+            t = app.getLightTheme();   % v-style
+            hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', t.headerBg, 'ForegroundColor', t.textInverse, 'BorderType', 'line');
             glHeader = uigridlayout(hHeaderPanel, [1 12]);
+            glHeader.BackgroundColor = t.headerBg;
             glHeader.ColumnWidth = {110, 110, 100, 104, 104, 430, '1x', 150, 120, 72, 72, 104};
             glHeader.RowHeight = {'1x'};
-            glHeader.Padding = [4 4 4 4];
+            glHeader.Padding = [4 3 4 3];
             glHeader.ColumnSpacing = 4;
 
             app.createToolbarButton(glHeader, '+', '비행경로 1 선택', @(~, ~) app.handleFlightFile(1), 'normal');
@@ -10986,10 +11028,12 @@
 
         function buildLayoutPresetPicker(app, parent)
             try
+                t = app.getLightTheme();   % v-style
                 names = app.getLayoutPresetNames();
                 icons = app.getLayoutPresetIcons();
                 pnl = uipanel(parent, 'Title', 'Layout', ...
-                    'BackgroundColor', [0.94 0.94 0.94], 'FontSize', 9, 'FontWeight', 'bold');
+                    'BackgroundColor', t.headerBg, 'ForegroundColor', t.textInverse, ...
+                    'FontSize', 9, 'FontWeight', 'bold');
                 gl = uigridlayout(pnl, [1 numel(names) + 1], ...
                     'ColumnWidth', [repmat({32}, 1, numel(names)), {110}], ...
                     'RowHeight', {'1x'}, ...
@@ -11009,6 +11053,7 @@
                 end
                 app.HeaderLayoutPresetDD = uidropdown(gl, ...
                     'Items', {'사용자 프리셋'}, 'Value', '사용자 프리셋', ...
+                    'BackgroundColor', [1 1 1], 'FontColor', t.textPrimary, ...
                     'FontSize', 10, 'ValueChangedFcn', @(~,~) app.applyHeaderLayoutPreset());
                 app.HeaderLayoutPresetDD.Layout.Column = numel(names) + 1;
                 app.refreshHeaderLayoutPresetDropdown();
@@ -11057,14 +11102,16 @@
             end
         end
 
-        function [ax, lbl, grid] = createGaugePanel(~, parentPnl, titleStr)
+        function [ax, lbl, grid] = createGaugePanel(app, parentPnl, titleStr)
+            t = app.getLightTheme();   % v-style
             grid = uigridlayout(parentPnl, [2 1]);
             grid.RowHeight = {20, '1x'};
             grid.Padding = [0 0 0 0];
             grid.RowSpacing = 0;
 
-            lbl = uilabel(grid, 'Text', [titleStr ' +0.000'], 'FontWeight', 'bold', 'FontSize', 12, 'HorizontalAlignment', 'center');
-            axPnl = uipanel(grid, 'BorderType', 'none', 'BackgroundColor', 'w');
+            lbl = uilabel(grid, 'Text', [titleStr ' +0.000'], 'FontWeight', 'bold', 'FontSize', 12, ...
+                'FontColor', t.textPrimary, 'HorizontalAlignment', 'center');
+            axPnl = uipanel(grid, 'BorderType', 'none', 'BackgroundColor', [1 1 1]);
 
             axGrid = uigridlayout(axPnl, [1 1], 'Padding', [0 0 0 0]);
             ax = uiaxes(axGrid);
