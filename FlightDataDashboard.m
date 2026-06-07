@@ -4080,17 +4080,46 @@
 
             tTheme = app.getLightTheme();   % v-style
             p = uipanel(targetLayout, 'BorderType', 'line', 'BackgroundColor', [1 1 1]);
+            % [Manual visual test] H-plot card/axis readability colors.
+            % MATLAB uiaxes does not provide a separate "Y-axis-only background"
+            % property.  Therefore, set the surrounding plot card/grid background
+            % and the axes background to a light color, then set YColor/YLabel.Color
+            % to a high-contrast dark color.
+
+            plotCardBg = [0.97 0.99 1.00];      % very light blue-white background
+            axisBg     = [1.00 1.00 1.00];      % white plotting area
+            yAxisFg    = [0.02 0.16 0.28];      % dark blue/navy for Y ticks + label
+            xAxisFg    = [0.02 0.16 0.28];      % dark blue/navy for X ticks + label
+            gridFg     = [0.72 0.82 0.88];      % soft blue-gray grid
+            p = uipanel(targetLayout, 'BorderType', 'line', ...
+                'BackgroundColor', plotCardBg, ...
+                'ForegroundColor', [0.55 0.68 0.78]);
+
             p.Layout.Row = newRowIdx;
             p.Layout.Column = 1;
 
-            axGrid = uigridlayout(p, 'ColumnWidth', {'1x'}, 'RowHeight', {'1x'}, 'Padding', [5 5 5 5]);
+            %axGrid = uigridlayout(p, 'ColumnWidth', {'1x'}, 'RowHeight', {'1x'}, 'Padding', [5 5 5 5]);
+            axGrid = uigridlayout(p, ...
+                'ColumnWidth', {'1x'}, ...
+                'RowHeight', {'1x'}, ...
+                'Padding', [34 14 12 26], ...   % left/bottom padding for readable Y/X labels
+                'BackgroundColor', plotCardBg);
             ax = uiaxes(axGrid);
             ax.Layout.Row = 1;
             ax.Layout.Column = 1;
-            try; ax.Color = [1 1 1]; catch; end
-            try; ax.XColor = tTheme.textSecondary; catch; end
-            try; ax.YColor = tTheme.textSecondary; catch; end
-            try; ax.GridColor = tTheme.gridLine; catch; end
+            %try; ax.Color = [1 1 1]; catch; end
+            %try; ax.XColor = tTheme.textSecondary; catch; end
+            %try; ax.YColor = tTheme.textSecondary; catch; end
+            %try; ax.GridColor = tTheme.gridLine; catch; end
+
+            try; ax.Color = axisBg; catch; end
+            try; ax.XColor = xAxisFg; catch; end
+            try; ax.YColor = yAxisFg; catch; end
+            try; ax.GridColor = gridFg; catch; end
+            try; ax.MinorGridColor = gridFg; catch; end
+            try; ax.FontSize = 11; catch; end
+            try; ax.FontWeight = 'bold'; catch; end
+            try; ax.TickLabelInterpreter = 'none'; catch; end
 
             % [V3.10] H 패널 Tab 플롯 전용 커스텀 툴바 (Restore/ZoomIn/ZoomOut/Pan)
             %         Map/Altitude/비디오/게이지 axes는 툴바 숨김 유지
@@ -4110,8 +4139,19 @@
             if numel(tData) >= 2 && tData(end) > tData(1)
                 ax.XLim = [tData(1) tData(end)];
             end
-            xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
-            ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
+            
+            %xlabel(ax, 'Time(s)', 'FontWeight', 'bold', 'FontSize', 9);
+            %ylabel(ax, yLabelStr, 'FontWeight', 'bold', 'FontSize', 10, 'Interpreter', 'none');
+
+            xlabel(ax, 'Time(s)', ...
+                'FontWeight', 'bold', ...
+                'FontSize', 11, ...
+                'Color', xAxisFg);
+            ylabel(ax, yLabelStr, ...
+                'FontWeight', 'bold', ...
+                'FontSize', 11, ...
+                'Color', yAxisFg, ...
+                'Interpreter', 'none');
 
             hold(ax, 'on');
             currIdx = app.Models(fIdx).currentIndex;
