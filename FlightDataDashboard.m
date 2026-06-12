@@ -13138,6 +13138,12 @@
                 catch
                 end
                 st = [];
+                % v-crit3: safe-failure 시 상태 일관성 — 부분 갱신된 메타 되돌림
+                try
+                    app.ProjectLastSaveText = '';
+                    app.ProjectDirty = false;
+                catch
+                end
             end
         end
 
@@ -13866,10 +13872,10 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
     end
     maxSlots = max(1, round(double(maxSlots)));
 
-    % [PATCH] cleanup 분기: 모든 슬롯 VR delete 후 캐시 비우기
+    % [PATCH] cleanup 분기: 모든 슬롯 VR delete 후 캐시 완전 초기화
     if ischar(filePath) && strcmp(filePath, '__CLEANUP__')
         asyncClearDecodeCache(cache);
-        cache = struct('path',{},'sig',{},'vr',{},'lastUse',{});
+        cache = [];   % v-crit1: persistent 완전 초기화 (stale VR struct 잔존 방지)
         return;
     end
 
