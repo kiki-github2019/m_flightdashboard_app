@@ -6018,7 +6018,7 @@
                 end
             end
             uibutton(gl, 'Text', 'Export everything to folder', ...
-                'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'BackgroundColor', app.getLightTheme().toolbarGreenBg, 'FontColor', app.getLightTheme().toolbarGreenFg, 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogExport());
         end
 
@@ -6132,7 +6132,7 @@
             btnRow.ColumnWidth = {'1x', 140, 160};
             uilabel(btnRow, 'Text', '');
             uibutton(btnRow, 'Text', '적용 (즉시 반영)', ...
-                'BackgroundColor', [0.15 0.38 0.82], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'BackgroundColor', app.getLightTheme().toolbarBlueBg, 'FontColor', app.getLightTheme().toolbarBlueFg, 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogApplyOptionDraft());
             uibutton(btnRow, 'Text', 'option 파일 저장', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogWriteOptionDraft());
@@ -6279,7 +6279,7 @@
             uibutton(gl, 'Text', '목록 새로고침', ...
                 'ButtonPushedFcn', @(~,~) app.refreshExportTab());
             uibutton(gl, 'Text', 'Export everything to folder', ...
-                'BackgroundColor', [0.06 0.65 0.50], 'FontColor', 'w', 'FontWeight', 'bold', ...
+                'BackgroundColor', app.getLightTheme().toolbarGreenBg, 'FontColor', app.getLightTheme().toolbarGreenFg, 'FontWeight', 'bold', ...
                 'ButtonPushedFcn', @(~,~) app.editDialogExport());
             uilabel(gl, 'Text', '');
 
@@ -10415,14 +10415,14 @@
             t.appShellBg     = [0.94 0.96 0.98];
             t.surfaceBg      = [1.00 1.00 1.00];
             t.surfaceAltBg   = [0.97 0.98 1.00];
-            t.headerBg       = [0.82 0.88 0.95];   % v3: 연한 blue strip (saturated 아님)
+            t.headerBg       = [0.93 0.95 0.97];   % sample style: ribbon surface, not dark chrome
             t.dividerColor   = [0.78 0.83 0.88];
             t.borderColor    = [0.62 0.72 0.82];
             t.gridLine       = [0.74 0.84 0.92];
             t.textPrimary    = [0.03 0.05 0.07];
             t.textSecondary  = [0.10 0.18 0.25];
             t.textMuted      = [0.35 0.42 0.48];
-            t.textInverse    = [1.00 1.00 1.00];
+            t.textInverse    = [0.03 0.05 0.07];
             t.accentBlue     = [0.00 0.45 0.74];
             t.accentBlueLite = [0.82 0.93 1.00];
             t.accentBlueText = [0.00 0.18 0.32];
@@ -10496,8 +10496,8 @@
             t.btnWarningBg   = [1.00 1.00 1.00];
             t.btnWarningFg   = [0.78 0.16 0.12];   % warning red text on white
             % v3-sample: panel header → 연한 blue strip (sample 일관)
-            t.panelBlueBg    = [0.86 0.92 0.97];
-            t.panelBlueBg2   = [0.82 0.89 0.95];
+            t.panelBlueBg    = [0.95 0.97 0.99];
+            t.panelBlueBg2   = [0.93 0.96 0.98];
             t.panelBlueFg    = [0.05 0.12 0.20];
             % v3-sample: 모든 toolbar bg = panel(white). 기능 구분은 fg color 만.
             t.toolbarYellowBg = [1.00 1.00 1.00];
@@ -10616,8 +10616,8 @@
                         if isprop(p, 'BackgroundColor')
                             bg = p.BackgroundColor;
                             if app.isBlueThemeColor(bg, t)
-                                % blue 의도 panel — ForegroundColor 만 inverse 강제
-                                if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textInverse; end
+                                % sample style: pale blue panels still use dark text.
+                                if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textPrimary; end
                             elseif app.isNearBlackColor(bg)
                                 % near-black non-video → surfaceAltBg 로 light normalize
                                 p.BackgroundColor = t.surfaceAltBg;
@@ -10944,7 +10944,7 @@
             bodyGrid.Padding = [2 2 2 2];
             bodyGrid.RowSpacing = 2;
             app.BodyGrid = bodyGrid;   % [L1 C-1] retain for runtime RowHeight reflow
-            app.BodyRowSplitter = uipanel(bodyGrid, 'BackgroundColor', [0.18 0.36 0.52], ...
+            app.BodyRowSplitter = uipanel(bodyGrid, 'BackgroundColor', tT.borderColor, ...
                 'BorderType', 'none');
             app.BodyRowSplitter.Layout.Row = 2;
             app.BodyRowSplitter.Layout.Column = 1;
@@ -11054,7 +11054,7 @@
                 UI_temp(fIdx).colSplitters = gobjects(1, 3);
                 splitCols = [2, 4, 6];
                 for sIdx = 1:numel(splitCols)
-                    sp = uipanel(UI_temp(fIdx).dataGrid, 'BackgroundColor', [0.18 0.36 0.52], 'BorderType', 'none');
+                    sp = uipanel(UI_temp(fIdx).dataGrid, 'BackgroundColor', tT.borderColor, 'BorderType', 'none');
                     sp.Layout.Column = splitCols(sIdx);
                     sp.ButtonDownFcn = @(~,event) app.startColumnSplitterDrag(fIdx, sIdx, event);
                     UI_temp(fIdx).colSplitters(sIdx) = sp;
@@ -11160,8 +11160,8 @@
                 %   Row 5 (32px) : Video Hz / Data Hz 입력 + Cache 드롭다운
                 % [PATCH UX-3] H↔I 경계 splitter (Col 5)
                 UI_temp(fIdx).hiSplitter = uipanel(UI_temp(fIdx).dataGrid, ...
-                    'BackgroundColor', [0.18 0.36 0.52], 'BorderType', 'line', ...
-                    'BorderColor', [0.30 0.48 0.65], ...
+                    'BackgroundColor', tT.borderColor, 'BorderType', 'line', ...
+                    'BorderColor', tT.dividerColor, ...
                     'Tooltip', '드래그하여 비디오 패널 너비 조절 (H ↔ I)', ...
                     'HitTest', 'on');
                 UI_temp(fIdx).hiSplitter.Layout.Column = 8;
