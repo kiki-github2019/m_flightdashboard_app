@@ -9483,6 +9483,7 @@
                     app.UI(fIdx).PanelVisible = app.normalizePanelVisibleState(snap.PanelVisible);
                 end
                 if ~isempty(snap.ColumnWidth)
+                    snap.ColumnWidth = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, snap.ColumnWidth);
                     app.rememberUserColumnWidths(fIdx, snap.ColumnWidth);
                     if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) ...
                             && isvalid(app.UI(fIdx).dataGrid)
@@ -9540,10 +9541,15 @@
                         end
                     end
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                    app.updateColumnSplitterVisibility(fIdx, widths);
                 elseif numel(widths) >= 4
                     widths{3} = 0;  % legacy current flight info
                     widths{4} = 0;  % legacy plot data panel
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                    normWidths = app.normalizeDataGridColumnWidth(widths);
+                    if ~isempty(normWidths)
+                        app.updateColumnSplitterVisibility(fIdx, normWidths);
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'boardHideMovedColumns');
@@ -9613,7 +9619,12 @@
                 infoOn = true;
                 dataViewOn = true;
                 if isfield(app.UI(fIdx), 'PanelVisible')
-                    st = app.UI(fIdx).PanelVisible;
+                    st = app.normalizePanelVisibleState(app.UI(fIdx).PanelVisible);
+                    app.UI(fIdx).PanelVisible = st;
+                else
+                    st = app.normalizePanelVisibleState(struct());
+                end
+                if isfield(app.UI(fIdx), 'PanelVisible')
                     if isfield(st, 'attitude') && ~st.attitude
                         widths{1} = 0;
                     elseif isfield(st, 'attitude') && st.attitude && app.isTestWidthZero(widths{1})
@@ -9646,9 +9657,9 @@
                         widths{7} = '1x';
                     end
                     widths{2} = 0; widths{4} = 0; widths{6} = 0;
-                    if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = 4; end
-                    if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = 4; end
-                    if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = 4; end
+                    if ~app.isTestWidthZero(widths{1}) && ~app.isTestWidthZero(widths{3}), widths{2} = app.LAYOUT_SPLITTER_THICKNESS; end
+                    if ~app.isTestWidthZero(widths{3}) && ~app.isTestWidthZero(widths{5}), widths{4} = app.LAYOUT_SPLITTER_THICKNESS; end
+                    if ~app.isTestWidthZero(widths{5}) && ~app.isTestWidthZero(widths{7}), widths{6} = app.LAYOUT_SPLITTER_THICKNESS; end
                     if ~infoOn && ~dataViewOn
                         attOn = isfield(st, 'attitude') && st.attitude;
                         if attOn && mapColOn
@@ -9972,6 +9983,16 @@
                     end
                 end
                 app.UI(fIdx).arrangementMode = 'normal';
+                app.syncBoardPanelHandles(fIdx);
+                widths = app.getRememberedColumnWidths(fIdx);
+                if isempty(widths)
+                    widths = app.getDefaultDataGridColumnWidths();
+                end
+                widths = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, widths);
+                dg.ColumnWidth = widths;
+                dg.Scrollable = 'on';
+                app.updateColumnSplitterVisibility(fIdx, widths);
+                app.refreshPanelToggleButtons(fIdx);
             catch ME
                 app.logCaught(ME, 'boardArrangement:normal');
             end
@@ -12460,7 +12481,9 @@
             % - widths{8} (legacy video column) always 0
             % - repeated calls with same panelState + same adjustable widths -> identical result
             widths = app.normalizeDataGridColumnWidth(widths);
-            if isempty(widths), return; end
+            if isempty(widths)
+                widths = app.getDefaultDataGridColumnWidths();
+            end
             panelState = app.normalizePanelVisibleState(panelState);
             panelWidths = app.getResponsivePanelWidths();
             if ~panelState.attitude

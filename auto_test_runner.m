@@ -1108,20 +1108,27 @@ function issues = i_validateBodyRows(st, exp, issues) %#ok<*AGROW>
         end
         return;
     end
-    if isfield(st, 'BodyRowSplitterVisible') && st.BodyRowSplitterVisible
-        issues{end + 1} = 'row splitter visible while one board is off';
+    if isfield(st, 'BodyRowSplitterVisible') && ~st.BodyRowSplitterVisible
+        issues{end + 1} = 'row splitter hidden while one board is off';
     end
     row1 = i_rowWeight(st.BodyRowHeight{1});
+    row2 = i_rowWeight(st.BodyRowHeight{2});
     row3 = i_rowWeight(st.BodyRowHeight{3});
+    row4 = i_rowWeight(st.BodyRowHeight{4});
+    if row2 <= 0
+        issues{end + 1} = 'row splitter row is collapsed while one board is off';
+    elseif abs(row2 - 4) > 0.1
+        issues{end + 1} = sprintf('board-off row splitter height expected=4 actual=%.3f', row2);
+    end
     if activeOff == 1
         % upper off: row1/row2=0, row3>0 (source 100%), row4 may be 0 (summary 폐기)
-        if row1 ~= 0 || row3 <= 0
-            issues{end + 1} = sprintf('upper-off rows invalid: row1=%g row3=%g', row1, row3);
+        if row1 ~= 0 || row3 <= 0 || row4 < 0
+            issues{end + 1} = sprintf('upper-off rows invalid: row1=%g row3=%g row4=%g', row1, row3, row4);
         end
     elseif activeOff == 2
         % lower off: row1>0 (source 100%), row3/row4=0, row2 may be 0
-        if row1 <= 0 || row3 ~= 0
-            issues{end + 1} = sprintf('lower-off rows invalid: row1=%g row3=%g', row1, row3);
+        if row1 <= 0 || row3 < 0 || row4 ~= 0
+            issues{end + 1} = sprintf('lower-off rows invalid: row1=%g row3=%g row4=%g', row1, row3, row4);
         end
     end
 end
