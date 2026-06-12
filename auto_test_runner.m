@@ -1162,7 +1162,12 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
             if ~st.boards(fIdx).panelVisible
                 issues{end + 1} = sprintf('board %d panel hidden while no board-off active', fIdx);
             end
-            if st.boards(fIdx).infoColumnHidden || st.boards(fIdx).plotColumnHidden
+            % v5-D/E: 의도적 panel-off(expected off) 와 hsplit arrangement 는 column hidden 합법
+            isHsplitArr = isfield(st.boards(fIdx), 'arrangementMode') ...
+                && strcmp(char(st.boards(fIdx).arrangementMode), 'hsplit');
+            if ~isHsplitArr ...
+                    && ((st.boards(fIdx).infoColumnHidden && exp.panel(fIdx).info) ...
+                    ||  (st.boards(fIdx).plotColumnHidden && exp.panel(fIdx).dataView))
                 issues{end + 1} = sprintf('board %d info/plot column hidden after board-on restore', fIdx);
             end
         end
@@ -1459,8 +1464,9 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
     isSourceDuringBoardOff = ~isempty(activeOff) && fIdx == 3 - activeOff;
     if isSourceDuringBoardOff
         if numel(widths) >= 8
-            movedStillVisible = ~i_widthSpecIsZero(widths{4}) || ~i_widthSpecIsZero(widths{5}) || ...
-                ~i_widthSpecIsZero(widths{6}) || ~i_widthSpecIsZero(widths{7});
+            % v5-C: hsplit 소스는 info/plot 이 col1/3 으로 이동 — col6/7 만 0 요구.
+            % col4/5 는 sideAnalysis 배치(splitter+map)가 합법적으로 사용.
+            movedStillVisible = ~i_widthSpecIsZero(widths{6}) || ~i_widthSpecIsZero(widths{7});
         else
             movedStillVisible = ~i_widthSpecIsZero(widths{3}) || ~i_widthSpecIsZero(widths{4}) || ...
                 ~i_widthSpecIsZero(widths{5});
@@ -1468,6 +1474,12 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
         if movedStillVisible
             issues{end + 1} = sprintf('board %d moved info/plot columns still occupy width', fIdx);
         end
+        return;
+    end
+
+    % v5-E: hsplit arrangement(preset) 는 평면 column 모델 미적용 — col 검증 skip
+    if isfield(st.boards(fIdx), 'arrangementMode') ...
+            && strcmp(char(st.boards(fIdx).arrangementMode), 'hsplit')
         return;
     end
 
