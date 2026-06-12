@@ -989,7 +989,7 @@
                     app.UI(fIdx).spinner.Value = currTime;
                 end
             catch e
-                warning('applyTimeChange 오류: %s', e.message);
+                warning('FlightDataDashboard:ApplyTimeChange', 'applyTimeChange 오류: %s', e.message);
             end
             app.IsUpdating(fIdx) = false;
 
@@ -1174,7 +1174,6 @@
                     end
                     switch sel
                         case '취소'
-                            canClose = false;
                             return;
                         case '적용 후 저장하고 닫기'
                             if pendingTimer
@@ -1196,7 +1195,6 @@
                                         cont = '';
                                     end
                                     if ~strcmp(cont, '그래도 닫기')
-                                        canClose = false;
                                         return;
                                     end
                                 end
@@ -1205,7 +1203,6 @@
                             if isempty(app.ProjectFilePath)
                                 [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
                                 if isequal(fn, 0)
-                                    canClose = false;
                                     return;     % user cancelled save destination
                                 end
                                 app.ProjectFilePath = fullfile(pn, fn);
@@ -1221,7 +1218,6 @@
                                     uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project');
                                 catch
                                 end
-                                canClose = false;
                                 return;
                             end
                             try
@@ -1258,7 +1254,6 @@
                                     cont = '';
                                 end
                                 if ~strcmp(cont, '그래도 닫기')
-                                    canClose = false;
                                     return;
                                 end
                             end
@@ -1285,7 +1280,6 @@
             catch ME
                 app.logCaught(ME, 'close-request');
                 canClose = false;
-                return;
             end
             if ~canClose, return; end
 
@@ -1402,14 +1396,38 @@
                 if strcmp(orientation, 'horizontal') && mapOn && altOn
                     g.RowHeight = {'1x'};
                     g.ColumnWidth = {'1x', '1x'};
-                    if hasMap; try; app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch; end, end
-                    if hasAlt; try; app.UI(fIdx).panelAlt.Layout.Row = 1; app.UI(fIdx).panelAlt.Layout.Column = 2; catch; end, end
+                    if hasMap
+                        try
+                            app.UI(fIdx).panelMap.Layout.Row = 1;
+                            app.UI(fIdx).panelMap.Layout.Column = 1;
+                        catch
+                        end
+                    end
+                    if hasAlt
+                        try
+                            app.UI(fIdx).panelAlt.Layout.Row = 1;
+                            app.UI(fIdx).panelAlt.Layout.Column = 2;
+                        catch
+                        end
+                    end
                 elseif strcmp(orientation, 'horizontal') && (mapOn || altOn)
                     % 단독 가시 → fill
                     g.RowHeight = {'1x'};
                     g.ColumnWidth = {'1x'};
-                    if mapOn && hasMap; try; app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch; end, end
-                    if altOn && hasAlt; try; app.UI(fIdx).panelAlt.Layout.Row = 1; app.UI(fIdx).panelAlt.Layout.Column = 1; catch; end, end
+                    if mapOn && hasMap
+                        try
+                            app.UI(fIdx).panelMap.Layout.Row = 1;
+                            app.UI(fIdx).panelMap.Layout.Column = 1;
+                        catch
+                        end
+                    end
+                    if altOn && hasAlt
+                        try
+                            app.UI(fIdx).panelAlt.Layout.Row = 1;
+                            app.UI(fIdx).panelAlt.Layout.Column = 1;
+                        catch
+                        end
+                    end
                 else
                     % vertical
                     g.ColumnWidth = {'1x'};
@@ -1422,8 +1440,20 @@
                     else
                         g.RowHeight = {'1x', 0};
                     end
-                    if hasMap; try; app.UI(fIdx).panelMap.Layout.Row = 1; app.UI(fIdx).panelMap.Layout.Column = 1; catch; end, end
-                    if hasAlt; try; app.UI(fIdx).panelAlt.Layout.Row = 2; app.UI(fIdx).panelAlt.Layout.Column = 1; catch; end, end
+                    if hasMap
+                        try
+                            app.UI(fIdx).panelMap.Layout.Row = 1;
+                            app.UI(fIdx).panelMap.Layout.Column = 1;
+                        catch
+                        end
+                    end
+                    if hasAlt
+                        try
+                            app.UI(fIdx).panelAlt.Layout.Row = 2;
+                            app.UI(fIdx).panelAlt.Layout.Column = 1;
+                        catch
+                        end
+                    end
                 end
                 app.UI(fIdx).panelMapAlt.Visible = mapOn || altOn;
             catch ME
@@ -3534,7 +3564,8 @@
                     try
                         app.updateDashboard(fIdx, idx);
                     catch e
-                        warning('stopPlotMarkerDrag 전체 동기화 오류: %s', e.message);
+                        warning('FlightDataDashboard:StopPlotMarkerDrag', ...
+                            'stopPlotMarkerDrag 전체 동기화 오류: %s', e.message);
                     end
                     clear cleanupUpdating  % 명시적 cleanup (다음 iteration 의 prevUpdating 캡처 안전화)
                     % [V3.18 (4)] 드래그 종료 후 인접 frame 워밍업 (idle CPU 활용)
@@ -4119,19 +4150,38 @@
             ax = uiaxes(axGrid);
             ax.Layout.Row = 1;
             ax.Layout.Column = 1;
-            %try; ax.Color = [1 1 1]; catch; end
-            %try; ax.XColor = tTheme.textSecondary; catch; end
-            %try; ax.YColor = tTheme.textSecondary; catch; end
-            %try; ax.GridColor = tTheme.gridLine; catch; end
-
-            try; ax.Color = axisBg; catch; end
-            try; ax.XColor = xAxisFg; catch; end
-            try; ax.YColor = yAxisFg; catch; end
-            try; ax.GridColor = gridFg; catch; end
-            try; ax.MinorGridColor = gridFg; catch; end
-            try; ax.FontSize = 11; catch; end
-            try; ax.FontWeight = 'bold'; catch; end
-            try; ax.TickLabelInterpreter = 'none'; catch; end
+            try
+                ax.Color = axisBg;
+            catch
+            end
+            try
+                ax.XColor = xAxisFg;
+            catch
+            end
+            try
+                ax.YColor = yAxisFg;
+            catch
+            end
+            try
+                ax.GridColor = gridFg;
+            catch
+            end
+            try
+                ax.MinorGridColor = gridFg;
+            catch
+            end
+            try
+                ax.FontSize = 11;
+            catch
+            end
+            try
+                ax.FontWeight = 'bold';
+            catch
+            end
+            try
+                ax.TickLabelInterpreter = 'none';
+            catch
+            end
 
             % [V3.10] H 패널 Tab 플롯 전용 커스텀 툴바 (Restore/ZoomIn/ZoomOut/Pan)
             %         Map/Altitude/비디오/게이지 axes는 툴바 숨김 유지
@@ -6181,8 +6231,14 @@
             treeWrapGrid = uigridlayout(treeWrap, [1 1], 'Padding', [2 2 2 2], 'BackgroundColor', tPm.treeBg);
             app.EDPlotTree = uitree(treeWrapGrid, ...
                 'SelectionChangedFcn', @(~,~) app.onPlotTreeSelectionChanged());
-            try, app.EDPlotTree.BackgroundColor = tPm.treeBg; catch; end
-            try, app.EDPlotTree.FontColor = tPm.treeFg; catch; end
+            try
+                app.EDPlotTree.BackgroundColor = tPm.treeBg;
+            catch
+            end
+            try
+                app.EDPlotTree.FontColor = tPm.treeFg;
+            catch
+            end
 
             propPanel = uipanel(mid, 'Title', '선택 항목 속성', ...
                 'FontWeight', 'bold', 'Scrollable', 'on');
@@ -9353,8 +9409,12 @@
                     elseif app.isTestWidthZero(widths{3})
                         widths{3} = panelWidths(2);
                     end
-                    if isfield(st, 'info'), infoOn = logical(st.info); end
-                    if isfield(st, 'dataView'), dataViewOn = logical(st.dataView); end
+                    if isfield(st, 'info')
+                        infoOn = logical(st.info);
+                    end
+                    if isfield(st, 'dataView')
+                        dataViewOn = logical(st.dataView);
+                    end
                     if ~infoOn
                         widths{5} = 0;
                     elseif app.isTestWidthZero(widths{5})
@@ -9662,7 +9722,10 @@
                 % v3-audit M: normal 복귀 시 attitude col span 해제
                 if isfield(app.UI(fIdx), 'panelAttitude') && ~isempty(app.UI(fIdx).panelAttitude) ...
                         && isvalid(app.UI(fIdx).panelAttitude)
-                    try; app.UI(fIdx).panelAttitude.Layout.Column = 1; catch; end
+                    try
+                        app.UI(fIdx).panelAttitude.Layout.Column = 1;
+                    catch
+                    end
                 end
                 % splitters (col 2/4/6) — Layout 복귀 + 가시화 (hsplit 모드에서 hide 한 것 복원)
                 if isfield(app.UI(fIdx), 'colSplitters')
@@ -9672,13 +9735,22 @@
                         if ~isempty(sp(s)) && isvalid(sp(s))
                             sp(s).Layout.Row = 1;
                             sp(s).Layout.Column = splitCols(s);
-                            try; sp(s).Visible = 'on'; catch; end
+                            try
+                                sp(s).Visible = 'on';
+                            catch
+                            end
                         end
                     end
                 end
                 if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
-                    try; app.UI(fIdx).hiSplitter.Layout.Row = 1; catch; end
-                    try; app.UI(fIdx).hiSplitter.Visible = 'on'; catch; end
+                    try
+                        app.UI(fIdx).hiSplitter.Layout.Row = 1;
+                    catch
+                    end
+                    try
+                        app.UI(fIdx).hiSplitter.Visible = 'on';
+                    catch
+                    end
                 end
                 app.UI(fIdx).arrangementMode = 'normal';
             catch ME
@@ -9705,8 +9777,14 @@
                 activeOff = find(app.BoardOffState, 1);
                 isBoardOffSource = ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff);
                 if isBoardOffSource
-                    if isfield(st, 'info'), st.info = true; app.UI(fIdx).PanelVisible.info = true; end
-                    if isfield(st, 'dataView'), st.dataView = true; app.UI(fIdx).PanelVisible.dataView = true; end
+                    if isfield(st, 'info')
+                        st.info = true;
+                        app.UI(fIdx).PanelVisible.info = true;
+                    end
+                    if isfield(st, 'dataView')
+                        st.dataView = true;
+                        app.UI(fIdx).PanelVisible.dataView = true;
+                    end
                 end
                 upperOn = (isfield(st,'info') && st.info) || (isfield(st,'dataView') && st.dataView);
                 lowerOn = (isfield(st,'attitude') && st.attitude) || ...
@@ -9742,11 +9820,26 @@
                     app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
                     app.setPanelLayoutCell(fIdx, 'panelMapAlt',   1, 5);
                     app.setPanelLayoutCell(fIdx, 'panelAttitude', 1, 1);
-                    try; app.setUiVisible(app.UI(fIdx).panelInfo,     true); catch; end
-                    try; app.setUiVisible(app.UI(fIdx).panelDataView, true); catch; end
-                    try; app.setUiVisible(app.UI(fIdx).panelMapAlt,   true); catch; end
-                    try; app.setUiVisible(app.UI(fIdx).panelAttitude, false); catch; end
-                    try; app.setMapAltArrangement(fIdx, 'vertical'); catch; end
+                    try
+                        app.setUiVisible(app.UI(fIdx).panelInfo, true);
+                    catch
+                    end
+                    try
+                        app.setUiVisible(app.UI(fIdx).panelDataView, true);
+                    catch
+                    end
+                    try
+                        app.setUiVisible(app.UI(fIdx).panelMapAlt, true);
+                    catch
+                    end
+                    try
+                        app.setUiVisible(app.UI(fIdx).panelAttitude, false);
+                    catch
+                    end
+                    try
+                        app.setMapAltArrangement(fIdx, 'vertical');
+                    catch
+                    end
 
                     if isfield(app.UI(fIdx), 'colSplitters')
                         sp = app.UI(fIdx).colSplitters;
@@ -9760,7 +9853,10 @@
                         end
                     end
                     if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
-                        try; app.UI(fIdx).hiSplitter.Visible = 'off'; catch; end
+                        try
+                            app.UI(fIdx).hiSplitter.Visible = 'off';
+                        catch
+                        end
                     end
                     app.UI(fIdx).arrangementMode = 'hsplit';
                     app.refreshPanelToggleButtons(fIdx);
@@ -9797,16 +9893,28 @@
                     % attitude 단독 lower — col [1 3] span (1×3 가로 reflow 확보)
                     if isfield(app.UI(fIdx), 'panelAttitude') ...
                             && ~isempty(app.UI(fIdx).panelAttitude) && isvalid(app.UI(fIdx).panelAttitude)
-                        try; app.UI(fIdx).panelAttitude.Layout.Row = 3; catch; end
-                        try; app.UI(fIdx).panelAttitude.Layout.Column = [1 3]; catch; end
+                        try
+                            app.UI(fIdx).panelAttitude.Layout.Row = 3;
+                        catch
+                        end
+                        try
+                            app.UI(fIdx).panelAttitude.Layout.Column = [1 3];
+                        catch
+                        end
                     end
                     app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
                 elseif ~attitudeOn && mapColOn
                     % v2-C3-2/C3-3: attitude hidden — panelMapAlt 를 lower-left 로 옮겨 blank 제거
                     if isfield(app.UI(fIdx), 'panelMapAlt') ...
                             && ~isempty(app.UI(fIdx).panelMapAlt) && isvalid(app.UI(fIdx).panelMapAlt)
-                        try; app.UI(fIdx).panelMapAlt.Layout.Row = 3; catch; end
-                        try; app.UI(fIdx).panelMapAlt.Layout.Column = [1 3]; catch; end
+                        try
+                            app.UI(fIdx).panelMapAlt.Layout.Row = 3;
+                        catch
+                        end
+                        try
+                            app.UI(fIdx).panelMapAlt.Layout.Column = [1 3];
+                        catch
+                        end
                     end
                     app.setPanelLayoutCell(fIdx, 'panelAttitude', 3, 1);
                 else
@@ -9816,10 +9924,22 @@
 
                 % v3-fix: hsplit 는 shared column 모델 — 패널 width 만으로 hidden 처리 부족.
                 % 각 패널 Visible 을 PanelVisible state 에 명시적으로 동기화.
-                try; app.setUiVisible(app.UI(fIdx).panelInfo,     infoOn); catch; end
-                try; app.setUiVisible(app.UI(fIdx).panelDataView, dataViewOn); catch; end
-                try; app.setUiVisible(app.UI(fIdx).panelAttitude, attitudeOn); catch; end
-                try; app.setUiVisible(app.UI(fIdx).panelMapAlt,   mapColOn); catch; end
+                try
+                    app.setUiVisible(app.UI(fIdx).panelInfo, infoOn);
+                catch
+                end
+                try
+                    app.setUiVisible(app.UI(fIdx).panelDataView, dataViewOn);
+                catch
+                end
+                try
+                    app.setUiVisible(app.UI(fIdx).panelAttitude, attitudeOn);
+                catch
+                end
+                try
+                    app.setUiVisible(app.UI(fIdx).panelMapAlt, mapColOn);
+                catch
+                end
 
                 % splitters: 외부 column splitter 는 hsplit 모드에서 hide
                 if isfield(app.UI(fIdx), 'colSplitters')
@@ -9834,7 +9954,10 @@
                     end
                 end
                 if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
-                    try; app.UI(fIdx).hiSplitter.Visible = 'off'; catch; end
+                    try
+                        app.UI(fIdx).hiSplitter.Visible = 'off';
+                    catch
+                    end
                 end
 
                 app.UI(fIdx).arrangementMode = 'hsplit';
@@ -9851,8 +9974,14 @@
                 if ~isfield(app.UI(fIdx), fieldName), return; end
                 h = app.UI(fIdx).(fieldName);
                 if isempty(h) || ~isvalid(h), return; end
-                try; h.Layout.Row = rowIdx; catch; end
-                try; h.Layout.Column = colIdx; catch; end
+                try
+                    h.Layout.Row = rowIdx;
+                catch
+                end
+                try
+                    h.Layout.Column = colIdx;
+                catch
+                end
             catch ME
                 app.logCaught(ME, 'setPanelLayoutCell');
             end
@@ -10674,7 +10803,10 @@
                             fc = b.FontColor;
                             if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
                                 parentBg = [];
-                                try; parentBg = b.BackgroundColor; catch; end
+                                try
+                                    parentBg = b.BackgroundColor;
+                                catch
+                                end
                                 if isnumeric(parentBg) && numel(parentBg) == 3 && all(double(parentBg) >= 0.80)
                                     b.FontColor = t.btnNormalFg;
                                 end
@@ -10700,7 +10832,10 @@
                             fc = lb.FontColor;
                             if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
                                 parentBg = [];
-                                try; parentBg = lb.Parent.BackgroundColor; catch; end
+                                try
+                                    parentBg = lb.Parent.BackgroundColor;
+                                catch
+                                end
                                 if isnumeric(parentBg) && numel(parentBg) == 3 && all(double(parentBg) >= 0.85)
                                     lb.FontColor = t.textPrimary;
                                 end
@@ -10758,9 +10893,24 @@
                         if isprop(ax, 'GridColor'), ax.GridColor = t.gridLine; end
                         if isprop(ax, 'FontSize') && ax.FontSize < 11, ax.FontSize = 11; end
                         try
-                            if ~isempty(ax.Title), ax.Title.Color = t.textPrimary; if ax.Title.FontSize < 12, ax.Title.FontSize = 12; end, end
-                            if ~isempty(ax.XLabel), ax.XLabel.Color = t.textPrimary; if ax.XLabel.FontSize < 12, ax.XLabel.FontSize = 12; end, end
-                            if ~isempty(ax.YLabel), ax.YLabel.Color = t.textPrimary; if ax.YLabel.FontSize < 12, ax.YLabel.FontSize = 12; end, end
+                            if ~isempty(ax.Title)
+                                ax.Title.Color = t.textPrimary;
+                                if ax.Title.FontSize < 12
+                                    ax.Title.FontSize = 12;
+                                end
+                            end
+                            if ~isempty(ax.XLabel)
+                                ax.XLabel.Color = t.textPrimary;
+                                if ax.XLabel.FontSize < 12
+                                    ax.XLabel.FontSize = 12;
+                                end
+                            end
+                            if ~isempty(ax.YLabel)
+                                ax.YLabel.Color = t.textPrimary;
+                                if ax.YLabel.FontSize < 12
+                                    ax.YLabel.FontSize = 12;
+                                end
+                            end
                         catch
                         end
                     catch
@@ -11551,7 +11701,10 @@
             grid.RowHeight = {28, '1x'};
             grid.Padding = [0 0 0 0];
             grid.RowSpacing = 0;
-            try; grid.BackgroundColor = t.surfaceBg; catch; end
+            try
+                grid.BackgroundColor = t.surfaceBg;
+            catch
+            end
 
             lbl = uilabel(grid, 'Text', [titleStr ' +0.000'], 'FontWeight', 'bold', 'FontSize', 15, ...
                 'FontColor', t.textPrimary, 'HorizontalAlignment', 'center');
