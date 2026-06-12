@@ -1362,23 +1362,37 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
 end
 
 function issues = i_validateFlightPlayState(st, exp, fIdx, issues) %#ok<*AGROW>
+    % v-fix-A: hidden+inactive 패널은 control 내부 검증 skip (baseline 전역 false FAIL 방지).
+    % control 검증은 panel visible / playActive / requireFlightPlay / expected visible|active 일 때만.
     try
         fp = st.boards(fIdx).flightPlay;
-        if exp.requireFlightPlay(fIdx)
+        requireFP = exp.requireFlightPlay(fIdx);
+        expVisible = logical(exp.flightPlayVisible(fIdx));
+        expActive  = logical(exp.flightPlayActive(fIdx));
+        validateControls = logical(fp.panelVisible) || logical(fp.playActive) || ...
+                           requireFP || expVisible || expActive;
+
+        % 가시/활성 expected 상태는 항상 검증 (구조 안전성)
+        if logical(fp.panelVisible) ~= expVisible
+            issues{end + 1} = sprintf('board %d flight play panel visible expected=%d actual=%d', ...
+                fIdx, expVisible, fp.panelVisible);
+        end
+        if logical(fp.playActive) ~= expActive
+            issues{end + 1} = sprintf('board %d flight play active expected=%d actual=%d', ...
+                fIdx, expActive, fp.playActive);
+        end
+
+        if ~validateControls
+            return;   % hidden+inactive 무관 case → control 내부 검증 skip
+        end
+
+        if requireFP
             required = {'buttonValid','panelValid','sliderValid','frameInputValid','timeInputValid'};
             for k = 1:numel(required)
                 if ~isfield(fp, required{k}) || ~fp.(required{k})
                     issues{end + 1} = sprintf('board %d flight play %s missing/invalid', fIdx, required{k});
                 end
             end
-        end
-        if logical(fp.panelVisible) ~= logical(exp.flightPlayVisible(fIdx))
-            issues{end + 1} = sprintf('board %d flight play panel visible expected=%d actual=%d', ...
-                fIdx, exp.flightPlayVisible(fIdx), fp.panelVisible);
-        end
-        if logical(fp.playActive) ~= logical(exp.flightPlayActive(fIdx))
-            issues{end + 1} = sprintf('board %d flight play active expected=%d actual=%d', ...
-                fIdx, exp.flightPlayActive(fIdx), fp.playActive);
         end
         if fp.sliderValid && st.boards(fIdx).rawDataRows > 0
             if fp.sliderLimits(1) > 1 || fp.sliderLimits(2) < st.boards(fIdx).rawDataRows
