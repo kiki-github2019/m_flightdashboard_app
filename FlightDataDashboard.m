@@ -4994,7 +4994,15 @@
                 return;
             end
 
-            d = uiprogressdlg(app.UIFigure, 'Title', 'Export', ...
+            % v-fix8: EditDialog 가 열려 있으면 그 위에 progress 표시 + 버튼 disable
+            progressParent = app.UIFigure;
+            if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                progressParent = app.EditDialog;
+                app.setEditDialogControlsEnabled(false);
+            end
+            cleanupEnable = onCleanup(@() app.setEditDialogControlsEnabled(true));
+            drawnow;
+            d = uiprogressdlg(progressParent, 'Title', 'Export', ...
                 'Message', '대상 파일 수집 중', 'Cancelable', 'on');
             cleanupDlg = onCleanup(@() app.safeClose(d));
 
@@ -7436,6 +7444,31 @@
             p = uigetdir(app.EDExpParentEdit.Value, 'Export parent 폴더');
             if isequal(p, 0), return; end
             app.EDExpParentEdit.Value = p;
+        end
+
+        function setEditDialogControlsEnabled(app, tf)
+            % v-fix8: EditDialog 내 모든 button/dropdown/field enable 토글
+            try
+                if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
+                types = {'uibutton', 'uidropdown', 'uieditfield', 'uispinner', 'uicheckbox'};
+                for ti = 1:numel(types)
+                    try
+                        ctrls = findall(app.EditDialog, 'Type', types{ti});
+                    catch
+                        ctrls = [];
+                    end
+                    for k = 1:numel(ctrls)
+                        try
+                            if isprop(ctrls(k), 'Enable')
+                                ctrls(k).Enable = ternary(tf, 'on', 'off');
+                            end
+                        catch
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'editDialogControlsEnabled');
+            end
         end
 
         function editDialogExport(app)
