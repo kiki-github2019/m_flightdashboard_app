@@ -915,6 +915,18 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = false;
                 exp.summaryVisible(fIdx) = false;
                 exp.sourceColumnsHidden(3 - fIdx) = false;
+                % v5-B: mid-off 영속 정책(v-final P8) — 복원 후 expected 패널 상태는
+                % 복원 직전 실측 (during-off toggle 유지가 정책 ground truth)
+                pNames = {'attitude', 'map', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
+                for bIdx = 1:2
+                    try
+                        for nIdx = 1:numel(pNames)
+                            exp.panel(bIdx).(pNames{nIdx}) = ...
+                                logical(beforeState.boards(bIdx).PanelVisible.(pNames{nIdx}));
+                        end
+                    catch
+                    end
+                end
             elseif ~any(exp.boardOff)
                 exp.boardOff(fIdx) = true;
                 exp.summaryVisible(fIdx) = true;
