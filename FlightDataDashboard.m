@@ -8274,6 +8274,7 @@
                     end
                 end
                 app.updateWindowControlLabels();
+                app.applyResponsiveControlBar();   % v-fix7: 좁은 폭 시 control bar 2줄 전환
                 % [High #3] When any board is off, commit the layout pass eagerly so the
                 % source widths re-settle before next user interaction (avoid blank gaps).
                 if anyBoardOff
@@ -8283,6 +8284,53 @@
                 end
             catch ME_silent
                 app.logCaught(ME_silent, 'responsiveLayout');
+            end
+        end
+
+        function applyResponsiveControlBar(app)
+            % v-fix7: figure 폭 < 1100 이면 control bar 2줄 (라벨/값 1행 + 토글 2행)
+            try
+                figW = app.getFigurePixelWidth();
+                narrow = figW < 1100;
+                for fIdx = 1:min(2, numel(app.UI))
+                    if ~isfield(app.UI(fIdx), 'ctrlGrid') || isempty(app.UI(fIdx).ctrlGrid) ...
+                            || ~isvalid(app.UI(fIdx).ctrlGrid)
+                        continue;
+                    end
+                    g = app.UI(fIdx).ctrlGrid;
+                    btns = {app.UI(fIdx).btnAtt, app.UI(fIdx).btnMap, app.UI(fIdx).btnAlt, app.UI(fIdx).btnVid};
+                    if narrow
+                        g.RowHeight = {'1x', '1x'};
+                        g.ColumnWidth = {100, 150, 110, 120, '1x'};
+                        cols = [1 2 3 4];
+                        for b = 1:numel(btns)
+                            h = btns{b};
+                            if ~isempty(h) && isvalid(h)
+                                try, h.Layout.Row = 2; h.Layout.Column = cols(b); catch; end
+                            end
+                        end
+                        if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
+                                && isvalid(app.UI(fIdx).ctrlFGrid)
+                            app.UI(fIdx).ctrlFGrid.RowHeight = {78, '1x'};
+                        end
+                    else
+                        g.RowHeight = {'1x'};
+                        g.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
+                        cols = [6 7 8 9];
+                        for b = 1:numel(btns)
+                            h = btns{b};
+                            if ~isempty(h) && isvalid(h)
+                                try, h.Layout.Row = 1; h.Layout.Column = cols(b); catch; end
+                            end
+                        end
+                        if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
+                                && isvalid(app.UI(fIdx).ctrlFGrid)
+                            app.UI(fIdx).ctrlFGrid.RowHeight = {45, '1x'};
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'responsiveCtrlBar');
             end
         end
 
@@ -11252,7 +11300,7 @@
                         'dataGrid', {}, 'panelAttitude', {}, 'panelAttitudeGrid', {}, ...
                         'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
                         'panelMapAlt', {}, 'panelInfo', {}, 'panelDataView', {}, 'panelVideo', {}, 'colSplitters', {}, ...
-                        'arrangementMode', {}, ...
+                        'arrangementMode', {}, 'ctrlGrid', {}, 'ctrlRowPanel', {}, 'ctrlFGrid', {}, ...
                         'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnInfo', {}, 'btnDataView', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'vidViewerDialog', {}, 'vidContainer', {}, 'vidResolutionDropdown', {}, 'vidControlBtn', {}, 'vidControlDialog', {}, ...
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
@@ -11294,6 +11342,9 @@
                 glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
+                UI_temp(fIdx).ctrlGrid = glCtrl;            % v-fix7: responsive 2줄 전환용
+                UI_temp(fIdx).ctrlRowPanel = controlPanel;
+                UI_temp(fIdx).ctrlFGrid = fGrid;
 
                 uilabel(glCtrl, 'Text', '입력 시간(s):', 'FontWeight', 'bold', 'FontSize', 12, 'FontColor', tT.panelTitleFg);
                 UI_temp(fIdx).spinner = uispinner(glCtrl, 'Enable', 'off', 'FontSize', 13, 'ValueDisplayFormat', '%.3f', ...
