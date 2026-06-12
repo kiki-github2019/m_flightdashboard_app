@@ -6117,6 +6117,7 @@
 
             app.EDOptReqTable = uitable(tabReq, 'Data', table(), ...
                 'ColumnEditable', [false true], ...
+                'ColumnFormat', {'char', 'char'}, ...
                 'CellEditCallback', @(src, evt) app.onOptionDraftEdit('req', src, evt));
             app.EDOptReqTable.Position = [10 10 900 280];
 
@@ -6400,15 +6401,19 @@
             try
                 if isempty(app.EDOptFlightDD) || ~isvalid(app.EDOptFlightDD), return; end
                 fIdx = 1; if strcmp(app.EDOptFlightDD.Value, 'Flight 2'), fIdx = 2; end
+                src = app.Models(fIdx).rawDataUnscaled;
+                csvHeaders = {};
+                if ~isempty(src) && width(src) > 0
+                    csvHeaders = src.Properties.VariableNames;
+                end
                 draft = app.OptionDrafts{fIdx};
                 if isempty(draft)
-                    src = app.Models(fIdx).rawDataUnscaled;
-                    if isempty(src) || width(src) == 0
+                    if isempty(csvHeaders)
                         if isvalid(app.EDOptReqTable), app.EDOptReqTable.Data = table(); end
                         if isvalid(app.EDOptDspTable), app.EDOptDspTable.Data = table(); end
                         return;
                     end
-                    draft = app.parseOptionFileToDraft(app.resolveOptionFilePath(fIdx), src.Properties.VariableNames);
+                    draft = app.parseOptionFileToDraft(app.resolveOptionFilePath(fIdx), csvHeaders);
                     app.OptionDrafts{fIdx} = draft;
                 end
                 % Required columns table
@@ -6424,6 +6429,12 @@
                 if isvalid(app.EDOptReqTable)
                     app.EDOptReqTable.Data = table(reqKeys(:), vals, ...
                         'VariableNames', {'Key', 'Column'});
+                    choices = [{''}, csvHeaders(:)'];
+                    if numel(choices) >= 2
+                        app.EDOptReqTable.ColumnFormat = {'char', choices};
+                    else
+                        app.EDOptReqTable.ColumnFormat = {'char', 'char'};
+                    end
                 end
                 % Display columns table
                 if isvalid(app.EDOptDspTable)
@@ -7910,7 +7921,7 @@
                     end
                     text(ax, 0.65*cos(angRad), 0.65*sin(angRad), str, 'Color', tg.gaugeTickFg, ...
                          'HorizontalAlignment', 'center', 'FontWeight', 'bold', ...
-                         'FontUnits', 'normalized', 'FontSize', 0.085);
+                         'FontUnits', 'normalized', 'FontSize', 0.115, 'Clipping', 'off');
                 end
 
                 if gaugeType == 1
@@ -9719,6 +9730,43 @@
                 dataViewOn = isfield(st,'dataView') && st.dataView;
                 attitudeOn = isfield(st,'attitude') && st.attitude;
                 mapColOn = (isfield(st,'mapOnly') && st.mapOnly) || (isfield(st,'altOnly') && st.altOnly);
+                sideAnalysisMode = isBoardOffSource && ~attitudeOn && mapColOn && infoOn && dataViewOn;
+
+                if sideAnalysisMode
+                    mapW = max(220, round(figW * 0.24));
+                    dg.RowHeight = {'1x'};
+                    dg.ColumnWidth = {leftFixed, thk, '1x', thk, mapW, 0, 0, 0};
+                    dg.Scrollable = 'on';
+
+                    app.setPanelLayoutCell(fIdx, 'panelInfo',     1, 1);
+                    app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
+                    app.setPanelLayoutCell(fIdx, 'panelMapAlt',   1, 5);
+                    app.setPanelLayoutCell(fIdx, 'panelAttitude', 1, 1);
+                    try; app.setUiVisible(app.UI(fIdx).panelInfo,     true); catch; end
+                    try; app.setUiVisible(app.UI(fIdx).panelDataView, true); catch; end
+                    try; app.setUiVisible(app.UI(fIdx).panelMapAlt,   true); catch; end
+                    try; app.setUiVisible(app.UI(fIdx).panelAttitude, false); catch; end
+                    try; app.setMapAltArrangement(fIdx, 'vertical'); catch; end
+
+                    if isfield(app.UI(fIdx), 'colSplitters')
+                        sp = app.UI(fIdx).colSplitters;
+                        for s = 1:numel(sp)
+                            if ~isempty(sp(s)) && isvalid(sp(s))
+                                try
+                                    sp(s).Visible = ternary(s <= 2, 'on', 'off');
+                                catch
+                                end
+                            end
+                        end
+                    end
+                    if isfield(app.UI(fIdx), 'hiSplitter') && ~isempty(app.UI(fIdx).hiSplitter) && isvalid(app.UI(fIdx).hiSplitter)
+                        try; app.UI(fIdx).hiSplitter.Visible = 'off'; catch; end
+                    end
+                    app.UI(fIdx).arrangementMode = 'hsplit';
+                    app.refreshPanelToggleButtons(fIdx);
+                    app.reflowAttitudePanel(fIdx);
+                    return;
+                end
 
                 % 양 영역 모두 visible 인 케이스가 대부분 — 좌 fixed, 우 flex.
                 % 단독 영역만 visible 인 경우는 좌측을 flex 로 확장.
