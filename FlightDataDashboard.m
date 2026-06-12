@@ -166,12 +166,11 @@
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
+        BoardPanelVisibleSnapshot = {struct(), struct()} % board-off 진입 전 PanelVisible/ColumnWidth 복원 스냅샷
         BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
         BoardOffSourceRatio  = 1.0             % [v4-R1] off 시 source 100% (summary 폐기). active 보드 단독 표시. (clamp 0.5~1.0)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
-        % [Q-03] BoardPanelVisibleSnapshot 제거 — restoreBoardPanelState 는
-        % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
 
         % [Audit fix #1] Edit dialog UI handles (all default to [])
         EditDialogStatusLbl  = []
@@ -1155,6 +1154,7 @@
         function UIFigureCloseRequest(app, ~, ~)
             % [Stabilization P2] do not run the close path twice
             if app.IsDeleting, return; end
+            canClose = true;
 
             % [P3] Abort close immediately when apply/save paths fail
             % (or when the user cancels).
@@ -1174,6 +1174,7 @@
                     end
                     switch sel
                         case '취소'
+                            canClose = false;
                             return;
                         case '적용 후 저장하고 닫기'
                             if pendingTimer
@@ -1194,13 +1195,17 @@
                                     catch
                                         cont = '';
                                     end
-                                    if ~strcmp(cont, '그래도 닫기'), return; end
+                                    if ~strcmp(cont, '그래도 닫기')
+                                        canClose = false;
+                                        return;
+                                    end
                                 end
                             end
                             % --- Project save (must succeed or user aborts) ---
                             if isempty(app.ProjectFilePath)
                                 [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
                                 if isequal(fn, 0)
+                                    canClose = false;
                                     return;     % user cancelled save destination
                                 end
                                 app.ProjectFilePath = fullfile(pn, fn);
@@ -1216,6 +1221,7 @@
                                     uialert(app.UIFigure, 'project 저장 실패. 창을 닫지 않습니다.', 'Project');
                                 catch
                                 end
+                                canClose = false;
                                 return;
                             end
                             try
@@ -1251,7 +1257,10 @@
                                 catch
                                     cont = '';
                                 end
-                                if ~strcmp(cont, '그래도 닫기'), return; end
+                                if ~strcmp(cont, '그래도 닫기')
+                                    canClose = false;
+                                    return;
+                                end
                             end
                         case '버리고 닫기'
                             % Discard path: stop the autosave timer cleanly, do not write.
@@ -1275,7 +1284,10 @@
                 end
             catch ME
                 app.logCaught(ME, 'close-request');
+                canClose = false;
+                return;
             end
+            if ~canClose, return; end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
@@ -8723,8 +8735,8 @@
                         app.updateBoardToggleButtons();
                         return;
                     end
-                    % [Q-03] captureBoardPanelState 호출 제거 — restoreBoardPanelState 가
-                    % 현재 PanelVisible 만 사용하므로 스냅샷 불필요.
+                    app.captureBoardPanelState(fIdx);
+                    app.captureBoardPanelState(sourceIdx);
                     app.BoardOffState(fIdx) = true;
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
@@ -9146,16 +9158,51 @@
             end
         end
 
-        % [Q-03] captureBoardPanelState 함수 삭제 — 더 이상 호출되지 않음.
+        function captureBoardPanelState(app, fIdx)
+            try
+                if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
+                    return;
+                end
+                snap = struct('PanelVisible', [], 'ColumnWidth', []);
+                if isfield(app.UI(fIdx), 'PanelVisible')
+                    snap.PanelVisible = app.normalizePanelVisibleState(app.UI(fIdx).PanelVisible);
+                end
+                if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) ...
+                        && isvalid(app.UI(fIdx).dataGrid)
+                    snap.ColumnWidth = app.UI(fIdx).dataGrid.ColumnWidth;
+                end
+                app.BoardPanelVisibleSnapshot{fIdx} = snap;
+            catch ME
+                app.logCaught(ME, 'boardCapture');
+            end
+        end
+
+        function snap = getBoardPanelSnapshot(app, fIdx)
+            snap = struct('PanelVisible', [], 'ColumnWidth', []);
+            try
+                if fIdx >= 1 && fIdx <= numel(app.BoardPanelVisibleSnapshot) ...
+                        && isstruct(app.BoardPanelVisibleSnapshot{fIdx})
+                    snap = app.BoardPanelVisibleSnapshot{fIdx};
+                end
+            catch
+            end
+        end
 
         function restoreBoardPanelState(app, fIdx)
-            % [Bug #2 fix] Do NOT overwrite PanelVisible from the pre-off snapshot.
-            % The user may have toggled side panels (attitude/map/video) on the source
-            % board WHILE in off mode; reflowBoardColumns must use the CURRENT PanelVisible
-            % so those mid-off changes survive after board-on press.
             try
                 % Make sure the board panel itself is visible again (off-board case).
                 app.setUiVisible(app.UI(fIdx).panel, true);
+                snap = app.getBoardPanelSnapshot(fIdx);
+                if ~isempty(snap.PanelVisible)
+                    app.UI(fIdx).PanelVisible = app.normalizePanelVisibleState(snap.PanelVisible);
+                end
+                if ~isempty(snap.ColumnWidth)
+                    app.rememberUserColumnWidths(fIdx, snap.ColumnWidth);
+                    if isfield(app.UI(fIdx), 'dataGrid') && ~isempty(app.UI(fIdx).dataGrid) ...
+                            && isvalid(app.UI(fIdx).dataGrid)
+                        app.UI(fIdx).dataGrid.ColumnWidth = snap.ColumnWidth;
+                    end
+                end
                 app.ensureBoardCorePanelsVisible(fIdx);
                 app.reflowBoardColumns(fIdx);
             catch ME
@@ -9204,6 +9251,10 @@
                             widths{1} = '1x';
                         end
                     end
+                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                elseif numel(widths) >= 4
+                    widths{3} = 0;  % legacy current flight info
+                    widths{4} = 0;  % legacy plot data panel
                     app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 end
             catch ME
@@ -9855,14 +9906,35 @@
             icons = {'⊞', '▥', '▤', '▦', '↺'};
         end
 
-        function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild) %#ok<INUSD>
-            % v4-R1: summary panel 폐기. NO-OP wrapper (호출자 호환성만 유지).
-            % active 보드는 source 100% 단독 표시 — source 의 info/plot 컬럼은 보존.
+        function refreshBoardOffSummaryPanel(app, fIdx, forceRebuild)
+            if nargin < 3, forceRebuild = false; end
             try
                 if isempty(app.UI) || fIdx < 1 || fIdx > numel(app.UI), return; end
                 if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
                         && isvalid(app.UI(fIdx).boardOffPanel)
-                    app.setUiVisible(app.UI(fIdx).boardOffPanel, false);
+                    if ~app.BoardOffState(fIdx) || app.BoardOffSourceRatio >= 1.0
+                        app.setUiVisible(app.UI(fIdx).boardOffPanel, false);
+                        return;
+                    end
+                    app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
+                else
+                    return;
+                end
+                sourceIdx = app.getBoardOffSourceIdx(fIdx);
+                if sourceIdx < 1 || sourceIdx > numel(app.UI), return; end
+                if isfield(app.UI(fIdx), 'boardOffTable') && ~isempty(app.UI(fIdx).boardOffTable) ...
+                        && isvalid(app.UI(fIdx).boardOffTable) ...
+                        && isfield(app.UI(sourceIdx), 'dataTable') && ~isempty(app.UI(sourceIdx).dataTable) ...
+                        && isvalid(app.UI(sourceIdx).dataTable)
+                    app.UI(fIdx).boardOffTable.Data = app.UI(sourceIdx).dataTable.Data;
+                end
+                sig = app.getBoardOffPlotSignature(sourceIdx);
+                if forceRebuild || ~isfield(app.UI(fIdx), 'boardOffSignature') ...
+                        || ~strcmp(char(app.UI(fIdx).boardOffSignature), sig)
+                    app.rebuildBoardOffPlots(fIdx, sourceIdx);
+                    app.UI(fIdx).boardOffSignature = sig;
+                else
+                    app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
                 end
             catch ME
                 app.logCaught(ME, 'boardSummary');
