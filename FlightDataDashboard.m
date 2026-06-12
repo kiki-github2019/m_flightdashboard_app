@@ -559,6 +559,7 @@
                 case 'applyPendingSyncAnchor',        app.syncSearchApply([]);
                 case 'getPendingSyncAnchor',          varargout{1} = app.PendingFlightSyncAnchor;
                 case 'getOpenDialogHandlesForTest',   varargout{1} = app.getOpenDialogHandlesForTest();
+                case 'computeSyncSearchRowsRaw',      varargout{1} = app.computeSyncSearchRows(varargin{:});
                 case 'getSelectedInfoValueForTest'
                     % v-fix6: 선택 항목의 현재 index 실제 값 (exact target 확보)
                     fk = varargin{1};
