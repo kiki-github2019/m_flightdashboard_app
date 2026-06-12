@@ -741,6 +741,12 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if ~(isstruct(pa) && isnan(pa.T1) && isnan(pa.T2))
                 error('AutoTest:PendingSyncAnchorNotCleared', 'PendingFlightSyncAnchor T1/T2 not cleared to NaN');
             end
+        case 'assertOpenDialogTagExists'
+            % 검색 dialog 등 실제 open 여부를 tag 로 직접 검증 (silent return → false PASS 차단)
+            dlgs = app.testHook('getOpenDialogHandlesForTest');
+            if isempty(dlgs) || ~any(strcmp(dlgs(:, 2), char(act.args{1})))
+                error('AutoTest:OpenDialogMissing', 'Expected open dialog tag not found: %s', char(act.args{1}));
+            end
         case 'searchFlightDataValue'
             app.testHook('searchFlightDataValue', act.args{:});
         case 'assertSyncMenuExists'
@@ -2197,6 +2203,7 @@ function cases = i_buildCaseMatrix()
     SSC = @(fk, target, mode, lbl) struct('fn','computeSyncSearchRows',     'args',{{fk, target, mode}}, 'label',lbl, 'row',NaN);
     SSCLR = @(lbl)             struct('fn','clearPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
     SSCHKCLR = @(lbl)          struct('fn','assertPendingSyncAnchorCleared','args',{{}},          'label',lbl, 'row',NaN);
+    SSDLG = @(tag, lbl)        struct('fn','assertOpenDialogTagExists',     'args',{{tag}},       'label',lbl, 'row',NaN);
     SMENU = @(fk, kind, lbl)   struct('fn','assertSyncMenuExists',          'args',{{fk, kind}}, 'label',lbl, 'row',NaN);
     SRSEL = @(fk, row, lbl)    struct('fn','setSelectedRowForTest',         'args',{{fk, row}}, 'label',lbl, 'row',NaN);
     CPC = @(lbl)               struct('fn','capturePlotConfigAndRefresh',   'args',{{}},          'label',lbl, 'row',NaN);
@@ -2535,7 +2542,8 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-08 search dialog open/close lifecycle', ...
         'dialog lifecycle', '검색 dialog open → close cleanup 무예외', ...
         {SRSEL(1, 3, 'select row3'), ...
-         struct('fn','searchFlightDataValue', 'args',{{1}}, 'label','open sync search', 'row',NaN)});
+         struct('fn','searchFlightDataValue', 'args',{{1}}, 'label','open sync search', 'row',NaN), ...
+         SSDLG('syncsearch_f1', 'assert sync search dialog opened')});
 
     % I-PROJECT-RESTORE: project fixture restore and safe failure coverage.
     projectKinds = {'full', 'data_only', 'data_plot_single', 'data_plot_multi', ...
