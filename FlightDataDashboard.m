@@ -537,14 +537,13 @@
                 case 'loadProjectFile',               varargout{1} = app.loadProjectFile(varargin{:});
                 case 'autoLoadProjectFromFile',       app.autoLoadProjectFromFile(varargin{:});
                 case 'editDialogOpenProjectFromPath'
-                    app.autoLoadProjectFromFile(varargin{1});
+                    % v-fixD: production editDialogAutoLoad 와 동일한 방어 패턴
                     try
-                        if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
-                            app.refreshEditDialog();
-                        end
+                        app.autoLoadProjectFromFile(varargin{1});
                     catch ME
-                        app.logCaught(ME, 'test:editDialogOpenProjectFromPath');
+                        try, app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad'); catch; end
                     end
+                    app.safeRefreshEditDialog('test:editDialogOpenProjectFromPath:refresh');
                 case 'toggleVideoControlDialog',      app.toggleVideoControlDialog(varargin{:});
                 case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
                 case 'goToFrame',                     app.goToFrame(varargin{:});
@@ -6794,7 +6793,7 @@
                     uialert(app.EditDialog, 'project 저장 완료', 'Project');
                 catch
                 end
-                app.refreshEditDialog();
+                app.safeRefreshEditDialog('editDialogSaveProject:refresh');   % v-fixE
             end
         end
 
@@ -6807,36 +6806,19 @@
                     uialert(app.EditDialog, 'project 저장 완료', 'Project');
                 catch
                 end
-                app.refreshEditDialog();
+                app.safeRefreshEditDialog('editDialogSaveProjectAs:refresh');   % v-fixE
             end
         end
 
         function editDialogOpenProject(app)
             [fn, pn] = uigetfile({'*.fdproj', 'Project file'}, '열 project 파일');
             if isequal(fn, 0), return; end
-            app.autoLoadProjectFromFile(fullfile(pn, fn));
             try
-                if isempty(app) || ~isvalid(app)
-                    return;
-                end
-            catch
-                return;
-            end
-            try
-                if isempty(app.EditDialog) || ~isvalid(app.EditDialog)
-                    return;
-                end
-            catch
-                return;
-            end
-            try
-                app.refreshEditDialog();
+                app.autoLoadProjectFromFile(fullfile(pn, fn));   % v-fixE: load 예외 격리
             catch ME
-                try
-                    app.logCaught(ME, 'editDialogOpenProject:refresh');
-                catch
-                end
+                try, app.logCaught(ME, 'editDialogOpenProject:autoLoad'); catch; end
             end
+            app.safeRefreshEditDialog('editDialogOpenProject:refresh');
         end
 
         function editDialogAutoLoad(app)
@@ -6848,27 +6830,26 @@
             catch ME
                 try, app.logCaught(ME, 'editDialogAutoLoad:autoLoad'); catch; end
             end
+            app.safeRefreshEditDialog('editDialogAutoLoad:refresh');
+        end
+
+        function safeRefreshEditDialog(app, tag)
+            % v-fixE: refreshEditDialog 안전 래퍼 (app/EditDialog 유효성 + IsDeleting guard)
+            if nargin < 2 || isempty(tag), tag = 'safeRefreshEditDialog'; end
             try
-                if isempty(app) || ~isvalid(app)
-                    return;
-                end
+                if isempty(app) || ~isvalid(app) || app.IsDeleting, return; end
             catch
                 return;
             end
             try
-                if isempty(app.EditDialog) || ~isvalid(app.EditDialog)
-                    return;
-                end
+                if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
             catch
                 return;
             end
             try
                 app.refreshEditDialog();
             catch ME
-                try
-                    app.logCaught(ME, 'editDialogAutoLoad:refresh');
-                catch
-                end
+                try, app.logCaught(ME, tag); catch; end
             end
         end
 
@@ -8451,7 +8432,11 @@
                     return;
                 end
                 fIdx = round(double(fIdx));
-                ok = fIdx >= 1 && fIdx <= 2 && ~isempty(app.UI) && fIdx <= numel(app.UI);
+                % v-fixC: UI/Models/FlightPlayActive 배열 길이 모두 검증
+                ok = fIdx >= 1 && fIdx <= 2 ...
+                    && ~isempty(app.UI) && fIdx <= numel(app.UI) ...
+                    && ~isempty(app.Models) && fIdx <= numel(app.Models) ...
+                    && ~isempty(app.FlightPlayActive) && fIdx <= numel(app.FlightPlayActive);
             catch
                 fIdx = NaN;
                 ok = false;
@@ -8509,6 +8494,12 @@
             try
                 [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
                 if ~okIdx, return; end
+                % v-fixA: collapse 전 재생 중지 (hidden playback / currentIndex drift 방지)
+                try
+                    app.stopFlightPlay(fIdx);
+                catch ME_stop
+                    try, app.logCaught(ME_stop, 'flight-play:collapse-stop'); catch; end
+                end
                 if isfield(app.UI(fIdx), 'flightPlayControlPanel') && ~isempty(app.UI(fIdx).flightPlayControlPanel) ...
                         && isvalid(app.UI(fIdx).flightPlayControlPanel)
                     app.setUiVisible(app.UI(fIdx).flightPlayControlPanel, false);
@@ -8617,8 +8608,18 @@
                 start(app.FlightPlayTimer{fIdx});
                 app.refreshFlightPlayControlPanel(fIdx);
             catch ME
-                if exist('okIdx', 'var') && okIdx
-                    app.FlightPlayActive(fIdx) = false;
+                % v-fixB: start 실패 시 부분 생성된 timer 정리
+                try
+                    if exist('okIdx', 'var') && okIdx
+                        app.FlightPlayActive(fIdx) = false;
+                        if numel(app.FlightPlayTimer) >= fIdx && ~isempty(app.FlightPlayTimer{fIdx}) ...
+                                && isvalid(app.FlightPlayTimer{fIdx})
+                            try, stop(app.FlightPlayTimer{fIdx}); catch; end
+                            delete(app.FlightPlayTimer{fIdx});
+                        end
+                        app.FlightPlayTimer{fIdx} = [];
+                    end
+                catch
                 end
                 app.logCaught(ME, 'flight-play:start');
             end
