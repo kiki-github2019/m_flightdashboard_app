@@ -7965,6 +7965,7 @@
             app.Models(fIdx).mappedCols  = mappedCols;
             app.Models(fIdx).displayMeta = displayMeta;
             app.Models(fIdx).selectedRow = 1;
+            app.invalidateInfoTableSelection(fIdx);   % v-fix: row 의미 변경 → 선택 무효화
             app.Models(fIdx).isMockData  = isMock;
             % Stash the resolved draft as the editor baseline.
             app.OptionDrafts{fIdx} = struct('sourcePath', char(draft.sourcePath), ...
@@ -8169,7 +8170,7 @@
                 if resetIndex
                     currIdx = 1;
                     % v-fix5: 새 데이터 로드 시 stale 선택 상태 무효화
-                    app.LastInfoTableSelectionValid(fIdx) = false;
+                    app.invalidateInfoTableSelection(fIdx);
                 else
                     currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
                 end
@@ -13527,6 +13528,16 @@
                 end
             catch ME
                 app.logCaught(ME, 'sync-search:clear-anchor');
+            end
+        end
+
+        function invalidateInfoTableSelection(app, fIdx)
+            % displayMeta 재구성 시 stale 선택 무효화 (동일 row 가 다른 항목 의미 가능)
+            try
+                if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
+                    app.LastInfoTableSelectionValid(fIdx) = false;
+                end
+            catch
             end
         end
 
