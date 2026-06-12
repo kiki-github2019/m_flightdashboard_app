@@ -1977,13 +1977,27 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
     if ~i_shouldCapture(captureOpts, reason)
         return;
     end
-    % v5-H: 재생 timer 활성 중 getframe 은 R2025a hang 유발 (case97) — 캡처 전 정지
+    % v5-H2: 재생 timer 활성 중 getframe 은 R2025a hang 유발 (case97).
+    % 일반 step 캡처는 상태 왜곡 없이 skip(+콘솔 기록), 'fail' 진단 캡처만 정지 후 진행.
     try
         st = app.testHook('getTestState');
+        activeFp = [];
         for fp = 1:2
             if numel(st.boards) >= fp && isfield(st.boards(fp), 'flightPlay') ...
                     && logical(st.boards(fp).flightPlay.playActive)
-                app.testHook('stopFlightPlay', fp);
+                activeFp(end+1) = fp; %#ok<AGROW>
+            end
+        end
+        if ~isempty(activeFp)
+            if strcmpi(reason, 'fail')
+                for fp = activeFp
+                    app.testHook('stopFlightPlay', fp);
+                end
+                fprintf('  [capture] stopped active flight-play timer(s) %s before fail capture\n', mat2str(activeFp));
+            else
+                fprintf('  [capture] skipped (active flight-play timer %s, case%02d step%02d)\n', ...
+                    mat2str(activeFp), caseIdx, stepIdx);
+                return;
             end
         end
     catch
