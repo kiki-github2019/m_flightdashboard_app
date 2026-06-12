@@ -10797,17 +10797,30 @@
         end
 
         function applyThemeToButtons(app, root, t)
-            % v4-L2: 기본 buttons (styleToolbarButton 처리 안된 것) 만 light normalize.
-            % active/accent/disabled 상태는 styleToolbarButton 가 이미 theme 참조.
+            % v-sync: role-colored 버튼은 Tag='FDD:RoleButton' 또는 role palette 일치 시 skip.
             try
                 btns = findall(root, 'Type', 'uibutton');
+                rolePalette = [t.toolbarYellowBg; t.toolbarGreenBg; t.toolbarBlueBg; ...
+                               t.toolbarDarkBg; t.toolbarGrayBg; t.btnWarningBg];
                 for k = 1:numel(btns)
                     b = btns(k);
                     if isempty(b) || ~isvalid(b), continue; end
                     try
+                        % v-sync: Tag 기반 whitelist
+                        if isprop(b, 'Tag') && strcmp(string(b.Tag), "FDD:RoleButton")
+                            continue;
+                        end
                         if isprop(b, 'BackgroundColor')
                             bg = b.BackgroundColor;
-                            if isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
+                            isRoleBg = false;
+                            if isnumeric(bg) && numel(bg) == 3
+                                for ri = 1:size(rolePalette, 1)
+                                    if all(abs(double(bg) - rolePalette(ri, :)) < 0.02)
+                                        isRoleBg = true; break;
+                                    end
+                                end
+                            end
+                            if ~isRoleBg && isnumeric(bg) && numel(bg) == 3 && all(double(bg) < 0.55)
                                 b.BackgroundColor = t.btnNormalBg;
                             end
                         end
