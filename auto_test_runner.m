@@ -184,8 +184,12 @@ function auto_test_runner(varargin)
         i_appendProgressMd(progressFile, i, r.steps, r.status, r.error);
         % v-chunk: 현 chunk 의 index 즉시 갱신 (중간 crash 대비)
         chunkCases = caseOrder(chunkStartIdx:chunkEndIdx);
-        try; i_writeIndexMd(outDir, results(chunkCases), indexFile, progressFile); catch; end
+        try
+            i_writeIndexMd(outDir, results(chunkCases), indexFile, progressFile);
+        catch
+        end
         % v-chunk: chunk 끝 도달 시 finalize + 다음 chunk 준비
+        if ii == chunkEndIdx
         if ii == chunkEndIdx
             chunkSubset = results(chunkCases);
             i_appendProgressMd(progressFile, 0, 0, 'CHUNK_FINISHED', sprintf('PASS=%d FAIL=%d', ...
@@ -1262,14 +1266,20 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
         imwrite(img, file);
         % v3-fix: capture 후 큰 이미지 변수 즉시 해제 + renderer 안정화 (MATLAB Online OOM 방지)
         clear f img;
-        try; drawnow limitrate; catch; end
+        try
+            drawnow limitrate
+        catch
+        end
         captured = isfile(file);
         if captured, return; end
     catch
     end
     try
         exportapp(app.UIFigure, file);
-        try; drawnow limitrate; catch; end
+        try
+            drawnow limitrate
+        catch
+        end
         captured = isfile(file);
         if captured, return; end
     catch
