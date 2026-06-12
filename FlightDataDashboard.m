@@ -988,6 +988,18 @@
                 if abs(app.UI(fIdx).spinner.Value - currTime) > eps
                     app.UI(fIdx).spinner.Value = currTime;
                 end
+                % v-sync: AVI 동기 활성 시 video frame 동기 이동 (case49 fix)
+                try
+                    vss = app.VideoSyncState(fIdx);
+                    if vss.IsSynced && vss.TotalFrames > 0 && ~app.InGoToFrame(fIdx)
+                        targetFrame = app.timeToFrame(fIdx, currTime);
+                        if isfinite(targetFrame) && targetFrame ~= vss.CurrentFrame
+                            app.goToFrame(fIdx, targetFrame, 'final');
+                        end
+                    end
+                catch ME_sync
+                    app.logCaught(ME_sync, 'applyTimeChange:videoSync');
+                end
             catch e
                 warning('FlightDataDashboard:ApplyTimeChange', 'applyTimeChange 오류: %s', e.message);
             end
