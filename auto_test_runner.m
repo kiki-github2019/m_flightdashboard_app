@@ -682,6 +682,12 @@ function i_applyAction(app, act, beforeState)
             app.testHook('boardOffPlotSelectedVariable', offIdx);
         case 'applyTimeChange'
             app.testHook('applyTimeChange', act.args{:});
+        case {'toggleFlightPlayControlPanel','moveFlightDataFrame','refreshFlightPlayControlPanel', ...
+              'handleFlightPlaySliderChange','handleFlightPlayFrameInputChange','handleFlightPlayTimeInputChange', ...
+              'startFlightPlay','stopFlightPlay'}
+            app.testHook(act.fn, act.args{:});
+        case 'setFlightDataSync'
+            app.testHook('setFlightDataSync', act.args{:});
         case 'applyLayoutPreset'
             app.testHook('applyLayoutPreset', act.args{:});
         case 'setBodyRowSplitRatio'
@@ -734,6 +740,9 @@ function exp = i_expectedFromState(st)
     exp.minUserLayoutPresetCount = st.UserLayoutPresetCount;
     exp.requireColumnWidthChange = false(1, 2);
     exp.columnWidthBefore = cell(1, 2);
+    exp.flightPlayVisible = false(1, 2);
+    exp.requireFlightPlay = false(1, 2);
+    exp.flightPlayActive = false(1, 2);
     exp.savedPresetState = struct();
     for fIdx = 1:2
         b = st.boards(fIdx);
@@ -747,6 +756,10 @@ function exp = i_expectedFromState(st)
         exp.videoSynced(fIdx) = b.videoSync.IsSynced;
         exp.summaryVisible(fIdx) = b.boardOffPanelVisible;
         exp.sourceColumnsHidden(fIdx) = b.infoColumnHidden && b.plotColumnHidden && b.splitterColumnHidden;
+        if isfield(b, 'flightPlay')
+            exp.flightPlayVisible(fIdx) = logical(b.flightPlay.panelVisible);
+            exp.flightPlayActive(fIdx) = logical(b.flightPlay.playActive);
+        end
     end
 end
 
@@ -814,6 +827,38 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.requireVideoFrameMove(fIdx) = true;
                 exp.videoFrameBeforeMove(fIdx) = beforeState.boards(fIdx).videoSync.CurrentFrame;
             end
+        case 'toggleFlightPlayControlPanel'
+            fIdx = act.args{1};
+            exp.flightPlayVisible(fIdx) = ~exp.flightPlayVisible(fIdx);
+            exp.requireFlightPlay(fIdx) = true;
+        case 'moveFlightDataFrame'
+            fIdx = act.args{1};
+            delta = act.args{2};
+            exp.currentIndex(fIdx) = i_clampIndex(beforeState, fIdx, beforeState.boards(fIdx).currentIndex + delta);
+            exp.requireFlightPlay(fIdx) = true;
+        case {'handleFlightPlaySliderChange','handleFlightPlayFrameInputChange'}
+            fIdx = act.args{1};
+            exp.currentIndex(fIdx) = i_clampIndex(beforeState, fIdx, act.args{2});
+            exp.requireFlightPlay(fIdx) = true;
+        case 'handleFlightPlayTimeInputChange'
+            fIdx = act.args{1};
+            exp.currentIndex(fIdx) = 1;
+            exp.requireFlightPlay(fIdx) = true;
+        case 'refreshFlightPlayControlPanel'
+            fIdx = act.args{1};
+            exp.requireFlightPlay(fIdx) = true;
+        case 'startFlightPlay'
+            fIdx = act.args{1};
+            exp.flightPlayActive(fIdx) = true;
+            exp.currentIndex(fIdx) = NaN;
+            exp.requireFlightPlay(fIdx) = true;
+        case 'stopFlightPlay'
+            fIdx = act.args{1};
+            exp.flightPlayActive(fIdx) = false;
+            exp.requireFlightPlay(fIdx) = true;
+        case 'setFlightDataSync'
+            exp.currentIndex(1) = 1;
+            exp.currentIndex(2) = NaN;
         case 'applyLayoutPreset'
             exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
         case 'setBodyRowSplitRatio'
@@ -868,6 +913,16 @@ function exp = i_updateExpectedLayoutPreset(exp, presetName)
     end
     exp.currentLayoutPreset = presetName;
     % v4: exp.panel, exp.boardOff, exp.summaryVisible, exp.sourceColumnsHidden 변경 금지
+end
+
+function idx = i_clampIndex(st, fIdx, value)
+    idx = round(double(value));
+    try
+        nRows = max(1, double(st.boards(fIdx).rawDataRows));
+    catch
+        nRows = max(1, idx);
+    end
+    idx = max(1, min(nRows, idx));
 end
 
 function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
@@ -968,6 +1023,7 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
             if ~st.boards(fIdx).altMarkerInteractive || ~st.boards(fIdx).altLineInteractive
                 issues{end + 1} = sprintf('board %d altitude marker/xline callback missing', fIdx);
             end
+            issues = i_validateFlightPlayState(st, exp, fIdx, issues);
         end
         if st.boards(fIdx).plotTabCount < exp.minPlotTabCount(fIdx)
             issues{end + 1} = sprintf('board %d plot tab count below expected minimum', fIdx);
@@ -1208,6 +1264,44 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
         if any(actualSplitters(1:n) ~= expectedSplitters(1:n))
             issues{end + 1} = sprintf('board %d column splitter visibility mismatch', fIdx);
         end
+    end
+end
+
+function issues = i_validateFlightPlayState(st, exp, fIdx, issues) %#ok<*AGROW>
+    try
+        fp = st.boards(fIdx).flightPlay;
+        if exp.requireFlightPlay(fIdx)
+            required = {'buttonValid','panelValid','sliderValid','frameInputValid','timeInputValid'};
+            for k = 1:numel(required)
+                if ~isfield(fp, required{k}) || ~fp.(required{k})
+                    issues{end + 1} = sprintf('board %d flight play %s missing/invalid', fIdx, required{k});
+                end
+            end
+        end
+        if logical(fp.panelVisible) ~= logical(exp.flightPlayVisible(fIdx))
+            issues{end + 1} = sprintf('board %d flight play panel visible expected=%d actual=%d', ...
+                fIdx, exp.flightPlayVisible(fIdx), fp.panelVisible);
+        end
+        if logical(fp.playActive) ~= logical(exp.flightPlayActive(fIdx))
+            issues{end + 1} = sprintf('board %d flight play active expected=%d actual=%d', ...
+                fIdx, exp.flightPlayActive(fIdx), fp.playActive);
+        end
+        if fp.sliderValid && st.boards(fIdx).rawDataRows > 0
+            if fp.sliderLimits(1) > 1 || fp.sliderLimits(2) < st.boards(fIdx).rawDataRows
+                issues{end + 1} = sprintf('board %d flight play slider limits invalid', fIdx);
+            end
+            if abs(fp.sliderValue - st.boards(fIdx).currentIndex) > 0.5
+                issues{end + 1} = sprintf('board %d flight play slider/index mismatch', fIdx);
+            end
+        end
+        if fp.frameInputValid && abs(fp.frameValue - st.boards(fIdx).currentIndex) > 0.5
+            issues{end + 1} = sprintf('board %d flight play frame input/index mismatch', fIdx);
+        end
+        if fp.timeInputValid && isfinite(st.boards(fIdx).currentTime) && abs(fp.timeValue - st.boards(fIdx).currentTime) > 0.02
+            issues{end + 1} = sprintf('board %d flight play time input/current time mismatch', fIdx);
+        end
+    catch ME
+        issues{end + 1} = sprintf('board %d flight play validation error: %s', fIdx, ME.message);
     end
 end
 
@@ -1546,6 +1640,15 @@ function cases = i_buildCaseMatrix()
     ESA = @(lbl)               struct('fn','editDialogSyncTabXLimAll',      'args',{{}},          'label',lbl, 'row',NaN);
     ESP = @(lbl)               struct('fn','editDialogSyncSelectedPlotXLimAll', 'args',{{}},      'label',lbl, 'row',NaN);
     SET = @(tabName, lbl)      struct('fn','switchEditDialogTab',           'args',{{tabName}},   'label',lbl, 'row',NaN);
+    FPT = @(fIdx, lbl)         struct('fn','toggleFlightPlayControlPanel',  'args',{{fIdx}},      'label',lbl, 'row',NaN);
+    FPM = @(fIdx, d, lbl)      struct('fn','moveFlightDataFrame',           'args',{{fIdx, d}},   'label',lbl, 'row',NaN);
+    FPS = @(fIdx, v, lbl)      struct('fn','handleFlightPlaySliderChange',  'args',{{fIdx, v}},   'label',lbl, 'row',NaN);
+    FPF = @(fIdx, v, lbl)      struct('fn','handleFlightPlayFrameInputChange', 'args',{{fIdx, v}}, 'label',lbl, 'row',NaN);
+    FPTM = @(fIdx, v, lbl)     struct('fn','handleFlightPlayTimeInputChange', 'args',{{fIdx, v}}, 'label',lbl, 'row',NaN);
+    FPR = @(fIdx, lbl)         struct('fn','refreshFlightPlayControlPanel', 'args',{{fIdx}},      'label',lbl, 'row',NaN);
+    FPSY = @(t1, t2, en, lbl)  struct('fn','setFlightDataSync',             'args',{{t1, t2, en}}, 'label',lbl, 'row',NaN);
+    FPLAY = @(fIdx, lbl)       struct('fn','startFlightPlay',               'args',{{fIdx}},      'label',lbl, 'row',NaN);
+    FSTOP = @(fIdx, lbl)       struct('fn','stopFlightPlay',                'args',{{fIdx}},      'label',lbl, 'row',NaN);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
         'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false);
@@ -1801,6 +1904,37 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('G-EDIT','G-EDIT-10 close auto-applies pending changes', ...
         'close finalize', 'close 시 pending apply', ...
         {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply'), CED('close')});
+
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-01 Flight 1 play control panel toggle', ...
+        'flight play panel', 'Flight 1 panel toggles without blank row', ...
+        {FPT(1,'Flight 1 play panel open'), FPR(1,'Flight 1 play panel refresh'), FPT(1,'Flight 1 play panel close')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-02 Flight 2 play control panel toggle', ...
+        'flight play panel', 'Flight 2 panel toggles without blank row', ...
+        {FPT(2,'Flight 2 play panel open'), FPR(2,'Flight 2 play panel refresh'), FPT(2,'Flight 2 play panel close')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-03 Flight 1 manual row navigation', ...
+        'row navigation', 'Flight 1 row buttons clamp and sync controls', ...
+        {ATC(1,100,'Flight 1 index=100'), FPT(1,'open'), FPM(1,1,'+1'), FPM(1,-1,'-1'), ...
+         FPM(1,10,'+10'), FPM(1,-10,'-10'), FPM(1,20,'+20'), FPM(1,-20,'-20')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-04 Flight 2 manual row navigation', ...
+        'row navigation', 'Flight 2 row buttons clamp and sync controls', ...
+        {ATC(2,100,'Flight 2 index=100'), FPT(2,'open'), FPM(2,1,'+1'), FPM(2,-1,'-1'), ...
+         FPM(2,10,'+10'), FPM(2,-10,'-10'), FPM(2,20,'+20'), FPM(2,-20,'-20')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-05 Slider and frame input', ...
+        'slider/frame input', 'slider and frame input move to requested rows', ...
+        {FPT(1,'open'), FPS(1,80,'slider row 80'), FPF(1,120,'frame row 120')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-06 Time input nearest-row move', ...
+        'time input', 'time input moves to nearest row', ...
+        {FPT(1,'open'), FPTM(1,0,'time 0 nearest row')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-07 Flight 1 play control with sync enabled', ...
+        'flight sync', 'applyTimeChange path handles synced Flight 2', ...
+        {FPSY(0,0,true,'enable flight sync at zero'), FPT(1,'open'), FPM(1,10,'Flight 1 +10 through sync')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-08 Board-off safety while play control visible', ...
+        'board-off safety', 'visible play panel survives board-off cycle', ...
+        {FPT(1,'open Flight 1 play panel'), BV(2,'lower board off'), BV(2,'lower board on'), ...
+         FPT(2,'open Flight 2 play panel'), BV(1,'upper board off'), BV(1,'upper board on')});
+    cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-09 Play/Pause timer start-stop cleanup', ...
+        'play timer', 'timer can start and stop without leaking active state', ...
+        {FPT(1,'open'), FPLAY(1,'start play'), FSTOP(1,'stop play')});
 
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)
