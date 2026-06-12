@@ -8853,7 +8853,8 @@
                         app.LAYOUT_SPLITTER_THICKNESS, sprintf('%dx', round(botW * 100)), 0};
                     return;
                 end
-                app.setUiVisible(app.BodyRowSplitter, false);
+                % v-fix1: board-off 시에도 splitter 표시 — BoardOffSourceRatio drag 조절 가능
+                app.setUiVisible(app.BodyRowSplitter, true);
                 srcW = max(0.5, min(1.0, double(app.BoardOffSourceRatio)));
                 summaryW = max(0, 1 - srcW);
                 srcStr = sprintf('%dx', max(1, round(srcW * 100)));
@@ -8862,10 +8863,11 @@
                 else
                     summarySpec = sprintf('%dx', max(1, round(summaryW * 100)));
                 end
+                thk = app.LAYOUT_SPLITTER_THICKNESS;
                 if activeOff == 1
-                    app.BodyGrid.RowHeight = {0, 0, srcStr, summarySpec};
+                    app.BodyGrid.RowHeight = {0, thk, srcStr, summarySpec};
                 else
-                    app.BodyGrid.RowHeight = {srcStr, summarySpec, 0, 0};
+                    app.BodyGrid.RowHeight = {srcStr, thk, summarySpec, 0};
                 end
             catch ME
                 app.logCaught(ME, 'bodyGridRowHeights');
@@ -8892,13 +8894,18 @@
 
         function startBodyRowSplitterDrag(app)
             try
-                if any(app.BoardOffState) || app.IsDraggingMarker || app.IsDraggingSplitter || ...
+                if app.IsDraggingMarker || app.IsDraggingSplitter || ...
                         app.IsDraggingRowSplitter || app.IsDraggingColumnSplitter
                     return;
                 end
                 app.IsDraggingRowSplitter = true;
                 app.RowSplitterStartPoint = app.UIFigure.CurrentPoint;
-                app.RowSplitterStartRatio = app.BodyRowSplitRatio;
+                % v-fix1: board-off 시 BoardOffSourceRatio 를 drag 대상으로 사용
+                if any(app.BoardOffState)
+                    app.RowSplitterStartRatio = app.BoardOffSourceRatio;
+                else
+                    app.RowSplitterStartRatio = app.BodyRowSplitRatio;
+                end
                 app.UIFigure.WindowButtonMotionFcn = @(~,~) app.bodyRowSplitterMotion();
                 app.UIFigure.WindowButtonUpFcn = @(~,~) app.stopBodyRowSplitterDrag();
             catch ME
@@ -8914,7 +8921,18 @@
                 pt = app.UIFigure.CurrentPoint;
                 figH = max(1, app.UIFigure.Position(4));
                 dy = double(pt(2) - app.RowSplitterStartPoint(2));
-                app.setBodyRowSplitRatio(app.RowSplitterStartRatio - dy / figH);
+                if any(app.BoardOffState)
+                    % v-fix1: off 상태 — source 비율 drag 조절 (위 보드 off 면 방향 반전)
+                    activeOff = find(app.BoardOffState, 1);
+                    delta = dy / figH;
+                    if activeOff == 1, delta = -delta; end
+                    newRatio = max(0.5, min(1.0, app.RowSplitterStartRatio + delta));
+                    app.BoardOffSourceRatio = newRatio;
+                    app.applyBodyGridRowHeights();
+                    drawnow limitrate;
+                else
+                    app.setBodyRowSplitRatio(app.RowSplitterStartRatio - dy / figH);
+                end
             catch ME
                 app.logCaught(ME, 'rowSplitter:motion');
             end
