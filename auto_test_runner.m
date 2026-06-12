@@ -1886,6 +1886,15 @@ function dlgs = i_collectOpenDialogs(app)
             u = app.UI(fIdx);
             pairs = {{'vidControlDialog', sprintf('vidctrl_f%d', fIdx)}, ...
                      {'vidViewerDialog',  sprintf('vidview_f%d', fIdx)}};
+            % v-fix3b: Sync Search dialog 도 capture 대상 (property 직접 접근)
+            try
+                if isprop(app, 'SyncSearchDialogs') && numel(app.SyncSearchDialogs) >= fIdx ...
+                        && ~isempty(app.SyncSearchDialogs{fIdx}) && isvalid(app.SyncSearchDialogs{fIdx}) ...
+                        && strcmpi(char(app.SyncSearchDialogs{fIdx}.Visible), 'on')
+                    dlgs(end+1, :) = {app.SyncSearchDialogs{fIdx}, sprintf('syncsearch_f%d', fIdx)}; %#ok<AGROW>
+                end
+            catch
+            end
             for p = 1:numel(pairs)
                 fld = pairs{p}{1};
                 if isfield(u, fld) && ~isempty(u.(fld)) && isvalid(u.(fld)) ...

@@ -145,6 +145,7 @@
         PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...   % [Sync Search] 동기 기준 후보
             'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN)
         SyncSearchDialogs    = {[], []}        % [Sync Search] 검색 dialog handle (lifecycle 추적)
+        LastInfoTableSelectionValid = [false, false]   % [Sync Search] 실제 행 선택 발생 여부
         NormalWindowPosition = []             % 마지막 일반 창 위치(최대화 복원용)
         IsRestoringWindow   = false           % 복원 중 SizeChanged 저장 방지
         IsWindowManuallyMaximized = false     % WindowState 미지원 버전 fallback
@@ -607,6 +608,10 @@
                 case 'setSelectedRow'
                     fIdx = varargin{1}; row = varargin{2};
                     app.Models(fIdx).selectedRow = row;
+                    if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
+                        app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: 테스트 선택도 valid 처리
+                    end
+                case 'clearPendingSyncAnchor',        app.clearPendingSyncAnchor([]);
                 % v-runner: EditDialog 자동 테스트 dispatch
                 case 'openEditDialog',                app.openEditDialog();
                 case 'closeEditDialog',               app.closeEditDialog();
@@ -1323,6 +1328,9 @@
         function handleTableSelection(app, fIdx, event)
             if ~isempty(event.Indices)
                 app.Models(fIdx).selectedRow = event.Indices(1, 1);
+                if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
+                    app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: 실제 선택 발생 기록
+                end
             end
         end
 
@@ -11233,6 +11241,9 @@
                 end
                 sourceIdx = app.getBoardOffSourceIdx(offIdx);
                 app.Models(sourceIdx).selectedRow = event.Indices(1, 1);
+                if sourceIdx >= 1 && sourceIdx <= numel(app.LastInfoTableSelectionValid)
+                    app.LastInfoTableSelectionValid(sourceIdx) = true;
+                end
             catch ME
                 app.logCaught(ME, 'boardOffTableSelection');
             end
@@ -13410,6 +13421,11 @@
             % [Sync Search] 선택 항목 값 검색 → 후보 time list → 동기 기준(T1/T2) 지정.
             try
                 if fIdx < 1 || fIdx > numel(app.Models), return; end
+                % v-fix: 실제 행 선택이 한 번도 없었으면 기본 row1 검색 방지
+                if fIdx <= numel(app.LastInfoTableSelectionValid) && ~app.LastInfoTableSelectionValid(fIdx)
+                    uialert(app.UIFigure, '먼저 왼쪽 클릭으로 항목 행을 선택한 뒤 우클릭 메뉴를 사용하세요.', '동기시간 찾기');
+                    return;
+                end
                 selRow = app.Models(fIdx).selectedRow;
                 if isempty(selRow) || ~isfinite(selRow) || selRow < 1 ...
                         || selRow > numel(app.Models(fIdx).displayMeta)
