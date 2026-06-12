@@ -10586,7 +10586,7 @@
             t.gaugeTickFg    = [0.03 0.05 0.07];
             t.gaugeNeedleFg  = [0.95 0.67 0.10];
             t.videoPlaceholderBg = [0.94 0.96 0.98];
-            t.videoAxesBg        = [0.94 0.96 0.98];   % v3-sample: black 제거 (image 가 픽셀 표시)
+            t.videoAxesBg        = [0 0 0];   % v-sync: 비디오 axes 검은색 유지 (요구사항 #2)
             t.panelBg            = [1.00 1.00 1.00];
             t.panelAltBg         = [0.97 0.98 1.00];
             t.panelTitleBg       = [0.86 0.92 0.97];
@@ -10609,7 +10609,7 @@
             t.gaugePanelBg       = [1.00 1.00 1.00];
             t.gaugeAxesBg        = [1.00 1.00 1.00];
             t.gaugeTextFg        = [0.05 0.10 0.18];
-            t.videoPanelBg       = [0.94 0.96 0.98];
+            t.videoPanelBg       = [0 0 0];   % v-sync: 비디오 컨테이너 검은색 유지
             t.dialogBg           = [0.95 0.97 0.99];
             t.dialogHeaderBg     = [0.86 0.92 0.97];
             t.dialogTabBg        = [0.88 0.92 0.96];
