@@ -9217,6 +9217,8 @@
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
+                app.UI(fIdx).PanelVisible.info = true;
+                app.UI(fIdx).PanelVisible.dataView = true;
                 % Side-panel toggles remain whatever the snapshot/user set; we only ensure
                 % the info table column (#3) and H plot column (#4) come back non-zero in
                 % reflowBoardColumns by leaving those cells alone here. The actual width
