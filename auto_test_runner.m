@@ -701,17 +701,26 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
         case 'flightPlayStartStopCycle'
             % v5-H: timer 활성 상태에서 getframe 금지 (case97 hang) — start→검증→stop 원자 수행
             fIdxP = act.args{1};
+            idx0 = double(beforeState.boards(fIdxP).currentIndex);
             app.testHook('startFlightPlay', fIdxP);
             pause(1.0); drawnow;
             stP = app.testHook('getTestState');
             if ~logical(stP.boards(fIdxP).flightPlay.playActive)
                 error('AutoTest:FlightPlayStartFailed', 'flight %d play timer did not activate', fIdxP);
             end
+            % v5-J: 실제 row 진행 검증 (active 플래그만으로는 false PASS 가능)
+            if ~(double(stP.boards(fIdxP).currentIndex) > idx0)
+                error('AutoTest:FlightPlayDidNotAdvance', 'flight %d currentIndex did not advance during play', fIdxP);
+            end
             app.testHook('stopFlightPlay', fIdxP);
             pause(0.2); drawnow;
             stP = app.testHook('getTestState');
             if logical(stP.boards(fIdxP).flightPlay.playActive)
                 error('AutoTest:FlightPlayStopFailed', 'flight %d play timer still active after stop', fIdxP);
+            end
+            % v5-J: timer handle Running 상태까지 직접 검증
+            if logical(app.testHook('isFlightPlayTimerAlive', fIdxP))
+                error('AutoTest:FlightPlayTimerNotCleaned', 'flight %d play timer still running after stop', fIdxP);
             end
         case 'setFlightDataSync'
             app.testHook('setFlightDataSync', act.args{:});

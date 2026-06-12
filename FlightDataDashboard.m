@@ -545,6 +545,19 @@
                 case 'handleFlightPlayTimeInputChange', app.handleFlightPlayTimeInputChange(varargin{:});
                 case 'startFlightPlay',               app.startFlightPlay(varargin{:});
                 case 'stopFlightPlay',                app.stopFlightPlay(varargin{:});
+                case 'isFlightPlayTimerAlive'
+                    % v5-J: timer handle 존재 + Running 상태 (stop/cleanup 검증용)
+                    fk = varargin{1};
+                    alive = false;
+                    try
+                        if fk >= 1 && fk <= numel(app.FlightPlayTimer) ...
+                                && ~isempty(app.FlightPlayTimer{fk}) && isvalid(app.FlightPlayTimer{fk})
+                            alive = strcmpi(app.FlightPlayTimer{fk}.Running, 'on');
+                        end
+                    catch
+                        alive = false;
+                    end
+                    varargout{1} = alive;
                 case 'setFlightDataSync',             app.setFlightDataSync(varargin{:});
                 case 'searchFlightDataValue',         ok = app.searchFlightDataValue(varargin{:}); if nargout, varargout{1} = ok; end
                 case 'computeSyncSearchRows'
