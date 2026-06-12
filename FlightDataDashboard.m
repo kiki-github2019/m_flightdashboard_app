@@ -945,6 +945,8 @@
                         'timeInputValid', false, 'timeValue', NaN, ...
                         'playActive', false, 'playButtonText', '');
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 fp.playActive = fIdx <= numel(app.FlightPlayActive) && logical(app.FlightPlayActive(fIdx));
                 if isfield(app.UI(fIdx), 'btnFlightPlayControl') && ~isempty(app.UI(fIdx).btnFlightPlayControl) ...
@@ -6842,7 +6844,28 @@
                 app.editDialogOpenProject(); return;
             end
             app.autoLoadProjectFromFile(app.ProjectFilePath);
-            app.refreshEditDialog();
+            try
+                if isempty(app) || ~isvalid(app)
+                    return;
+                end
+            catch
+                return;
+            end
+            try
+                if isempty(app.EditDialog) || ~isvalid(app.EditDialog)
+                    return;
+                end
+            catch
+                return;
+            end
+            try
+                app.refreshEditDialog();
+            catch ME
+                try
+                    app.logCaught(ME, 'editDialogAutoLoad:refresh');
+                catch
+                end
+            end
         end
 
         function editDialogSaveLayoutPreset(app)
@@ -8351,7 +8374,7 @@
             ui.btnBack20 = mkBtn('<<<', @(~,~) app.moveFlightDataFrame(fIdx, -20));
             ui.btnBack10 = mkBtn('<<',  @(~,~) app.moveFlightDataFrame(fIdx, -10));
             ui.btnPrev   = mkBtn('<',   @(~,~) app.moveFlightDataFrame(fIdx, -1));
-            ui.btnPlayPause = uibutton(nav, 'Text', '▶', 'FontWeight', 'bold', ...
+            ui.btnPlayPause = uibutton(nav, 'Text', 'Play', 'FontWeight', 'bold', ...
                 'BackgroundColor', t.toolbarGreenBg, 'FontColor', t.toolbarGreenFg, ...
                 'ButtonPushedFcn', @(~,~) app.toggleFlightPlay(fIdx));
             ui.btnNext   = mkBtn('>',   @(~,~) app.moveFlightDataFrame(fIdx, 1));
@@ -8380,13 +8403,15 @@
 
         function toggleFlightPlayControlPanel(app, fIdx)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if ~app.isFlightPlayUiReady(fIdx), return; end
                 showPanel = ~app.isUiVisible(app.UI(fIdx).flightPlayControlPanel);
                 app.setUiVisible(app.UI(fIdx).flightPlayControlPanel, showPanel);
                 if isfield(app.UI(fIdx), 'flightPlayHostGrid') && ~isempty(app.UI(fIdx).flightPlayHostGrid) ...
                         && isvalid(app.UI(fIdx).flightPlayHostGrid)
                     if showPanel
-                        app.UI(fIdx).flightPlayHostGrid.RowHeight = {30, 112, '1x'};
+                        app.UI(fIdx).flightPlayHostGrid.RowHeight = {30, 130, '1x'};
                     else
                         app.UI(fIdx).flightPlayHostGrid.RowHeight = {30, 0, '1x'};
                     end
@@ -8403,6 +8428,8 @@
         function tf = isFlightPlayUiReady(app, fIdx)
             tf = false;
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 tf = ~isempty(app.UI) && fIdx >= 1 && fIdx <= numel(app.UI) ...
                     && isfield(app.UI(fIdx), 'flightPlayControlPanel') ...
                     && ~isempty(app.UI(fIdx).flightPlayControlPanel) ...
@@ -8412,9 +8439,41 @@
             end
         end
 
+        function [ok, fIdx] = validateFlightPlayIndex(app, fIdx)
+            ok = false;
+            try
+                if nargin < 2 || isempty(fIdx) || ~isscalar(fIdx) || ~isfinite(double(fIdx))
+                    fIdx = NaN;
+                    return;
+                end
+                fIdx = round(double(fIdx));
+                ok = fIdx >= 1 && fIdx <= 2 && ~isempty(app.UI) && fIdx <= numel(app.UI);
+            catch
+                fIdx = NaN;
+                ok = false;
+            end
+        end
+
         function refreshFlightPlayControlPanel(app, fIdx)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if ~app.isFlightPlayUiReady(fIdx), return; end
+                panelVisible = false;
+                try
+                    panelVisible = app.isUiVisible(app.UI(fIdx).flightPlayControlPanel);
+                catch
+                    panelVisible = false;
+                end
+                playing = false;
+                try
+                    playing = fIdx <= numel(app.FlightPlayActive) && logical(app.FlightPlayActive(fIdx));
+                catch
+                    playing = false;
+                end
+                if ~panelVisible && ~playing
+                    return;
+                end
                 hasData = ~isempty(app.Models(fIdx).rawData) && height(app.Models(fIdx).rawData) > 0 ...
                     && isfield(app.Models(fIdx).mappedCols, 'Time');
                 nRows = 1; idx = 1; currTime = 0; timeLimits = [0 1];
@@ -8435,10 +8494,31 @@
                     app.UI(fIdx).flightPlayStatusLabel.Text = sprintf('Row %d / %d (%.3f s)', idx, nRows, currTime);
                 end
                 if isvalid(app.UI(fIdx).flightPlayBtnPlayPause)
-                    app.UI(fIdx).flightPlayBtnPlayPause.Text = ternary(app.FlightPlayActive(fIdx), 'Ⅱ', '▶');
+                    app.UI(fIdx).flightPlayBtnPlayPause.Text = ternary(app.FlightPlayActive(fIdx), 'Pause', 'Play');
                 end
             catch ME
                 app.logCaught(ME, 'flight-play:refresh');
+            end
+        end
+
+        function collapseFlightPlayControlPanel(app, fIdx)
+            try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
+                if isfield(app.UI(fIdx), 'flightPlayControlPanel') && ~isempty(app.UI(fIdx).flightPlayControlPanel) ...
+                        && isvalid(app.UI(fIdx).flightPlayControlPanel)
+                    app.setUiVisible(app.UI(fIdx).flightPlayControlPanel, false);
+                end
+                if isfield(app.UI(fIdx), 'flightPlayHostGrid') && ~isempty(app.UI(fIdx).flightPlayHostGrid) ...
+                        && isvalid(app.UI(fIdx).flightPlayHostGrid)
+                    app.UI(fIdx).flightPlayHostGrid.RowHeight = {30, 0, '1x'};
+                end
+                if isfield(app.UI(fIdx), 'btnFlightPlayControl') && ~isempty(app.UI(fIdx).btnFlightPlayControl) ...
+                        && isvalid(app.UI(fIdx).btnFlightPlayControl)
+                    app.UI(fIdx).btnFlightPlayControl.Text = '재생 제어';
+                end
+            catch ME
+                app.logCaught(ME, 'flight-play:collapse');
             end
         end
 
@@ -8455,6 +8535,8 @@
 
         function moveFlightDataFrame(app, fIdx, delta)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if app.IsDeleting || isempty(app.Models(fIdx).rawData), return; end
                 nRows = height(app.Models(fIdx).rawData);
                 if nRows < 1, return; end
@@ -8467,15 +8549,21 @@
         end
 
         function handleFlightPlaySliderChange(app, fIdx, value)
+            [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+            if ~okIdx, return; end
             app.moveFlightDataFrameToIndex(fIdx, round(value));
         end
 
         function handleFlightPlayFrameInputChange(app, fIdx, value)
+            [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+            if ~okIdx, return; end
             app.moveFlightDataFrameToIndex(fIdx, round(value));
         end
 
         function handleFlightPlayTimeInputChange(app, fIdx, value)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if isempty(app.Models(fIdx).rawData) || ~isfield(app.Models(fIdx).mappedCols, 'Time'), return; end
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 idx = app.findClosestIndexByTime(app.Models(fIdx).rawData.(timeCol), double(value));
@@ -8487,6 +8575,8 @@
 
         function moveFlightDataFrameToIndex(app, fIdx, idx)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if isempty(app.Models(fIdx).rawData), return; end
                 nRows = height(app.Models(fIdx).rawData);
                 if nRows < 1, return; end
@@ -8498,6 +8588,8 @@
         end
 
         function toggleFlightPlay(app, fIdx)
+            [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+            if ~okIdx, return; end
             if app.FlightPlayActive(fIdx)
                 app.stopFlightPlay(fIdx);
             else
@@ -8507,23 +8599,31 @@
 
         function startFlightPlay(app, fIdx)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if app.IsDeleting || isempty(app.Models(fIdx).rawData), return; end
                 app.stopFlightPlay(fIdx);
                 app.FlightPlayActive(fIdx) = true;
                 app.FlightPlayTimer{fIdx} = timer('ExecutionMode', 'fixedSpacing', ...
-                    'Period', max(0.02, 1 / max(1, app.FlightPlayFps)), ...
+                    'Period', max(0.01, 1 / max(1, app.FlightPlayFps)), ...
+                    'BusyMode', 'drop', ...
+                    'Name', sprintf('FlightDataDashboard_FlightPlay_%d', fIdx), ...
+                    'Tag', sprintf('FlightDataDashboard:FlightPlay:%d', fIdx), ...
                     'TimerFcn', @(~,~) app.onFlightPlayTimer(fIdx));
                 start(app.FlightPlayTimer{fIdx});
                 app.refreshFlightPlayControlPanel(fIdx);
             catch ME
-                app.FlightPlayActive(fIdx) = false;
+                if exist('okIdx', 'var') && okIdx
+                    app.FlightPlayActive(fIdx) = false;
+                end
                 app.logCaught(ME, 'flight-play:start');
             end
         end
 
         function stopFlightPlay(app, fIdx)
             try
-                if fIdx < 1 || fIdx > numel(app.FlightPlayActive), return; end
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx || fIdx > numel(app.FlightPlayActive), return; end
                 app.FlightPlayActive(fIdx) = false;
                 if numel(app.FlightPlayTimer) >= fIdx && ~isempty(app.FlightPlayTimer{fIdx}) ...
                         && isvalid(app.FlightPlayTimer{fIdx})
@@ -8542,6 +8642,8 @@
 
         function onFlightPlayTimer(app, fIdx)
             try
+                [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
+                if ~okIdx, return; end
                 if app.IsDeleting || ~app.FlightPlayActive(fIdx) || isempty(app.Models(fIdx).rawData)
                     app.stopFlightPlay(fIdx);
                     return;
@@ -8554,7 +8656,9 @@
                 end
                 app.applyTimeChange(fIdx, idx + 1);
             catch ME
-                app.stopFlightPlay(fIdx);
+                if exist('okIdx', 'var') && okIdx
+                    app.stopFlightPlay(fIdx);
+                end
                 app.logCaught(ME, 'flight-play:timer');
             end
         end
@@ -9196,10 +9300,18 @@
                 'Visible', 'off', 'Position', [120, 120, 760, 380], ...
                 'Color', [0.94 0.94 0.96], ...
                 'CloseRequestFcn', @(~,~) app.hideVideoControlDialog(fIdx));
-            % v-fix5: resize 안정화 — 최소 크기 미만 시 강제 보정
+            % v-fix5: resize 안정화 — AutoResizeChildren off 선행(필수) 후 SizeChangedFcn 지정
+            try
+                if isprop(dlg, 'AutoResizeChildren')
+                    dlg.AutoResizeChildren = 'off';
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoControlDialog:auto-resize-children');
+            end
             try
                 dlg.SizeChangedFcn = @(src,~) app.clampVideoControlDialogSize(src);
-            catch
+            catch ME_silent
+                app.logCaught(ME_silent, 'videoControlDialog:size-changed-fcn');
             end
             root = uigridlayout(dlg, [3 1]);
             root.RowHeight = {64, '1x', 56};   % v-fix5: Navigator 행 flex + 최소 높이 확보
@@ -9343,6 +9455,10 @@
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
                     end
+                    % Policy B: board-off uses the summary plot area; keep the
+                    % normal flight-play row collapsed to avoid hidden blank space.
+                    app.collapseFlightPlayControlPanel(fIdx);
+                    app.collapseFlightPlayControlPanel(sourceIdx);
                     app.reflowBoardColumns(sourceIdx);
                     app.refreshBoardOffSummaryPanel(fIdx, true);
                 end
@@ -11920,15 +12036,21 @@
                 UI_temp(fIdx).flightPlayHostGrid = hGrid2;
 
                 btnPnl = uipanel(hGrid2, 'BorderType', 'none', 'BackgroundColor', [0.94 0.96 0.98]);
-                uibutton(btnPnl, 'Text', '+ 빈 탭 추가', 'Position', [5 5 90 22], ...
+                btnGrid = uigridlayout(btnPnl, [1 4]);
+                btnGrid.RowHeight = {'1x'};
+                btnGrid.ColumnWidth = {100, 115, 100, '1x'};
+                btnGrid.Padding = [4 4 4 4];
+                btnGrid.ColumnSpacing = 5;
+                uibutton(btnGrid, 'Text', '+ 빈 탭 추가', ...
                     'BackgroundColor', tT.toolbarGreenBg, 'FontColor', tT.toolbarGreenFg, 'FontWeight', 'bold', ...
                     'ButtonPushedFcn', @(~,~) app.addPlotTab(fIdx));
-                uibutton(btnPnl, 'Text', '현재 탭 지우기', 'Position', [100 5 100 22], ...
+                uibutton(btnGrid, 'Text', '현재 탭 지우기', ...
                     'BackgroundColor', tT.toolbarYellowBg, 'FontColor', tT.toolbarYellowFg, 'FontWeight', 'bold', ...
                     'ButtonPushedFcn', @(~,~) app.clearCurrentTab(fIdx));
-                UI_temp(fIdx).btnFlightPlayControl = uibutton(btnPnl, 'Text', '재생 제어', 'Position', [205 5 90 22], ...
+                UI_temp(fIdx).btnFlightPlayControl = uibutton(btnGrid, 'Text', '재생 제어', ...
                     'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, 'FontWeight', 'bold', ...
                     'ButtonPushedFcn', @(~,~) app.toggleFlightPlayControlPanel(fIdx));
+                uilabel(btnGrid, 'Text', '');
 
                 playUi = app.createFlightPlayControlPanel(hGrid2, fIdx, tT);
                 playUi.panel.Layout.Row = 2;
