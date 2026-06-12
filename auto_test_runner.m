@@ -1734,7 +1734,7 @@ function st = i_setProjectBrokenPath(st, fieldName, fixtureDir)
     end
 end
 
-function issues = i_validateProjectRestore(st, exp, issues) %#ok<INUSD>
+function issues = i_validateProjectRestore(st, exp, issues)
     snap = i_projectSnapshot(st);
     if ~isfield(st, 'ProjectFilePath') || isempty(st.ProjectFilePath) || ~isfile(st.ProjectFilePath)
         issues{end + 1} = 'project restore did not bind ProjectFilePath to an existing file';
@@ -1760,7 +1760,7 @@ function issues = i_validateProjectRestore(st, exp, issues) %#ok<INUSD>
     end
 end
 
-function issues = i_validateProjectSafeFailure(st, exp, issues) %#ok<INUSD>
+function issues = i_validateProjectSafeFailure(st, exp, issues)
     snap = i_projectSnapshot(st);
     if numel(st.boards) < 2 || ~st.boards(1).exists || ~st.boards(2).exists
         issues{end + 1} = sprintf('safe-failure fixture %s invalidated board handles', exp.projectSafeFailureKind);
@@ -1793,7 +1793,7 @@ function snap = i_projectSnapshot(st)
             snap.columnWidths{fIdx} = b.dataGridColumnWidth;
             snap.panelVisible = [snap.panelVisible; ...
                 logical([b.PanelVisible.attitude, b.PanelVisible.mapOnly, b.PanelVisible.altOnly, ...
-                b.PanelVisible.info, b.PanelVisible.dataView, b.PanelVisible.video])]; %#ok<AGROW>
+                b.PanelVisible.info, b.PanelVisible.dataView, b.PanelVisible.video])];
         end
     catch
     end
@@ -1824,7 +1824,6 @@ function i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, pane
 end
 
 function target = i_findPanelCaptureTarget(app, panelName, fIdx)
-    target = [];
     switch lower(char(panelName))
         case {'main', 'dashboard'}
             target = app.UIFigure;
@@ -1841,7 +1840,7 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
             % v-fix12: 명시적 capture 시에만 viewer open. 없으면 hook 시도 후 미가용 시 main fallback.
             target = app.UI(fIdx).vidViewerDialog;
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
-                try, app.testHook('setVideoViewerVisible', fIdx, true, false); catch; end
+                try app.testHook('setVideoViewerVisible', fIdx, true, false); catch; end
                 target = app.UI(fIdx).vidViewerDialog;
             end
             % v-fix10: main figure fallback 제거 — viewer 미가용 시 false PASS 방지
@@ -1858,7 +1857,7 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
             end
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 app.testHook('toggleFlightPlayControlPanel', fIdx);
-                try, target = app.UI(fIdx).flightPlayControlPanel; catch; end
+                try target = app.UI(fIdx).flightPlayControlPanel; catch; end
             end
             % v-fix2: main figure fallback 제거 — panel 미가용 시 false PASS 방지
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
@@ -1871,7 +1870,6 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
 end
 
 function tf = i_isHandleVisible(h)
-    tf = false;
     try
         tf = ~isempty(h) && isvalid(h) && strcmpi(char(h.Visible), 'on');
     catch
@@ -1905,7 +1903,7 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
     extras = i_collectOpenDialogs(app);
     for e = 1:size(extras, 1)
         f2 = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, extras{e, 2}));
-        try, i_captureFigure(extras{e, 1}, f2, captureOpts); catch; end
+        try i_captureFigure(extras{e, 1}, f2, captureOpts); catch; end
     end
     if ~captured
         error('AutoTest:CaptureFailed', 'Failed to capture %s', mainFile);
@@ -1923,14 +1921,14 @@ function ok = i_captureFigure(figh, file, captureOpts)
         end
         imwrite(img, file);
         clear f img;
-        try, drawnow limitrate; catch; end
+        try drawnow limitrate; catch; end
         ok = isfile(file);
         if ok, return; end
     catch
     end
     try
         exportapp(figh, file);
-        try, drawnow limitrate; catch; end
+        try drawnow limitrate; catch; end
         ok = isfile(file);
     catch
     end
@@ -1938,7 +1936,6 @@ end
 
 function dlgs = i_collectOpenDialogs(app)
     % v-fix2: private property 직접 접근 제거 — app hook 으로 visible dialog {handle, tag} 수집
-    dlgs = cell(0, 2);
     try
         dlgs = app.testHook('getOpenDialogHandlesForTest');
         if ~iscell(dlgs) || size(dlgs, 2) ~= 2
