@@ -1552,7 +1552,14 @@
                     widths{2} = 0;
                 end
             elseif strcmp(pnlName, 'video')
-                app.setVideoViewerVisible(fIdx, newState, false);
+                % v5-A: board-off 중 외부 Video Player auto-open 금지 (off 는 허용, on 은 플래그만)
+                if isempty(find(app.BoardOffState, 1))
+                    app.setVideoViewerVisible(fIdx, newState, false);
+                elseif ~newState
+                    app.setVideoViewerVisible(fIdx, false, false);
+                else
+                    app.UI(fIdx).PanelVisible.video = true;   % 복원 시 재표시
+                end
                 widths{5} = 0;
                 widths{6} = 0;
             elseif strcmp(pnlName, 'info') || strcmp(pnlName, 'dataView')
@@ -9234,6 +9241,31 @@
             end
         end
 
+        function hideVideoViewersForBoardOff(app)
+            % v5-A: board-off 중 Video Player 비표시 — dialog 만 숨김 (PanelVisible/버튼 유지)
+            for vIdx = 1:numel(app.UI)
+                try
+                    dlg = app.UI(vIdx).vidViewerDialog;
+                    if ~isempty(dlg) && isvalid(dlg)
+                        dlg.Visible = 'off';
+                    end
+                catch
+                end
+            end
+        end
+
+        function restoreVideoViewersAfterBoardOn(app)
+            % v5-A: board-on 복원 — PanelVisible.video 유지 보드만 재표시
+            for vIdx = 1:numel(app.UI)
+                try
+                    if isfield(app.UI(vIdx), 'PanelVisible') && logical(app.UI(vIdx).PanelVisible.video)
+                        app.setVideoViewerVisible(vIdx, true, false);
+                    end
+                catch
+                end
+            end
+        end
+
         function onVideoResolutionChanged(app, fIdx)
             % v4-R2: resolution 변경 시 dialog 자동 표시 제거. frame/display 만 갱신.
             try
@@ -9521,6 +9553,7 @@
                     end
                     app.restoreBoardPanelState(fIdx);
                     app.restoreBoardPanelState(sourceIdx);
+                    app.restoreVideoViewersAfterBoardOn();   % v5-A
                     if isfield(app.UI(fIdx), 'boardOffSignature')
                         app.UI(fIdx).boardOffSignature = '';
                     end
@@ -9533,6 +9566,7 @@
                     app.captureBoardPanelState(fIdx);
                     app.captureBoardPanelState(sourceIdx);
                     app.BoardOffState(fIdx) = true;
+                    app.hideVideoViewersForBoardOff();   % v5-A: 정책 — off 중 Video Player 비표시
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
