@@ -6440,9 +6440,9 @@
             tabReq = uitab(tabs, 'Title', 'RequiredColumns');
             tabDsp = uitab(tabs, 'Title', 'DisplayColumns');
 
+            % v5-F: Data 가 table 이면 ColumnFormat 은 무시되고 경고 발생 — categorical 변수로 dropdown 제공
             app.EDOptReqTable = uitable(tabReq, 'Data', table(), ...
                 'ColumnEditable', [false true], ...
-                'ColumnFormat', {'char', 'char'}, ...
                 'CellEditCallback', @(src, evt) app.onOptionDraftEdit('req', src, evt));
             app.EDOptReqTable.Position = [10 10 900 280];
 
@@ -6758,14 +6758,18 @@
                     end
                 end
                 if isvalid(app.EDOptReqTable)
-                    app.EDOptReqTable.Data = table(reqKeys(:), vals, ...
-                        'VariableNames', {'Key', 'Column'});
+                    % v5-F: table Data + ColumnFormat 조합은 무시/경고 — categorical 로 dropdown 제공
                     choices = [{''}, csvHeaders(:)'];
+                    colVals = vals;
                     if numel(choices) >= 2
-                        app.EDOptReqTable.ColumnFormat = {'char', choices};
-                    else
-                        app.EDOptReqTable.ColumnFormat = {'char', 'char'};
+                        try
+                            colVals = categorical(vals, choices);
+                        catch
+                            colVals = vals;
+                        end
                     end
+                    app.EDOptReqTable.Data = table(reqKeys(:), colVals, ...
+                        'VariableNames', {'Key', 'Column'});
                 end
                 % Display columns table
                 if isvalid(app.EDOptDspTable)
