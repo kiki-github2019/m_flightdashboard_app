@@ -558,6 +558,19 @@
                     if fk == 1, app.PendingFlightSyncAnchor.T1 = tv; else, app.PendingFlightSyncAnchor.T2 = tv; end
                 case 'applyPendingSyncAnchor',        app.syncSearchApply([]);
                 case 'getPendingSyncAnchor',          varargout{1} = app.PendingFlightSyncAnchor;
+                case 'getOpenDialogHandlesForTest',   varargout{1} = app.getOpenDialogHandlesForTest();
+                case 'getSelectedInfoValueForTest'
+                    % v-fix6: 선택 항목의 현재 index 실제 값 (exact target 확보)
+                    fk = varargin{1};
+                    val = NaN;
+                    try
+                        yCol = app.Models(fk).displayMeta(app.Models(fk).selectedRow).header;
+                        ix = max(1, min(height(app.Models(fk).rawData), round(app.Models(fk).currentIndex)));
+                        val = double(app.Models(fk).rawData.(yCol)(ix));
+                    catch
+                        val = NaN;
+                    end
+                    varargout{1} = val;
                 case 'getInfoTableMenuTexts'
                     % v-fix9: 정상/board-off 정보테이블 context menu 항목 텍스트 수집
                     fIdx = varargin{1};
@@ -8162,6 +8175,8 @@
                 if dt <= 0, dt = 1; end
                 if resetIndex
                     currIdx = 1;
+                    % v-fix5: 새 데이터 로드 시 stale 선택 상태 무효화
+                    app.LastInfoTableSelectionValid(fIdx) = false;
                 else
                     currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
                 end
@@ -13521,6 +13536,33 @@
                 end
             catch ME
                 app.logCaught(ME, 'sync-search:clear-anchor');
+            end
+        end
+
+        function h = getOpenDialogHandlesForTest(app)
+            % v-fix1: runner 가 private property 직접 접근 없이 열린 dialog 수집
+            h = matlab.ui.Figure.empty;
+            try
+                cand = {};
+                if ~isempty(app.EditDialog), cand{end+1} = app.EditDialog; end
+                for fk = 1:numel(app.UI)
+                    try
+                        cand{end+1} = app.UI(fk).vidControlDialog; %#ok<AGROW>
+                        cand{end+1} = app.UI(fk).vidViewerDialog;  %#ok<AGROW>
+                    catch
+                    end
+                end
+                for k = 1:numel(app.SyncSearchDialogs)
+                    cand{end+1} = app.SyncSearchDialogs{k}; %#ok<AGROW>
+                end
+                for k = 1:numel(cand)
+                    d = cand{k};
+                    if ~isempty(d) && isa(d,'matlab.ui.Figure') && isvalid(d)
+                        h(end+1) = d; %#ok<AGROW>
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'test:open-dialog-handles');
             end
         end
 
