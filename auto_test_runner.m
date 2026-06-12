@@ -149,8 +149,13 @@ function auto_test_runner(varargin)
 
         app = [];
         try
-            needAvi = strcmp(loadAviMode, 'always') || ...
-                      (strcmp(loadAviMode, 'lazy') && tc.requireAvi);
+            % v5-I: forbidAvi 는 LoadAvi='always' 보다 우선
+            if isfield(tc, 'forbidAvi') && tc.forbidAvi
+                needAvi = false;
+            else
+                needAvi = strcmp(loadAviMode, 'always') || ...
+                          (strcmp(loadAviMode, 'lazy') && tc.requireAvi);
+            end
             i_appendProgressMd(progressFile, i, 0, 'SETUP_START', sprintf('needAvi=%d', needAvi));
             app = i_setupFreshApp(needAvi);
             i_appendProgressMd(progressFile, i, 0, 'SETUP_DONE', 'fresh app ready');
@@ -2314,9 +2319,9 @@ function cases = i_buildCaseMatrix()
     CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
-        'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false);
+        'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false, 'forbidAvi', false);
 
-    cases = struct('group',{}, 'title',{}, 'target',{}, 'expected',{}, 'actions',{}, 'requireAvi',{});
+    cases = struct('group',{}, 'title',{}, 'target',{}, 'expected',{}, 'actions',{}, 'requireAvi',{}, 'forbidAvi',{});
 
     %% Group A — 보드 off 없음 (5)
     cases(end + 1) = mk('A','A01 기본 로드','','baseline 캡처', {});
@@ -2699,12 +2704,16 @@ function cases = i_buildCaseMatrix()
 
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)
+        cases(k).forbidAvi = false;
         if strncmp(cases(k).title, 'E04', 3)
             cases(k).requireAvi = true;
         elseif contains(cases(k).title, 'video control') || contains(cases(k).title, 'video_sync_with_avi')
             cases(k).requireAvi = true;
         elseif contains(lower(cases(k).title), 'videoviewer') || contains(lower(cases(k).title), 'video viewer')
             cases(k).requireAvi = true;   % v-fix12: video viewer capture 는 AVI 필요
+        elseif contains(cases(k).title, 'H-FLIGHT-PLAY-09')
+            % v5-I: row timer 검증 — AVI 불필요. LoadAvi='always' 에서도 로드 금지 (R2025a hang 리소스 절감)
+            cases(k).forbidAvi = true;
         end
     end
 end
