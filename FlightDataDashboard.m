@@ -1552,14 +1552,8 @@
                     widths{2} = 0;
                 end
             elseif strcmp(pnlName, 'video')
-                % v5-A: board-off 중 외부 Video Player auto-open 금지 (off 는 허용, on 은 플래그만)
-                if isempty(find(app.BoardOffState, 1))
-                    app.setVideoViewerVisible(fIdx, newState, false);
-                elseif ~newState
-                    app.setVideoViewerVisible(fIdx, false, false);
-                else
-                    app.UI(fIdx).PanelVisible.video = true;   % 복원 시 재표시
-                end
+                % v5-A: board-off 중 auto-open 금지는 setVideoViewerVisible 내부 guard 가 처리
+                app.setVideoViewerVisible(fIdx, newState, false);
                 widths{5} = 0;
                 widths{6} = 0;
             elseif strcmp(pnlName, 'info') || strcmp(pnlName, 'dataView')
@@ -9215,6 +9209,12 @@
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 dlg = app.UI(fIdx).vidViewerDialog;
                 if isempty(dlg) || ~isvalid(dlg), return; end
+                % v5-A2: board-off 중 외부 Video Player 표시 금지 — 모든 호출 경로 최종 방어
+                if tf && ~isempty(find(app.BoardOffState, 1))
+                    dlg.Visible = 'off';
+                    app.UI(fIdx).PanelVisible.video = true;   % board-on 복귀용 상태만 유지
+                    return;
+                end
                 if tf
                     targetPos = app.getVideoViewerDialogPosition(fIdx);
                     dlgWasHidden = ~strcmpi(char(dlg.Visible), 'on');
