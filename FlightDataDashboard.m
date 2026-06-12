@@ -10824,6 +10824,7 @@
                                 b.BackgroundColor = t.btnNormalBg;
                             end
                         end
+                        if isprop(b, 'FontName'), b.FontName = t.fontFamily; end   % v-sync
                         if isprop(b, 'FontColor')
                             fc = b.FontColor;
                             if isnumeric(fc) && numel(fc) == 3 && all(double(fc) >= 0.95)
@@ -10866,6 +10867,7 @@
                                 end
                             end
                         end
+                        if isprop(lb, 'FontName'), lb.FontName = t.fontFamily; end   % v-sync
                     catch
                     end
                 end
@@ -10895,6 +10897,7 @@
                                 tb.ForegroundColor = t.textPrimary;
                             end
                         end
+                        if isprop(tb, 'FontName'), tb.FontName = t.fontFamilyMono; end   % v-sync
                     catch
                     end
                 end
@@ -10917,6 +10920,7 @@
                         if isprop(ax, 'YColor'), ax.YColor = t.textSecondary; end
                         if isprop(ax, 'GridColor'), ax.GridColor = t.gridLine; end
                         if isprop(ax, 'FontSize') && ax.FontSize < 11, ax.FontSize = 11; end
+                        if isprop(ax, 'FontName'), ax.FontName = t.fontFamily; end   % v-sync
                         try
                             if ~isempty(ax.Title)
                                 ax.Title.Color = t.textPrimary;
@@ -10972,6 +10976,7 @@
                                     c.FontColor = t.textPrimary;
                                 end
                             end
+                            if isprop(c, 'FontName'), c.FontName = t.fontFamily; end   % v-sync
                         catch
                         end
                     end
