@@ -698,20 +698,49 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
         case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
             app.testHook(act.fn, act.args{:});
         case 'computeSyncSearchRows'
-            % v-fix4: mode 별 개수 검증 (nearest<=15, exact<=500) + Nx5 형상
-            rows = app.testHook('computeSyncSearchRows', act.args{1}, act.args{2});
-            if ~isempty(rows) && size(rows, 2) ~= 5
+            % v-fix7: target='selected' 면 실제 선택값으로 교체 → empty/0 false PASS 방지
+            fIdxS = act.args{1}; tgt = act.args{2};
+            if ischar(tgt) || isstring(tgt)
+                if strcmpi(char(tgt), 'selected')
+                    tgt = app.testHook('getSelectedInfoValueForTest', fIdxS);
+                else
+                    tgt = str2double(char(tgt));
+                end
+            end
+            if ~isfinite(tgt)
+                error('AutoTest:SyncSearchBadTarget', 'computeSyncSearchRows target is not finite');
+            end
+            rows = app.testHook('computeSyncSearchRows', fIdxS, tgt);
+            if size(rows, 1) < 1
+                error('AutoTest:SyncSearchEmptyResult', 'computeSyncSearchRows returned no rows (false PASS guard)');
+            end
+            if size(rows, 2) ~= 5
                 error('AutoTest:SyncSearchBadShape', 'computeSyncSearchRows must return Nx5 rows');
             end
             mode = '';
             if numel(act.args) >= 3, mode = char(act.args{3}); end
-            if strcmp(mode, 'nearest') && size(rows, 1) > 15
-                error('AutoTest:SyncSearchTooManyNearestRows', 'nearest search returned more than 15 rows');
+            if strcmp(mode, 'nearest')
+                if size(rows, 1) > 15
+                    error('AutoTest:SyncSearchTooManyNearestRows', 'nearest search returned more than 15 rows');
+                end
+            elseif strcmp(mode, 'exact')
+                if size(rows, 1) > 500
+                    error('AutoTest:SyncSearchTooManyRows', 'sync search returned more than 500 rows');
+                end
+                if any(abs(rows(:, 5)) > eps(single(0)))
+                    error('AutoTest:SyncSearchExactNonZeroDiff', 'exact search returned non-zero Diff rows');
+                end
             elseif size(rows, 1) > 500
                 error('AutoTest:SyncSearchTooManyRows', 'sync search returned more than 500 rows');
             end
         case 'clearPendingSyncAnchor'
             app.testHook('clearPendingSyncAnchor');
+        case 'assertPendingSyncAnchorCleared'
+            % v-fix8: clear 후 PendingFlightSyncAnchor.T1/T2 == NaN 직접 검증
+            pa = app.testHook('getPendingSyncAnchor');
+            if ~(isstruct(pa) && isnan(pa.T1) && isnan(pa.T2))
+                error('AutoTest:PendingSyncAnchorNotCleared', 'PendingFlightSyncAnchor T1/T2 not cleared to NaN');
+            end
         case 'searchFlightDataValue'
             app.testHook('searchFlightDataValue', act.args{:});
         case 'assertSyncMenuExists'
@@ -2170,6 +2199,7 @@ function cases = i_buildCaseMatrix()
     SSAPP = @(lbl)             struct('fn','applyPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
     SSC = @(fk, target, mode, lbl) struct('fn','computeSyncSearchRows',     'args',{{fk, target, mode}}, 'label',lbl, 'row',NaN);
     SSCLR = @(lbl)             struct('fn','clearPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
+    SSCHKCLR = @(lbl)          struct('fn','assertPendingSyncAnchorCleared','args',{{}},          'label',lbl, 'row',NaN);
     SMENU = @(fk, kind, lbl)   struct('fn','assertSyncMenuExists',          'args',{{fk, kind}}, 'label',lbl, 'row',NaN);
     SRSEL = @(fk, row, lbl)    struct('fn','setSelectedRowForTest',         'args',{{fk, row}}, 'label',lbl, 'row',NaN);
     CPC = @(lbl)               struct('fn','capturePlotConfigAndRefresh',   'args',{{}},          'label',lbl, 'row',NaN);
@@ -2491,7 +2521,7 @@ function cases = i_buildCaseMatrix()
         {SSA(1, 0, 'T1 only'), SSAPP('apply with T1 only')});
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-03 computeSyncSearchRows nearest/exact 호출', ...
         'nearest/exact candidates', '실제 호출 + Nx5 + nearest<=15/exact<=500', ...
-        {SRSEL(1, 5, 'select row5'), SSC(1, 1e12, 'nearest', 'nearest (no exact)'), SSC(1, 0, 'exact', 'exact/near 0')});
+        {SRSEL(1, 5, 'select row5'), SSC(1, 1e12, 'nearest', 'nearest (no exact)'), SSC(1, 'selected', 'exact', 'exact at selected value')});
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-04 board1 context menu 동기시간 찾기 존재', ...
         'context menu', 'normal board1 정보테이블 menu 검증', ...
         {SMENU(1, 'normal', 'board1 menu')});
@@ -2504,7 +2534,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-07 clearPendingSyncAnchor 경로 검증', ...
         'anchor clear', 'apply → clear → re-apply 시 미동기 (pending NaN)', ...
         {SSA(1, 0, 'T1=0'), SSA(2, 0, 'T2=0'), SSAPP('apply'), ...
-         SSCLR('clear pending anchor'), SSAPP('re-apply after clear')});
+         SSCLR('clear pending anchor'), SSCHKCLR('verify pending NaN'), SSAPP('re-apply after clear')});
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-08 search dialog open/close lifecycle', ...
         'dialog lifecycle', '검색 dialog open → close cleanup 무예외', ...
         {SRSEL(1, 3, 'select row3'), ...
