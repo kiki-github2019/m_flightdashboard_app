@@ -2347,11 +2347,19 @@
             % - DebugMode일 때만 콘솔 출력 (silent 태그는 콘솔 출력 생략)
             % - ring buffer는 항상 유지 → app.dumpErrorLog()로 사후 조사
             % [Medium] delete 진행 중에는 콘솔만 억제하고, ring buffer 태그는 보존한다.
+            appValid = false;
+            try
+                appValid = ~isempty(app) && isvalid(app);
+            catch
+                appValid = false;
+            end
+            if ~appValid
+                return;
+            end
+
             suppressConsole = false;
             try
-                if ~isempty(app) && isvalid(app) && app.IsDeleting
-                    suppressConsole = true;
-                end
+                suppressConsole = logical(app.IsDeleting);
             catch
                 suppressConsole = true;
             end
@@ -2362,11 +2370,26 @@
                     stackCell = {ME.stack};
                 catch
                 end
+                tagText = '';
+                identifierText = '';
+                messageText = '';
+                try
+                    tagText = char(tag);
+                catch
+                end
+                try
+                    identifierText = char(ME.identifier);
+                catch
+                end
+                try
+                    messageText = char(ME.message);
+                catch
+                end
                 entry = struct( ...
                     'time',       datetime('now'), ...
-                    'tag',        char(tag), ...
-                    'identifier', char(ME.identifier), ...
-                    'message',    char(ME.message), ...
+                    'tag',        tagText, ...
+                    'identifier', identifierText, ...
+                    'message',    messageText, ...
                     'stack',      stackCell);
                 if isempty(app.ErrorLog)
                     app.ErrorLog = entry;
@@ -2380,10 +2403,22 @@
                 % ring buffer 자체가 실패해도 절대 throw 안 함
             end
 
-            if suppressConsole || ~app.DebugMode, return; end
-            % silent 태그는 buffer만 남기고 콘솔에는 안 찍음 (기존 동작 유지)
-            if strcmpi(tag, 'silent'), return; end
-            fprintf('[%s] %s: %s\n', tag, ME.identifier, ME.message);
+            debugMode = false;
+            try
+                debugMode = logical(app.DebugMode);
+            catch
+                debugMode = false;
+            end
+            if suppressConsole || ~debugMode
+                return;
+            end
+            try
+                if strcmpi(tagText, 'silent')
+                    return;
+                end
+                fprintf('[%s] %s: %s\n', tagText, identifierText, messageText);
+            catch
+            end
         end
 
         % [V3.22 #1] 사후 조사용: 누적된 에러 로그 콘솔 출력
@@ -5665,10 +5700,28 @@
                     app.ProjectDirty = true;
                 end
             catch ME
-                app.logCaught(ME, 'auto-load');
-                app.ProjectDirty = true;   % [Critical 1] keep dirty on exception
                 try
-                    uialert(app.UIFigure, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project');
+                    app.logCaught(ME, 'auto-load');
+                catch
+                end
+                appValid = false;
+                try
+                    appValid = ~isempty(app) && isvalid(app);
+                catch
+                    appValid = false;
+                end
+                if ~appValid
+                    return;
+                end
+                try
+                    app.ProjectDirty = true;   % [Critical 1] keep dirty on exception
+                catch
+                end
+                try
+                    parentFig = app.UIFigure;
+                    if ~isempty(parentFig) && isvalid(parentFig)
+                        uialert(parentFig, sprintf('project 자동 로드 실패:\n%s', ME.message), 'Project');
+                    end
                 catch
                 end
             end
@@ -6644,7 +6697,28 @@
             [fn, pn] = uigetfile({'*.fdproj', 'Project file'}, '열 project 파일');
             if isequal(fn, 0), return; end
             app.autoLoadProjectFromFile(fullfile(pn, fn));
-            app.refreshEditDialog();
+            try
+                if isempty(app) || ~isvalid(app)
+                    return;
+                end
+            catch
+                return;
+            end
+            try
+                if isempty(app.EditDialog) || ~isvalid(app.EditDialog)
+                    return;
+                end
+            catch
+                return;
+            end
+            try
+                app.refreshEditDialog();
+            catch ME
+                try
+                    app.logCaught(ME, 'editDialogOpenProject:refresh');
+                catch
+                end
+            end
         end
 
         function editDialogAutoLoad(app)
