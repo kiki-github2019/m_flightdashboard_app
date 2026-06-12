@@ -412,7 +412,8 @@ end
 
 function tf = i_isDashboardRelatedTimer(t)
     try
-        keys = {'FlightDataDashboard', 'applyPendingDialogChanges', 'saveProjectAutosave'};
+        keys = {'FlightDataDashboard', 'applyPendingDialogChanges', 'saveProjectAutosave', ...
+            'FlightPlay', 'FlightDataDashboard:FlightPlay', 'onFlightPlayTimer'};
         tf = i_containsAny(i_timerDescriptor(t), keys);
     catch
         tf = false;
@@ -1768,36 +1769,69 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
     if ~i_shouldCapture(captureOpts, reason)
         return;
     end
+    % main figure (suffix 없음 — legacy 파일명 호환)
+    mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
+    captured = i_captureFigure(app.UIFigure, mainFile, captureOpts);
+    % v-fix3: 열린 외부 dashboard dialog 도 함께 캡처 (figure type suffix)
+    extras = i_collectOpenDialogs(app);
+    for e = 1:size(extras, 1)
+        f2 = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, extras{e, 2}));
+        try, i_captureFigure(extras{e, 1}, f2, captureOpts); catch; end
+    end
+    if ~captured
+        error('AutoTest:CaptureFailed', 'Failed to capture %s', mainFile);
+    end
+end
 
-    file = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
+function ok = i_captureFigure(figh, file, captureOpts)
+    ok = false;
+    if isempty(figh) || ~isvalid(figh), return; end
     try
-        f = getframe(app.UIFigure);
+        f = getframe(figh);
         img = f.cdata;
         if captureOpts.scale < 1
             img = i_resizeImageNearest(img, captureOpts.scale);
         end
         imwrite(img, file);
-        % v3-fix: capture 후 큰 이미지 변수 즉시 해제 + renderer 안정화 (MATLAB Online OOM 방지)
         clear f img;
-        try
-            drawnow limitrate
-        catch
-        end
-        captured = isfile(file);
-        if captured, return; end
+        try, drawnow limitrate; catch; end
+        ok = isfile(file);
+        if ok, return; end
     catch
     end
     try
-        exportapp(app.UIFigure, file);
-        try
-            drawnow limitrate
-        catch
-        end
-        captured = isfile(file);
-        if captured, return; end
+        exportapp(figh, file);
+        try, drawnow limitrate; catch; end
+        ok = isfile(file);
     catch
     end
-    error('AutoTest:CaptureFailed', 'Failed to capture %s', file);
+end
+
+function dlgs = i_collectOpenDialogs(app)
+    % v-fix3: visible 한 EditDialog / vidControlDialog / vidViewerDialog 수집 {handle, typeTag}
+    dlgs = cell(0, 2);
+    try
+        if isprop(app, 'EditDialog') && ~isempty(app.EditDialog) && isvalid(app.EditDialog) ...
+                && strcmpi(char(app.EditDialog.Visible), 'on')
+            dlgs(end+1, :) = {app.EditDialog, 'editdialog'};
+        end
+    catch
+    end
+    try
+        for fIdx = 1:numel(app.UI)
+            u = app.UI(fIdx);
+            pairs = {{'vidControlDialog', sprintf('vidctrl_f%d', fIdx)}, ...
+                     {'vidViewerDialog',  sprintf('vidview_f%d', fIdx)}};
+            for p = 1:numel(pairs)
+                fld = pairs{p}{1};
+                if isfield(u, fld) && ~isempty(u.(fld)) && isvalid(u.(fld)) ...
+                        && strcmpi(char(u.(fld).Visible), 'on')
+                    dlgs(end+1, :) = {u.(fld), pairs{p}{2}}; %#ok<AGROW>
+                end
+            end
+        end
+    catch
+    end
 end
 
 function tf = i_shouldCapture(captureOpts, reason)
