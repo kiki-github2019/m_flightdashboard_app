@@ -697,6 +697,23 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             app.testHook('setFlightDataSync', act.args{:});
         case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
             app.testHook(act.fn, act.args{:});
+        case 'computeSyncSearchRows'
+            % v-fix8: 실제 검색 호출 + 형상/개수 검증 (nearest <=15, exact <=500)
+            rows = app.testHook('computeSyncSearchRows', act.args{:});
+            if ~isempty(rows) && size(rows, 2) ~= 5
+                error('AutoTest:SyncSearchBadShape', 'computeSyncSearchRows must return Nx5 rows');
+            end
+            if size(rows, 1) > 500
+                error('AutoTest:SyncSearchTooManyRows', 'sync search returned more than 500 rows');
+            end
+        case 'assertSyncMenuExists'
+            % v-fix9: 정보테이블 context menu 에 '동기시간 찾기...' 존재 검증
+            texts = app.testHook('getInfoTableMenuTexts', act.args{1}, act.args{2});
+            if ~any(strcmp(texts, '동기시간 찾기...'))
+                error('AutoTest:SyncMenuMissing', 'board %d (%s) 동기시간 찾기 menu missing', act.args{1}, act.args{2});
+            end
+        case 'setSelectedRowForTest'
+            app.testHook('setSelectedRow', act.args{1}, act.args{2});
         case 'applyLayoutPreset'
             app.testHook('applyLayoutPreset', act.args{:});
         case 'setBodyRowSplitRatio'
@@ -765,6 +782,9 @@ function exp = i_expectedFromState(st)
     exp.minUserLayoutPresetCount = st.UserLayoutPresetCount;
     exp.requireColumnWidthChange = false(1, 2);
     exp.columnWidthBefore = cell(1, 2);
+    exp.flightSyncExpected = false;   % v-fix7: pending anchor 적용 후 SyncState 검증
+    exp.syncT1Expected = NaN;
+    exp.syncT2Expected = NaN;
     exp.flightPlayVisible = false(1, 2);
     exp.requireFlightPlay = false(1, 2);
     exp.flightPlayActive = false(1, 2);
@@ -901,11 +921,14 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.currentIndex(1) = 1;
             exp.currentIndex(2) = NaN;
         case 'applyPendingSyncAnchor'
-            % T1=T2=0 anchor 적용 시 Flight 1=row1, Flight 2 sync 연동
+            % T1=T2=0 anchor 적용 시 Flight 1=row1, Flight 2 sync 연동 + SyncState 검증
             exp.currentIndex(1) = 1;
             exp.currentIndex(2) = NaN;
-        case 'setPendingSyncAnchor'
-            % anchor 저장만 — observable state 변화 없음
+            exp.flightSyncExpected = true;
+            exp.syncT1Expected = 0;
+            exp.syncT2Expected = 0;
+        case {'setPendingSyncAnchor','computeSyncSearchRows','assertSyncMenuExists','setSelectedRowForTest'}
+            % anchor 저장 / 검색 호출 / 메뉴 검증 / 행 선택 — observable state 변화 없음
         case 'applyLayoutPreset'
             exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
         case 'setBodyRowSplitRatio'
@@ -1008,6 +1031,16 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
     issues = {};
     if sum(st.BoardOffState) > 1
         issues{end + 1} = 'both boards are off';
+    end
+    % v-fix7: pending anchor 적용 후 flight sync 상태 검증
+    if isfield(exp, 'flightSyncExpected') && exp.flightSyncExpected
+        if ~isfield(st, 'SyncState') || ~isfield(st.SyncState, 'IsSynced') || ~st.SyncState.IsSynced
+            issues{end + 1} = 'flight sync not enabled after pending anchor apply';
+        elseif abs(st.SyncState.SyncT1 - exp.syncT1Expected) > 1e-9 ...
+                || abs(st.SyncState.SyncT2 - exp.syncT2Expected) > 1e-9
+            issues{end + 1} = sprintf('flight sync T1/T2 mismatch expected=[%.3f %.3f] actual=[%.3f %.3f]', ...
+                exp.syncT1Expected, exp.syncT2Expected, st.SyncState.SyncT1, st.SyncState.SyncT2);
+        end
     end
     if isfield(st, 'CurrentLayoutPreset') && ~strcmp(char(st.CurrentLayoutPreset), exp.currentLayoutPreset)
         issues{end + 1} = sprintf('layout preset expected=%s actual=%s', ...
@@ -2105,6 +2138,9 @@ function cases = i_buildCaseMatrix()
     EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
     SSA = @(fk, tv, lbl)       struct('fn','setPendingSyncAnchor',          'args',{{fk, tv}},   'label',lbl, 'row',NaN);
     SSAPP = @(lbl)             struct('fn','applyPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
+    SSC = @(fk, target, lbl)   struct('fn','computeSyncSearchRows',         'args',{{fk, target}}, 'label',lbl, 'row',NaN);
+    SMENU = @(fk, kind, lbl)   struct('fn','assertSyncMenuExists',          'args',{{fk, kind}}, 'label',lbl, 'row',NaN);
+    SRSEL = @(fk, row, lbl)    struct('fn','setSelectedRowForTest',         'args',{{fk, row}}, 'label',lbl, 'row',NaN);
     CPC = @(lbl)               struct('fn','capturePlotConfigAndRefresh',   'args',{{}},          'label',lbl, 'row',NaN);
     EDR = @(lbl)               struct('fn','editDialogRebuildPlots',        'args',{{}},          'label',lbl, 'row',NaN);
     EXA = @(v, lbl)            struct('fn','editDialogToggleXAuto',         'args',{{v}},         'label',lbl, 'row',NaN);
@@ -2422,9 +2458,22 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-02 T1 만 지정 시 미적용', ...
         'partial anchor guard', 'T1 만 있으면 동기 미적용', ...
         {SSA(1, 0, 'T1 only')});
-    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-03 computeSyncSearchRows nearest 최대 15', ...
-        'nearest candidates', '값 검색 후보가 15개 이하로 제한', ...
-        {ATC(1, 1, 'reset Flight 1 index')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-03 computeSyncSearchRows nearest/exact 호출', ...
+        'nearest/exact candidates', '실제 호출 + Nx5 형상/개수 검증', ...
+        {SRSEL(1, 5, 'select row5'), SSC(1, 1e12, 'nearest (no exact)'), SSC(1, 0, 'exact/near 0')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-04 board1 context menu 동기시간 찾기 존재', ...
+        'context menu', 'normal board1 정보테이블 menu 검증', ...
+        {SMENU(1, 'normal', 'board1 menu')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-05 board2 context menu 동기시간 찾기 존재', ...
+        'context menu', 'normal board2 정보테이블 menu 검증', ...
+        {SMENU(2, 'normal', 'board2 menu')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-06 board-off table context menu 존재', ...
+        'context menu', 'board-off summary 정보테이블 menu 검증', ...
+        {BV(2, 'lower board off'), SMENU(2, 'boardoff', 'boardoff menu'), BV(2, 'lower board on')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-07 anchor clear 후 미적용', ...
+        'anchor clear', 'T1 지정 → clear → 적용 시 미동기', ...
+        {SSA(1, 0, 'T1=0'), SSA(2, 0, 'T2=0'), SSAPP('apply'), ...
+         FPSY(0, 0, false, 'sync off via clear path')});
 
     % I-PROJECT-RESTORE: project fixture restore and safe failure coverage.
     projectKinds = {'full', 'data_only', 'data_plot_single', 'data_plot_multi', ...

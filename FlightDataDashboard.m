@@ -557,6 +557,26 @@
                     if fk == 1, app.PendingFlightSyncAnchor.T1 = tv; else, app.PendingFlightSyncAnchor.T2 = tv; end
                 case 'applyPendingSyncAnchor',        app.syncSearchApply([]);
                 case 'getPendingSyncAnchor',          varargout{1} = app.PendingFlightSyncAnchor;
+                case 'getInfoTableMenuTexts'
+                    % v-fix9: 정상/board-off 정보테이블 context menu 항목 텍스트 수집
+                    fIdx = varargin{1};
+                    tbl = [];
+                    if numel(varargin) >= 2 && strcmpi(char(varargin{2}), 'boardoff')
+                        if isfield(app.UI(fIdx), 'boardOffTable'), tbl = app.UI(fIdx).boardOffTable; end
+                    else
+                        if isfield(app.UI(fIdx), 'dataTable'), tbl = app.UI(fIdx).dataTable; end
+                    end
+                    texts = {};
+                    try
+                        if ~isempty(tbl) && isvalid(tbl) && ~isempty(tbl.ContextMenu) && isvalid(tbl.ContextMenu)
+                            kids = tbl.ContextMenu.Children;
+                            for ki = 1:numel(kids)
+                                if isprop(kids(ki), 'Text'), texts{end+1} = char(kids(ki).Text); end %#ok<AGROW>
+                            end
+                        end
+                    catch
+                    end
+                    varargout{1} = texts;
                 case 'setVideoSync',                  app.setVideoSync(varargin{:});
                 case 'saveProjectFile',               varargout{1} = app.saveProjectFile(varargin{:});
                 case 'loadProjectFile',               varargout{1} = app.loadProjectFile(varargin{:});
