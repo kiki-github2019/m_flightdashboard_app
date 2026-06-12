@@ -546,7 +546,7 @@
                 case 'startFlightPlay',               app.startFlightPlay(varargin{:});
                 case 'stopFlightPlay',                app.stopFlightPlay(varargin{:});
                 case 'setFlightDataSync',             app.setFlightDataSync(varargin{:});
-                case 'searchFlightDataValue',         app.searchFlightDataValue(varargin{:});
+                case 'searchFlightDataValue',         ok = app.searchFlightDataValue(varargin{:}); if nargout, varargout{1} = ok; end
                 case 'computeSyncSearchRows'
                     fIdx = varargin{1}; target = varargin{2};
                     yCol = app.Models(fIdx).displayMeta(app.Models(fIdx).selectedRow).header;
@@ -13430,8 +13430,10 @@
         % These reuse the existing UI refresh paths so the main window stays
         % consistent regardless of who initiated the change.
         % =================================================================
-        function searchFlightDataValue(app, fIdx)
+        function ok = searchFlightDataValue(app, fIdx)
             % [Sync Search] 선택 항목 값 검색 → 후보 time list → 동기 기준(T1/T2) 지정.
+            % 반환: dialog open 성공 여부 (guard silent-return 관찰용)
+            ok = false;
             try
                 if fIdx < 1 || fIdx > numel(app.Models), return; end
                 % v-fix: 실제 행 선택이 한 번도 없었으면 기본 row1 검색 방지
@@ -13468,6 +13470,7 @@
                     return;
                 end
                 app.openSyncSearchDialog(fIdx, yCol, timeCol);
+                ok = true;
             catch ME
                 app.logCaught(ME, 'sync-search');
             end
