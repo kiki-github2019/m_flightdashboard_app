@@ -931,6 +931,9 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = true;
                 exp.summaryVisible(fIdx) = true;
                 exp.sourceColumnsHidden(3 - fIdx) = true;
+                % v5-G: Policy B — board-off 진입 시 양 보드 flight-play panel collapse
+                exp.flightPlayVisible(:) = false;
+                exp.flightPlayActive(:) = false;
             end
         case 'ensureNoBoardOff'
             exp.boardOff(:) = false;
