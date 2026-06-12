@@ -144,6 +144,7 @@
         FlightPlayFps        = 20
         PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...   % [Sync Search] 동기 기준 후보
             'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN)
+        SyncSearchDialogs    = {[], []}        % [Sync Search] 검색 dialog handle (lifecycle 추적)
         NormalWindowPosition = []             % 마지막 일반 창 위치(최대화 복원용)
         IsRestoringWindow   = false           % 복원 중 SizeChanged 저장 방지
         IsWindowManuallyMaximized = false     % WindowState 미지원 버전 fallback
@@ -317,6 +318,16 @@
                         app.FlightPlayTimer{fIdx} = [];
                     catch ME
                         app.logCaught(ME, 'delete:flight-play-timer');
+                    end
+                    try
+                        % v-fix3: Sync Search dialog 정리
+                        if numel(app.SyncSearchDialogs) >= fIdx && ~isempty(app.SyncSearchDialogs{fIdx}) ...
+                                && isvalid(app.SyncSearchDialogs{fIdx})
+                            delete(app.SyncSearchDialogs{fIdx});
+                        end
+                        app.SyncSearchDialogs{fIdx} = [];
+                    catch ME
+                        app.logCaught(ME, 'delete:sync-search-dialog');
                     end
                     try
                         if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
@@ -13390,6 +13401,12 @@
                 end
                 meta = app.Models(fIdx).displayMeta(selRow);
                 yCol = meta.header;
+                % v-fix5: Time 컬럼 매핑 유효성 검증
+                if ~isfield(app.Models(fIdx).mappedCols, 'Time') || isempty(app.Models(fIdx).mappedCols.Time) ...
+                        || ~ismember(app.Models(fIdx).mappedCols.Time, app.Models(fIdx).rawData.Properties.VariableNames)
+                    uialert(app.UIFigure, 'Time 컬럼 매핑이 유효하지 않습니다.', '동기시간 찾기');
+                    return;
+                end
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 if ~ismember(yCol, app.Models(fIdx).rawData.Properties.VariableNames)
                     uialert(app.UIFigure, sprintf('컬럼 "%s" 을(를) 찾을 수 없습니다.', yCol), '동기시간 찾기');
@@ -13408,8 +13425,17 @@
 
         function openSyncSearchDialog(app, fIdx, yCol, timeCol)
             t = app.getLightTheme();
+            % v-fix3: 기존 dialog 닫고 handle 저장 (lifecycle 추적)
+            try
+                if numel(app.SyncSearchDialogs) >= fIdx && ~isempty(app.SyncSearchDialogs{fIdx}) ...
+                        && isvalid(app.SyncSearchDialogs{fIdx})
+                    delete(app.SyncSearchDialogs{fIdx});
+                end
+            catch
+            end
             dlg = uifigure('Name', sprintf('동기시간 찾기 - Flight Data %d (%s)', fIdx, yCol), ...
                 'Position', [200 200 560 460], 'Color', t.dialogBg);
+            app.SyncSearchDialogs{fIdx} = dlg;
             try, dlg.AutoResizeChildren = 'off'; catch; end
             gl = uigridlayout(dlg, [4 4], 'RowHeight', {32, '1x', 32, 36}, ...
                 'ColumnWidth', {'1x', 90, 90, 90}, 'Padding', [8 8 8 8], ...
@@ -13419,7 +13445,7 @@
             valField.Layout.Row = 1; valField.Layout.Column = [2 3];
             searchBtn = uibutton(gl, 'Text', '검색', 'BackgroundColor', t.toolbarBlueBg, 'FontColor', t.toolbarBlueFg, 'FontWeight', 'bold');
             searchBtn.Layout.Row = 1; searchBtn.Layout.Column = 4;
-            resTable = uitable(gl, 'ColumnName', {'Index', 'Time(s)', 'Value', 'Diff'}, ...
+            resTable = uitable(gl, 'ColumnName', {'Rank', 'Index', 'Time(s)', 'Value', 'Diff'}, ...
                 'BackgroundColor', [1 1 1; 0.96 0.98 1.00], 'ForegroundColor', [0 0 0], ...
                 'RowName', [], 'FontName', 'Consolas');
             resTable.Layout.Row = 2; resTable.Layout.Column = [1 4];
@@ -13438,20 +13464,40 @@
             gotoBtn.ButtonPushedFcn   = @(~,~) app.syncSearchGoto(fIdx, resTable);
             setBtn.ButtonPushedFcn    = @(~,~) app.syncSearchSetAnchor(fIdx, yCol, resTable, infoLbl);
             applyBtn.ButtonPushedFcn  = @(~,~) app.syncSearchApply(infoLbl);
-            clearBtn.ButtonPushedFcn  = @(~,~) app.setFlightDataSync(NaN, NaN, false);
+            clearBtn.ButtonPushedFcn  = @(~,~) app.clearPendingSyncAnchor(infoLbl);
+        end
+
+        function clearPendingSyncAnchor(app, infoLbl)
+            % v-fix4: 동기 해제 시 SyncState + PendingFlightSyncAnchor 모두 초기화
+            try
+                app.PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...
+                    'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN);
+                app.setFlightDataSync(NaN, NaN, false);
+                if nargin >= 2 && ~isempty(infoLbl) && isvalid(infoLbl)
+                    infoLbl.Text = '동기 해제 및 T1/T2 후보 초기화 완료.';
+                end
+            catch ME
+                app.logCaught(ME, 'sync-search:clear-anchor');
+            end
         end
 
         function rows = computeSyncSearchRows(~, yData, tData, target)
             % exact match 우선(>500 제한), 없으면 값-정렬 closest 중심 ±7 최대 15.
+            % 열: [Rank, Index, Time, Value, Diff]. nearest 는 closest 가 중간행 유지(재정렬 X).
+            rows = zeros(0, 5);
+            % v-fix1: 빈 데이터/비유한 target 방어
+            if isempty(yData) || isempty(tData) || ~isfinite(target), return; end
             finiteMask = isfinite(yData) & isfinite(tData);
             idxAll = find(finiteMask);
+            if isempty(idxAll), return; end
             vals = yData(idxAll); times = tData(idxAll);
             exact = find(vals == target);
             if ~isempty(exact)
                 sel = exact;
                 if numel(sel) > 500, sel = sel(1:500); end
                 rowsIdx = idxAll(sel);
-                rows = [double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
+                rk = (1:numel(sel))';
+                rows = [rk, double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
                 return;
             end
             [sortedVals, order] = sort(vals);
@@ -13459,8 +13505,20 @@
             lo = max(1, nearestPos - 7); hi = min(numel(sortedVals), nearestPos + 7);
             sel = order(lo:hi);
             rowsIdx = idxAll(sel);
-            rows = [double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
-            [~, ord2] = sort(rows(:,1)); rows = rows(ord2, :);   % 표시는 index 순
+            % v-fix2: closest 가 중간행에 오도록 값-정렬 순서 유지 (index 재정렬 제거)
+            rk = (1:numel(sel))';
+            rows = [rk, double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
+        end
+
+        function r = syncSearchClosestDisplayRow(~, rows, target)
+            % nearest 결과에서 |Diff| 최소 표시행 (Rank 기준 selection 용)
+            r = 1;
+            try
+                if isempty(rows), return; end
+                [~, r] = min(abs(rows(:, 5)));   % Diff 열 = 5
+            catch
+                r = 1;
+            end
         end
 
         function runSyncSearch(app, fIdx, yCol, timeCol, target, resTable, infoLbl)
@@ -13471,10 +13529,12 @@
                 resTable.Data = rows;
                 if isempty(rows)
                     infoLbl.Text = '검색 결과 없음 (유효 숫자값 없음).';
-                elseif any(rows(:,3) == target)
+                elseif any(rows(:,4) == target)   % Value 열 = 4
                     infoLbl.Text = sprintf('일치 %d개 표시.', size(rows,1));
+                    try, resTable.Selection = [1 1]; catch; end
                 else
                     infoLbl.Text = sprintf('일치값 없음 → 가장 가까운 %d개 표시.', size(rows,1));
+                    try, resTable.Selection = [app.syncSearchClosestDisplayRow(rows, target), 1]; catch; end
                 end
             catch ME
                 app.logCaught(ME, 'sync-search:run');
@@ -13496,7 +13556,7 @@
             try
                 r = app.syncSearchSelectedRow(resTable);
                 if isempty(r), return; end
-                app.applyTimeChange(fIdx, max(1, min(height(app.Models(fIdx).rawData), round(r(1)))));
+                app.applyTimeChange(fIdx, max(1, min(height(app.Models(fIdx).rawData), round(r(2)))));   % Index 열 = 2
             catch ME
                 app.logCaught(ME, 'sync-search:goto');
             end
@@ -13506,14 +13566,15 @@
             try
                 r = app.syncSearchSelectedRow(resTable);
                 if isempty(r), return; end
+                % 열: [Rank, Index, Time, Value, Diff]
                 if fIdx == 1
-                    app.PendingFlightSyncAnchor.T1 = r(2);
+                    app.PendingFlightSyncAnchor.T1 = r(3);
                     app.PendingFlightSyncAnchor.Source1 = yCol;
-                    app.PendingFlightSyncAnchor.Index1 = r(1); app.PendingFlightSyncAnchor.Value1 = r(3);
+                    app.PendingFlightSyncAnchor.Index1 = r(2); app.PendingFlightSyncAnchor.Value1 = r(4);
                 else
-                    app.PendingFlightSyncAnchor.T2 = r(2);
+                    app.PendingFlightSyncAnchor.T2 = r(3);
                     app.PendingFlightSyncAnchor.Source2 = yCol;
-                    app.PendingFlightSyncAnchor.Index2 = r(1); app.PendingFlightSyncAnchor.Value2 = r(3);
+                    app.PendingFlightSyncAnchor.Index2 = r(2); app.PendingFlightSyncAnchor.Value2 = r(4);
                 end
                 infoLbl.Text = sprintf('T1=%s, T2=%s', ...
                     app.fmtAnchor(app.PendingFlightSyncAnchor.T1), app.fmtAnchor(app.PendingFlightSyncAnchor.T2));

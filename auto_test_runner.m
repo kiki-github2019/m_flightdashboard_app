@@ -315,7 +315,8 @@ function tf = i_isDashboardRelatedFigure(fig)
         if isempty(fig) || ~isvalid(fig), return; end
         keys = {'FlightDataDashboard', 'Flight Data', '비행 데이터', ...
                 '비행경로', '해안선 정보', '설정/프로젝트', ...
-                'AVI 제어', 'AVI 파일 열기', '비행시간 동기'};
+                'AVI 제어', 'AVI 파일 열기', '비행시간 동기', ...
+                '동기시간 찾기', 'Sync Search'};
         if isprop(fig, 'Name') && i_containsAny(char(fig.Name), keys)
             tf = true;
             return;
