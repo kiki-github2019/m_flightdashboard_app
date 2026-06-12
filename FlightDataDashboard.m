@@ -119,7 +119,7 @@
         FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
         FrameCacheKeys      = {[], []}      % [V3.13 C-1] 비행경로별 캐시 키 순서 (LRU)
         DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
-        CacheBudgetMB       = 30            % [V3.14 항목 3] 비행경로당 캐시 메모리 예산(MB) - GUI에서 조정
+        CacheBudgetMB       = 100           % [v-fix6] 비행경로당 캐시 메모리 예산(MB) 기본 100 - GUI에서 조정
         LastSliderUpdate    = {uint64(0), uint64(0)}  % [PATCH] tic 핸들(채널별)
         LastDragTableUpdate = [uint64(0), uint64(0)]  % [Perf] dataTable throttle (드래그 중)
         InGoToFrame         = [false, false] % [V3.16] goToFrame 재진입 차단 플래그
@@ -8690,11 +8690,16 @@
             ctrlFont = 14;
             ctrlSmallFont = 13;
             dlg = uifigure('Name', sprintf('AVI 제어 - Flight Data %d', fIdx), ...
-                'Visible', 'off', 'Position', [120, 120, 760, 300], ...
+                'Visible', 'off', 'Position', [120, 120, 760, 380], ...
                 'Color', [0.94 0.94 0.96], ...
                 'CloseRequestFcn', @(~,~) app.hideVideoControlDialog(fIdx));
+            % v-fix5: resize 안정화 — 최소 크기 미만 시 강제 보정
+            try
+                dlg.SizeChangedFcn = @(src,~) app.clampVideoControlDialogSize(src);
+            catch
+            end
             root = uigridlayout(dlg, [3 1]);
-            root.RowHeight = {64, 132, 46};
+            root.RowHeight = {64, '1x', 56};   % v-fix5: Navigator 행 flex + 최소 높이 확보
             root.Padding = [6 6 6 6];
             root.RowSpacing = 5;
 
@@ -8793,7 +8798,7 @@
             ctrl.vidCacheBudget = uidropdown(glHz, ...
                 'Items', {'30 MB', '50 MB', '100 MB'}, ...
                 'ItemsData', [30, 50, 100], ...
-                'Value', 30, 'FontSize', ctrlSmallFont, ...
+                'Value', 100, 'FontSize', ctrlSmallFont, ...   % v-fix6: 기본 100MB
                 'ValueChangedFcn', @(src,~) app.setCacheBudget(src.Value));
 
             ctrl.vidControlDialog = dlg;
@@ -10087,6 +10092,19 @@
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:boardOff');
+            end
+        end
+
+        function clampVideoControlDialogSize(~, dlg)
+            % v-fix5: AVI 제어 dialog 최소 크기 보정 (UI 잘림 방지)
+            try
+                if isempty(dlg) || ~isvalid(dlg), return; end
+                minW = 620; minH = 320;
+                pos = dlg.Position;
+                if pos(3) < minW || pos(4) < minH
+                    dlg.Position = [pos(1), pos(2), max(pos(3), minW), max(pos(4), minH)];
+                end
+            catch
             end
         end
 
