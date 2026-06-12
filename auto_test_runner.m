@@ -190,7 +190,6 @@ function auto_test_runner(varargin)
         end
         % v-chunk: chunk 끝 도달 시 finalize + 다음 chunk 준비
         if ii == chunkEndIdx
-        if ii == chunkEndIdx
             chunkSubset = results(chunkCases);
             i_appendProgressMd(progressFile, 0, 0, 'CHUNK_FINISHED', sprintf('PASS=%d FAIL=%d', ...
                 sum(strcmp({chunkSubset.status}, 'PASS')), sum(strcmp({chunkSubset.status}, 'FAIL'))));
