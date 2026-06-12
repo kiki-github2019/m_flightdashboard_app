@@ -1800,8 +1800,8 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
         case {'main', 'dashboard'}
             target = app.UIFigure;
         case {'editdialog', 'projecteditor'}
-            app.testHook('openEditDialog');
-            target = app.EditDialog;
+            % v-fix3: private property 직접 접근 제거 — hook 반환 handle 사용
+            target = app.testHook('openEditDialog');
         case {'videocontrol', 'avicontrol'}
             target = app.UI(fIdx).vidControlDialog;
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
@@ -1831,7 +1831,11 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
                 app.testHook('toggleFlightPlayControlPanel', fIdx);
                 try, target = app.UI(fIdx).flightPlayControlPanel; catch; end
             end
-            if isempty(target) || ~isvalid(target), target = app.UIFigure; end
+            % v-fix2: main figure fallback 제거 — panel 미가용 시 false PASS 방지
+            if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
+                error('AutoTest:FlightPlayCaptureTargetMissing', ...
+                    'FlightPlay control capture target is missing for flight %d', fIdx);
+            end
         otherwise
             error('AutoTest:UnknownPanelCaptureTarget', 'Unknown panel capture target: %s', char(panelName));
     end
@@ -1904,38 +1908,15 @@ function ok = i_captureFigure(figh, file, captureOpts)
 end
 
 function dlgs = i_collectOpenDialogs(app)
-    % v-fix3: visible 한 EditDialog / vidControlDialog / vidViewerDialog 수집 {handle, typeTag}
+    % v-fix2: private property 직접 접근 제거 — app hook 으로 visible dialog {handle, tag} 수집
     dlgs = cell(0, 2);
     try
-        if isprop(app, 'EditDialog') && ~isempty(app.EditDialog) && isvalid(app.EditDialog) ...
-                && strcmpi(char(app.EditDialog.Visible), 'on')
-            dlgs(end+1, :) = {app.EditDialog, 'editdialog'};
+        dlgs = app.testHook('getOpenDialogHandlesForTest');
+        if ~iscell(dlgs) || size(dlgs, 2) ~= 2
+            dlgs = cell(0, 2);
         end
     catch
-    end
-    try
-        for fIdx = 1:numel(app.UI)
-            u = app.UI(fIdx);
-            pairs = {{'vidControlDialog', sprintf('vidctrl_f%d', fIdx)}, ...
-                     {'vidViewerDialog',  sprintf('vidview_f%d', fIdx)}};
-            % v-fix3b: Sync Search dialog 도 capture 대상 (property 직접 접근)
-            try
-                if isprop(app, 'SyncSearchDialogs') && numel(app.SyncSearchDialogs) >= fIdx ...
-                        && ~isempty(app.SyncSearchDialogs{fIdx}) && isvalid(app.SyncSearchDialogs{fIdx}) ...
-                        && strcmpi(char(app.SyncSearchDialogs{fIdx}.Visible), 'on')
-                    dlgs(end+1, :) = {app.SyncSearchDialogs{fIdx}, sprintf('syncsearch_f%d', fIdx)}; %#ok<AGROW>
-                end
-            catch
-            end
-            for p = 1:numel(pairs)
-                fld = pairs{p}{1};
-                if isfield(u, fld) && ~isempty(u.(fld)) && isvalid(u.(fld)) ...
-                        && strcmpi(char(u.(fld).Visible), 'on')
-                    dlgs(end+1, :) = {u.(fld), pairs{p}{2}}; %#ok<AGROW>
-                end
-            end
-        end
-    catch
+        dlgs = cell(0, 2);
     end
 end
 

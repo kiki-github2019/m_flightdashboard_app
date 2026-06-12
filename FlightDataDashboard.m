@@ -626,7 +626,7 @@
                     end
                 case 'clearPendingSyncAnchor',        app.clearPendingSyncAnchor([]);
                 % v-runner: EditDialog 자동 테스트 dispatch
-                case 'openEditDialog',                app.openEditDialog();
+                case 'openEditDialog',                app.openEditDialog(); if nargout, varargout{1} = app.EditDialog; end
                 case 'closeEditDialog',               app.closeEditDialog();
                 case 'applyPendingDialogChanges',     app.applyPendingDialogChanges();
                 case 'editDialogSaveProject',         app.editDialogSaveProject();
@@ -13539,26 +13539,24 @@
             end
         end
 
-        function h = getOpenDialogHandlesForTest(app)
-            % v-fix1: runner 가 private property 직접 접근 없이 열린 dialog 수집
-            h = matlab.ui.Figure.empty;
+        function dlgs = getOpenDialogHandlesForTest(app)
+            % v-fix1: runner 가 private property 직접 접근 없이 visible dialog 수집 {handle, tag}
+            dlgs = cell(0, 2);
             try
                 cand = {};
-                if ~isempty(app.EditDialog), cand{end+1} = app.EditDialog; end
+                if ~isempty(app.EditDialog), cand(end+1,:) = {app.EditDialog, 'editdialog'}; end
                 for fk = 1:numel(app.UI)
-                    try
-                        cand{end+1} = app.UI(fk).vidControlDialog; %#ok<AGROW>
-                        cand{end+1} = app.UI(fk).vidViewerDialog;  %#ok<AGROW>
-                    catch
-                    end
+                    try, cand(end+1,:) = {app.UI(fk).vidControlDialog, sprintf('vidctrl_f%d', fk)}; catch; end %#ok<AGROW>
+                    try, cand(end+1,:) = {app.UI(fk).vidViewerDialog,  sprintf('vidview_f%d', fk)}; catch; end %#ok<AGROW>
                 end
-                for k = 1:numel(app.SyncSearchDialogs)
-                    cand{end+1} = app.SyncSearchDialogs{k}; %#ok<AGROW>
+                for fk = 1:numel(app.SyncSearchDialogs)
+                    cand(end+1,:) = {app.SyncSearchDialogs{fk}, sprintf('syncsearch_f%d', fk)}; %#ok<AGROW>
                 end
-                for k = 1:numel(cand)
-                    d = cand{k};
-                    if ~isempty(d) && isa(d,'matlab.ui.Figure') && isvalid(d)
-                        h(end+1) = d; %#ok<AGROW>
+                for k = 1:size(cand, 1)
+                    d = cand{k, 1};
+                    if ~isempty(d) && isa(d,'matlab.ui.Figure') && isvalid(d) ...
+                            && strcmpi(char(d.Visible), 'on')
+                        dlgs(end+1, :) = {d, cand{k, 2}}; %#ok<AGROW>
                     end
                 end
             catch ME
