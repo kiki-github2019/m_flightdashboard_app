@@ -7818,16 +7818,20 @@
         end
 
         function calculateBounds(app, fIdx)
+            % v-fix3: flight 별 독립 bounds. rawData 가 있으면 해당 flight 데이터만 기준.
+            % CoastlineData 는 rawData 없는 fallback 시에만 bounds 에 포함.
+            % FixedAreaBounds 도 rawData 없을 때만 적용 (강제 공통 bounds fallback).
             minLat = 90; maxLat = -90; minLon = 180; maxLon = -180;
             minAlt = 99999; maxAlt = -99999; hasData = false;
+            hasOwnData = ~isempty(app.Models(fIdx).rawData);
 
-            if ~isempty(app.CoastlineData)
+            if ~hasOwnData && ~isempty(app.CoastlineData)
                 minLat = min(minLat, min(app.CoastlineData(:,1))); maxLat = max(maxLat, max(app.CoastlineData(:,1)));
                 minLon = min(minLon, min(app.CoastlineData(:,2))); maxLon = max(maxLon, max(app.CoastlineData(:,2)));
                 hasData = true;
             end
 
-            if ~isempty(app.Models(fIdx).rawData)
+            if hasOwnData
                 lats = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Lat);
                 lons = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Lon);
                 alts = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Alt);
@@ -7841,7 +7845,7 @@
                 hasData = true;
             end
 
-            if ~isempty(app.FixedAreaBounds)
+            if ~hasOwnData && ~isempty(app.FixedAreaBounds)
                 app.Models(fIdx).bounds.minLat = app.FixedAreaBounds.minLat;
                 app.Models(fIdx).bounds.maxLat = app.FixedAreaBounds.maxLat;
                 app.Models(fIdx).bounds.minLon = app.FixedAreaBounds.minLon;
