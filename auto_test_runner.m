@@ -694,6 +694,8 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             app.testHook(act.fn, act.args{:});
         case 'setFlightDataSync'
             app.testHook('setFlightDataSync', act.args{:});
+        case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
+            app.testHook(act.fn, act.args{:});
         case 'applyLayoutPreset'
             app.testHook('applyLayoutPreset', act.args{:});
         case 'setBodyRowSplitRatio'
@@ -897,6 +899,12 @@ function exp = i_updateExpectedState(exp, act, beforeState)
         case 'setFlightDataSync'
             exp.currentIndex(1) = 1;
             exp.currentIndex(2) = NaN;
+        case 'applyPendingSyncAnchor'
+            % T1=T2=0 anchor 적용 시 Flight 1=row1, Flight 2 sync 연동
+            exp.currentIndex(1) = 1;
+            exp.currentIndex(2) = NaN;
+        case 'setPendingSyncAnchor'
+            % anchor 저장만 — observable state 변화 없음
         case 'applyLayoutPreset'
             exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
         case 'setBodyRowSplitRatio'
@@ -2094,6 +2102,8 @@ function cases = i_buildCaseMatrix()
     APD = @(lbl)               struct('fn','applyPendingDialogChanges',     'args',{{}},          'label',lbl, 'row',NaN);
     EDS = @(lbl)               struct('fn','editDialogSaveProject',         'args',{{}},          'label',lbl, 'row',NaN);
     EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
+    SSA = @(fk, tv, lbl)       struct('fn','setPendingSyncAnchor',          'args',{{fk, tv}},   'label',lbl, 'row',NaN);
+    SSAPP = @(lbl)             struct('fn','applyPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
     CPC = @(lbl)               struct('fn','capturePlotConfigAndRefresh',   'args',{{}},          'label',lbl, 'row',NaN);
     EDR = @(lbl)               struct('fn','editDialogRebuildPlots',        'args',{{}},          'label',lbl, 'row',NaN);
     EXA = @(v, lbl)            struct('fn','editDialogToggleXAuto',         'args',{{v}},         'label',lbl, 'row',NaN);
@@ -2403,6 +2413,17 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-09 Play/Pause timer start-stop cleanup', ...
         'play timer', 'timer can start and stop without leaking active state', ...
         {FPT(1,'open'), FPLAY(1,'start play'), FSTOP(1,'stop play')});
+
+    % H-SYNC-SEARCH: 동기시간 찾기 anchor → setFlightDataSync 경로
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-01 anchor T1/T2 지정 후 동기 적용', ...
+        'sync anchor apply', 'T1/T2 지정 → applyPendingSyncAnchor → SyncState.IsSynced', ...
+        {SSA(1, 0, 'T1=0'), SSA(2, 0, 'T2=0'), SSAPP('apply pending anchor')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-02 T1 만 지정 시 미적용', ...
+        'partial anchor guard', 'T1 만 있으면 동기 미적용', ...
+        {SSA(1, 0, 'T1 only')});
+    cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-03 computeSyncSearchRows nearest 최대 15', ...
+        'nearest candidates', '값 검색 후보가 15개 이하로 제한', ...
+        {ATC(1, 1, 'reset Flight 1 index')});
 
     % I-PROJECT-RESTORE: project fixture restore and safe failure coverage.
     projectKinds = {'full', 'data_only', 'data_plot_single', 'data_plot_multi', ...
