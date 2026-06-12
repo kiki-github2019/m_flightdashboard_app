@@ -9135,10 +9135,25 @@
                     return;
                 end
                 widths = app.UI(fIdx).dataGrid.ColumnWidth;
-                % v-final P3: splitter drag end 후 normalize 명시 호출 (plot=1x/splitter visibility 일관성)
-                if isfield(app.UI(fIdx), 'PanelVisible')
-                    widths = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, widths);
-                    app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                % v-fix2: side-analysis(hsplit) 모드에선 col5=mapAlt — drag 결과를 mapAltWidth 로 저장
+                isHsplitMode = isfield(app.UI(fIdx), 'arrangementMode') ...
+                    && strcmp(app.UI(fIdx).arrangementMode, 'hsplit');
+                if isHsplitMode
+                    try
+                        if numel(widths) >= 5 && isnumeric(widths{5}) && widths{5} > 0
+                            s = app.UserColumnWidths{fIdx};
+                            if ~isstruct(s), s = app.getEmptyUserColumnWidthsStruct(); end
+                            s.mapAltWidth = max(120, double(widths{5}));
+                            app.UserColumnWidths{fIdx} = s;
+                        end
+                    catch
+                    end
+                else
+                    % v-final P3: normal 모드만 normalize (hsplit 컬럼 매핑 다름)
+                    if isfield(app.UI(fIdx), 'PanelVisible')
+                        widths = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, widths);
+                        app.UI(fIdx).dataGrid.ColumnWidth = widths;
+                    end
                 end
                 app.updateColumnSplitterVisibility(fIdx, widths);
                 app.reflowAttitudePanel(fIdx);
@@ -9841,7 +9856,16 @@
                 sideAnalysisMode = isBoardOffSource && ~attitudeOn && mapColOn && infoOn && dataViewOn;
 
                 if sideAnalysisMode
+                    % v-fix2: 사용자 조절 width 우선 (UserColumnWidths.mapAltWidth), 없으면 기본 계산
                     mapW = max(220, round(figW * 0.24));
+                    try
+                        s = app.UserColumnWidths{fIdx};
+                        if isstruct(s) && isfield(s, 'mapAltWidth') && ~isempty(s.mapAltWidth) ...
+                                && isnumeric(s.mapAltWidth) && s.mapAltWidth > 0
+                            mapW = max(120, double(s.mapAltWidth));
+                        end
+                    catch
+                    end
                     dg.RowHeight = {'1x'};
                     dg.ColumnWidth = {leftFixed, thk, '1x', thk, mapW, 0, 0, 0};
                     dg.Scrollable = 'on';
