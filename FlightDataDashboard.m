@@ -6843,7 +6843,11 @@
             if isempty(app.ProjectFilePath)
                 app.editDialogOpenProject(); return;
             end
-            app.autoLoadProjectFromFile(app.ProjectFilePath);
+            try
+                app.autoLoadProjectFromFile(app.ProjectFilePath);   % v-fix: load 예외가 refresh 로 전파되지 않도록 격리
+            catch ME
+                try, app.logCaught(ME, 'editDialogAutoLoad:autoLoad'); catch; end
+            end
             try
                 if isempty(app) || ~isvalid(app)
                     return;

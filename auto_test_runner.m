@@ -413,7 +413,7 @@ end
 function tf = i_isDashboardRelatedTimer(t)
     try
         keys = {'FlightDataDashboard', 'applyPendingDialogChanges', 'saveProjectAutosave', ...
-            'FlightPlay', 'FlightDataDashboard:FlightPlay', 'onFlightPlayTimer'};
+            'FlightPlay', 'FlightDataDashboard:FlightPlay', 'FlightDataDashboard_FlightPlay', 'onFlightPlayTimer'};
         tf = i_containsAny(i_timerDescriptor(t), keys);
     catch
         tf = false;
