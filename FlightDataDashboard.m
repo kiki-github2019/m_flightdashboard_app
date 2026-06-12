@@ -554,8 +554,23 @@
                     varargout{1} = app.computeSyncSearchRows(app.Models(fIdx).rawData.(yCol), ...
                         app.Models(fIdx).rawData.(tCol), target);
                 case 'setPendingSyncAnchor'
+                    % optional 3~5번째 인자: Source/Index/Value metadata (UI 경로와 동일 보존)
                     fk = varargin{1}; tv = varargin{2};
-                    if fk == 1, app.PendingFlightSyncAnchor.T1 = tv; else, app.PendingFlightSyncAnchor.T2 = tv; end
+                    src = ''; idx = NaN; val = NaN;
+                    if numel(varargin) >= 3, src = varargin{3}; end
+                    if numel(varargin) >= 4, idx = varargin{4}; end
+                    if numel(varargin) >= 5, val = varargin{5}; end
+                    if fk == 1
+                        app.PendingFlightSyncAnchor.T1 = tv;
+                        app.PendingFlightSyncAnchor.Source1 = src;
+                        app.PendingFlightSyncAnchor.Index1 = idx;
+                        app.PendingFlightSyncAnchor.Value1 = val;
+                    else
+                        app.PendingFlightSyncAnchor.T2 = tv;
+                        app.PendingFlightSyncAnchor.Source2 = src;
+                        app.PendingFlightSyncAnchor.Index2 = idx;
+                        app.PendingFlightSyncAnchor.Value2 = val;
+                    end
                 case 'applyPendingSyncAnchor',        app.syncSearchApply([]);
                 case 'getPendingSyncAnchor',          varargout{1} = app.PendingFlightSyncAnchor;
                 case 'getOpenDialogHandlesForTest',   varargout{1} = app.getOpenDialogHandlesForTest();

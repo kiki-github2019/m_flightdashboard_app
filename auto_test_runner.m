@@ -741,6 +741,18 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if ~(isstruct(pa) && isnan(pa.T1) && isnan(pa.T2))
                 error('AutoTest:PendingSyncAnchorNotCleared', 'PendingFlightSyncAnchor T1/T2 not cleared to NaN');
             end
+        case 'assertPendingSyncAnchorMeta'
+            % anchor metadata(Source/Index/Value) 보존 검증
+            pa = app.testHook('getPendingSyncAnchor');
+            fkM = act.args{1}; srcM = char(act.args{2}); idxM = act.args{3}; valM = act.args{4};
+            if fkM == 1
+                okMeta = strcmp(char(pa.Source1), srcM) && isequaln(pa.Index1, idxM) && isequaln(pa.Value1, valM);
+            else
+                okMeta = strcmp(char(pa.Source2), srcM) && isequaln(pa.Index2, idxM) && isequaln(pa.Value2, valM);
+            end
+            if ~okMeta
+                error('AutoTest:PendingSyncAnchorMetaMismatch', 'anchor metadata mismatch for flight %d', fkM);
+            end
         case 'assertSyncSearchEdgeSafe'
             % synthetic edge: all-NaN / empty / NaN·Inf target → zeros(0,5) 안전 반환 검증
             edges = {{[NaN NaN], [1 2], 10}, {[], [], 5}, {[1 2 3], [1 2 3], NaN}, {[1 2 3], [1 2 3], Inf}};
@@ -2209,6 +2221,8 @@ function cases = i_buildCaseMatrix()
     EDS = @(lbl)               struct('fn','editDialogSaveProject',         'args',{{}},          'label',lbl, 'row',NaN);
     EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
     SSA = @(fk, tv, lbl)       struct('fn','setPendingSyncAnchor',          'args',{{fk, tv}},   'label',lbl, 'row',NaN);
+    SSAM = @(fk, tv, src, ix, vl, lbl) struct('fn','setPendingSyncAnchor',  'args',{{fk, tv, src, ix, vl}}, 'label',lbl, 'row',NaN);
+    SSMETA = @(fk, src, ix, vl, lbl)   struct('fn','assertPendingSyncAnchorMeta', 'args',{{fk, src, ix, vl}}, 'label',lbl, 'row',NaN);
     SSAPP = @(lbl)             struct('fn','applyPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
     SSC = @(fk, target, mode, lbl) struct('fn','computeSyncSearchRows',     'args',{{fk, target, mode}}, 'label',lbl, 'row',NaN);
     SSCLR = @(lbl)             struct('fn','clearPendingSyncAnchor',        'args',{{}},          'label',lbl, 'row',NaN);
@@ -2530,7 +2544,8 @@ function cases = i_buildCaseMatrix()
     % H-SYNC-SEARCH: 동기시간 찾기 anchor → setFlightDataSync 경로
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-01 anchor T1/T2 지정 후 동기 적용', ...
         'sync anchor apply', 'T1/T2 지정 → applyPendingSyncAnchor → SyncState.IsSynced', ...
-        {SSA(1, 0, 'T1=0'), SSA(2, 0, 'T2=0'), SSAPP('apply pending anchor')});
+        {SSAM(1, 0, 'TestCol', 1, 0, 'T1=0 + meta'), SSMETA(1, 'TestCol', 1, 0, 'verify meta f1'), ...
+         SSA(2, 0, 'T2=0'), SSAPP('apply pending anchor')});
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-02 T1 만 지정 후 apply 시 미동기', ...
         'partial anchor guard', 'T1 only → apply → SyncState.IsSynced=false', ...
         {SSA(1, 0, 'T1 only'), SSAPP('apply with T1 only')});
