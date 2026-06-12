@@ -693,6 +693,21 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
               'handleFlightPlaySliderChange','handleFlightPlayFrameInputChange','handleFlightPlayTimeInputChange', ...
               'startFlightPlay','stopFlightPlay'}
             app.testHook(act.fn, act.args{:});
+        case 'flightPlayStartStopCycle'
+            % v5-H: timer 활성 상태에서 getframe 금지 (case97 hang) — start→검증→stop 원자 수행
+            fIdxP = act.args{1};
+            app.testHook('startFlightPlay', fIdxP);
+            pause(1.0); drawnow;
+            stP = app.testHook('getTestState');
+            if ~logical(stP.boards(fIdxP).flightPlay.playActive)
+                error('AutoTest:FlightPlayStartFailed', 'flight %d play timer did not activate', fIdxP);
+            end
+            app.testHook('stopFlightPlay', fIdxP);
+            pause(0.2); drawnow;
+            stP = app.testHook('getTestState');
+            if logical(stP.boards(fIdxP).flightPlay.playActive)
+                error('AutoTest:FlightPlayStopFailed', 'flight %d play timer still active after stop', fIdxP);
+            end
         case 'setFlightDataSync'
             app.testHook('setFlightDataSync', act.args{:});
         case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
@@ -999,6 +1014,12 @@ function exp = i_updateExpectedState(exp, act, beforeState)
         case 'stopFlightPlay'
             fIdx = act.args{1};
             exp.flightPlayActive(fIdx) = false;
+            exp.requireFlightPlay(fIdx) = true;
+        case 'flightPlayStartStopCycle'
+            % v5-H: 원자 start→stop — step 종료 시점은 항상 정지 상태
+            fIdx = act.args{1};
+            exp.flightPlayActive(fIdx) = false;
+            exp.currentIndex(fIdx) = NaN;
             exp.requireFlightPlay(fIdx) = true;
         case 'setFlightDataSync'
             exp.currentIndex(1) = 1;
@@ -1951,6 +1972,17 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
     if ~i_shouldCapture(captureOpts, reason)
         return;
     end
+    % v5-H: 재생 timer 활성 중 getframe 은 R2025a hang 유발 (case97) — 캡처 전 정지
+    try
+        st = app.testHook('getTestState');
+        for fp = 1:2
+            if numel(st.boards) >= fp && isfield(st.boards(fp), 'flightPlay') ...
+                    && logical(st.boards(fp).flightPlay.playActive)
+                app.testHook('stopFlightPlay', fp);
+            end
+        end
+    catch
+    end
     % main figure (suffix 없음 — legacy 파일명 호환)
     mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
     captured = i_captureFigure(app.UIFigure, mainFile, captureOpts);
@@ -2273,8 +2305,7 @@ function cases = i_buildCaseMatrix()
     FPTM = @(fIdx, v, lbl)     struct('fn','handleFlightPlayTimeInputChange', 'args',{{fIdx, v}}, 'label',lbl, 'row',NaN);
     FPR = @(fIdx, lbl)         struct('fn','refreshFlightPlayControlPanel', 'args',{{fIdx}},      'label',lbl, 'row',NaN);
     FPSY = @(t1, t2, en, lbl)  struct('fn','setFlightDataSync',             'args',{{t1, t2, en}}, 'label',lbl, 'row',NaN);
-    FPLAY = @(fIdx, lbl)       struct('fn','startFlightPlay',               'args',{{fIdx}},      'label',lbl, 'row',NaN);
-    FSTOP = @(fIdx, lbl)       struct('fn','stopFlightPlay',                'args',{{fIdx}},      'label',lbl, 'row',NaN);
+    FPCYC = @(fIdx, lbl)       struct('fn','flightPlayStartStopCycle',      'args',{{fIdx}},      'label',lbl, 'row',NaN);
     PR  = @(kind, lbl)         struct('fn','loadProjectFixture',            'args',{{kind}},      'label',lbl, 'row',NaN);
     PRF = @(kind, lbl)         struct('fn','loadProjectFixtureSafeFailure', 'args',{{kind}},      'label',lbl, 'row',NaN);
     PRE = @(kind, lbl)         struct('fn','openProjectFixtureInEditDialog','args',{{kind}},      'label',lbl, 'row',NaN);
@@ -2566,7 +2597,7 @@ function cases = i_buildCaseMatrix()
          FPT(2,'open Flight 2 play panel'), BV(1,'upper board off'), BV(1,'upper board on')});
     cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-09 Play/Pause timer start-stop cleanup', ...
         'play timer', 'timer can start and stop without leaking active state', ...
-        {FPT(1,'open'), FPLAY(1,'start play'), FSTOP(1,'stop play')});
+        {FPT(1,'open'), FPCYC(1,'play start-stop cycle')});
 
     % H-SYNC-SEARCH: 동기시간 찾기 anchor → setFlightDataSync 경로
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-01 anchor T1/T2 지정 후 동기 적용', ...
