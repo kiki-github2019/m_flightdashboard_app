@@ -846,12 +846,16 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, act.args{:});
         % v-runner: EditDialog dispatch (모든 boardOff 상태에서 허용)
         case {'openEditDialog','closeEditDialog','applyPendingDialogChanges', ...
-              'editDialogSaveProject','editDialogSaveProjectAs','editDialogApplyOptionDraft', ...
+              'editDialogSaveProject','editDialogApplyOptionDraft', ...
               'capturePlotConfigAndRefresh','editDialogRebuildPlots','editDialogApplyPlotProps', ...
               'editDialogSyncTabXLimAll','editDialogSyncSelectedPlotXLimAll'}
             app.testHook(act.fn);
         case {'editDialogToggleXAuto','editDialogToggleYAuto','switchEditDialogTab'}
             app.testHook(act.fn, act.args{:});
+        case {'editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
+            % v5-L: 모달 파일 dialog 로 사용자 입력 대기 → 자동 러너 hang 위험. 별도 러너 사용.
+            error('AutoTest:UserInputActionBlocked', ...
+                'action %s waits for user input - run auto_test_runner_under_user instead', act.fn);
         otherwise
             error('AutoTest:UnknownAction', 'Unknown action: %s', act.fn);
     end
