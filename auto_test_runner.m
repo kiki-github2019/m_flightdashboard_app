@@ -596,7 +596,7 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
         try
             beforeState = app.testHook('getTestState');
             i_appendProgressMd(progressFile, caseIdx, j + 1, 'ACTION_START', act.label);
-            i_applyAction(app, act, beforeState);
+            i_applyAction(app, act, beforeState, outDir, caseIdx, j + 1, captureOpts);
             exp = i_updateExpectedState(exp, act, beforeState);
             i_appendProgressMd(progressFile, caseIdx, j + 1, 'ACTION_DONE', act.label);
         catch ME
@@ -649,7 +649,7 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
     end
 end
 
-function i_applyAction(app, act, beforeState)
+function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureOpts)
     switch act.fn
         case 'togglePanel'
             fIdx = act.args{1};
@@ -664,6 +664,11 @@ function i_applyAction(app, act, beforeState)
                 return;
             end
             app.testHook('pushBoardToggleButton', act.args{:});
+        case 'ensureNoBoardOff'
+            activeOff = find(beforeState.BoardOffState, 1);
+            if ~isempty(activeOff)
+                app.testHook('pushBoardToggleButton', activeOff);
+            end
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -704,6 +709,22 @@ function i_applyAction(app, act, beforeState)
             app.testHook('roundTripProjectLayoutState');
         case 'setVideoSync'
             app.testHook('setVideoSync', act.args{:});
+        case 'loadProjectFixture'
+            projectPath = i_createProjectFixture(app, char(act.args{1}), outDir);
+            app.testHook('autoLoadProjectFromFile', projectPath);
+        case 'loadProjectFixtureSafeFailure'
+            projectPath = i_createProjectFixture(app, char(act.args{1}), outDir);
+            app.testHook('loadProjectFile', projectPath);
+        case 'openProjectFixtureInEditDialog'
+            projectPath = i_createProjectFixture(app, char(act.args{1}), outDir);
+            app.testHook('openEditDialog');
+            app.testHook('editDialogOpenProjectFromPath', projectPath);
+        case 'toggleVideoControlDialog'
+            app.testHook('toggleVideoControlDialog', act.args{:});
+        case 'goToFrame'
+            app.testHook('goToFrame', act.args{:});
+        case 'captureRequiredPanel'
+            i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, act.args{:});
         % v-runner: EditDialog dispatch (모든 boardOff 상태에서 허용)
         case {'openEditDialog','closeEditDialog','applyPendingDialogChanges', ...
               'editDialogSaveProject','editDialogSaveProjectAs','editDialogApplyOptionDraft', ...
@@ -743,6 +764,15 @@ function exp = i_expectedFromState(st)
     exp.flightPlayVisible = false(1, 2);
     exp.requireFlightPlay = false(1, 2);
     exp.flightPlayActive = false(1, 2);
+    exp.projectRestoreRequired = false;
+    exp.projectRestoreKind = '';
+    exp.projectSafeFailureRequired = false;
+    exp.projectSafeFailureKind = '';
+    exp.editDialogExpectedVisible = false;
+    exp.requireVideoControl = false(1, 2);
+    exp.videoControlVisible = false(1, 2);
+    exp.videoFrameExpected = NaN(1, 2);
+    exp.minRequiredPanelCaptures = 0;
     exp.savedPresetState = struct();
     for fIdx = 1:2
         b = st.boards(fIdx);
@@ -759,6 +789,9 @@ function exp = i_expectedFromState(st)
         if isfield(b, 'flightPlay')
             exp.flightPlayVisible(fIdx) = logical(b.flightPlay.panelVisible);
             exp.flightPlayActive(fIdx) = logical(b.flightPlay.playActive);
+        end
+        if isfield(st, 'vidControlDialogVisible')
+            exp.videoControlVisible(fIdx) = logical(st.vidControlDialogVisible(fIdx));
         end
     end
 end
@@ -795,6 +828,10 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.summaryVisible(fIdx) = true;
                 exp.sourceColumnsHidden(3 - fIdx) = true;
             end
+        case 'ensureNoBoardOff'
+            exp.boardOff(:) = false;
+            exp.summaryVisible(:) = false;
+            exp.sourceColumnsHidden(:) = false;
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -902,6 +939,37 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.videoSynced(fIdx) = true;
             exp.requireVideoFrameMove(fIdx) = false;
             exp.videoFrameBeforeMove(fIdx) = NaN;
+        case 'loadProjectFixture'
+            exp.projectRestoreRequired = true;
+            exp.projectRestoreKind = char(act.args{1});
+            exp.projectSafeFailureRequired = false;
+        case 'loadProjectFixtureSafeFailure'
+            exp.projectSafeFailureRequired = true;
+            exp.projectSafeFailureKind = char(act.args{1});
+        case 'openProjectFixtureInEditDialog'
+            exp.projectRestoreRequired = true;
+            exp.projectRestoreKind = char(act.args{1});
+            exp.editDialogExpectedVisible = true;
+        case 'toggleVideoControlDialog'
+            fIdx = act.args{1};
+            exp.videoControlVisible(fIdx) = ~exp.videoControlVisible(fIdx);
+            exp.requireVideoControl(fIdx) = true;
+        case 'goToFrame'
+            fIdx = act.args{1};
+            exp.videoFrameExpected(fIdx) = act.args{2};
+        case 'captureRequiredPanel'
+            exp.minRequiredPanelCaptures = exp.minRequiredPanelCaptures + 1;
+            panelName = lower(char(act.args{1}));
+            fIdx = act.args{2};
+            if any(strcmp(panelName, {'flightplay', 'flightplaycontrol'}))
+                exp.flightPlayVisible(fIdx) = true;
+                exp.requireFlightPlay(fIdx) = true;
+            elseif any(strcmp(panelName, {'videocontrol', 'avicontrol'}))
+                exp.videoControlVisible(fIdx) = true;
+                exp.requireVideoControl(fIdx) = true;
+            elseif any(strcmp(panelName, {'editdialog', 'projecteditor'}))
+                exp.editDialogExpectedVisible = true;
+            end
     end
 end
 
@@ -1064,6 +1132,10 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
                     vss.CurrentFrame == exp.videoFrameBeforeMove(fIdx)
                 issues{end + 1} = sprintf('board %d video frame did not move after time change', fIdx);
             end
+            if isfinite(exp.videoFrameExpected(fIdx)) && abs(vss.CurrentFrame - exp.videoFrameExpected(fIdx)) > 1
+                issues{end + 1} = sprintf('board %d video frame expected=%d actual=%d', ...
+                    fIdx, exp.videoFrameExpected(fIdx), vss.CurrentFrame);
+            end
         end
         if st.boards(fIdx).videoSync.IsSynced && st.boards(fIdx).videoSync.TotalFrames > 0 && ...
                 st.boards(fIdx).dataLoaded && isfinite(st.boards(fIdx).currentTime)
@@ -1087,6 +1159,27 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
                 ~i_buttonStateOk(st.toggleButtons(otherIdx), 'off', 'off')
             issues{end + 1} = 'board toggle mutual-exclusion button state mismatch';
         end
+    end
+
+    if exp.projectRestoreRequired
+        issues = i_validateProjectRestore(st, exp, issues);
+    end
+    if exp.projectSafeFailureRequired
+        issues = i_validateProjectSafeFailure(st, exp, issues);
+    end
+    if exp.editDialogExpectedVisible && (~isfield(st, 'EditDialogVisible') || ~st.EditDialogVisible)
+        issues{end + 1} = 'EditDialog not visible after project-open action';
+    end
+    if isfield(st, 'vidControlDialogVisible')
+        for fIdx = 1:2
+            if exp.requireVideoControl(fIdx) && logical(st.vidControlDialogVisible(fIdx)) ~= logical(exp.videoControlVisible(fIdx))
+                issues{end + 1} = sprintf('board %d video control visible expected=%d actual=%d', ...
+                    fIdx, exp.videoControlVisible(fIdx), st.vidControlDialogVisible(fIdx));
+            end
+        end
+    end
+    if exp.minRequiredPanelCaptures > 0 && ~isfield(st, 'RequiredPanelCaptureCount')
+        % Capture existence is asserted synchronously by i_captureRequiredPanel.
     end
 
     ok = isempty(issues);
@@ -1344,6 +1437,326 @@ function tf = i_widthSpecIsZero(widthSpec)
     catch
         tf = false;
     end
+end
+
+function projectPath = i_createProjectFixture(app, kind, outDir)
+    fixtureDir = fullfile(outDir, 'project_fixtures');
+    if ~exist(fixtureDir, 'dir')
+        mkdir(fixtureDir);
+    end
+    safeKind = regexprep(char(kind), '[^\w\-]', '_');
+    projectPath = fullfile(fixtureDir, sprintf('fixture_%03d_%s.fdproj', randi(999), safeKind));
+    if strcmp(kind, 'corrupt_json')
+        i_writeText(projectPath, '{ "Version": 1, "Flights": [');
+        return;
+    end
+    ok = app.testHook('saveProjectFile', projectPath);
+    if ~ok || ~isfile(projectPath)
+        error('AutoTest:ProjectFixtureSaveFailed', 'Could not save project fixture: %s', projectPath);
+    end
+    try
+        st = jsondecode(fileread(projectPath));
+    catch ME
+        error('AutoTest:ProjectFixtureDecodeFailed', '%s', ME.message);
+    end
+    st = i_mutateProjectFixtureStruct(st, kind, fixtureDir);
+    i_writeText(projectPath, jsonencode(st, 'PrettyPrint', true));
+end
+
+function st = i_mutateProjectFixtureStruct(st, kind, fixtureDir)
+    switch char(kind)
+        case 'full'
+        case 'data_only'
+            if isfield(st, 'PlotConfig'), st = rmfield(st, 'PlotConfig'); end
+            if isfield(st, 'UiState') && isfield(st.UiState, 'Layout')
+                st.UiState = rmfield(st.UiState, 'Layout');
+            end
+        case 'data_plot_single'
+            st = i_trimProjectPlotConfig(st, 1, 1);
+        case 'data_plot_multi'
+            st = i_trimProjectPlotConfig(st, 2, 2);
+        case 'manual_axis_limits'
+            st = i_setProjectAxisLimits(st, [0 10], [-1 1]);
+        case 'layout_normal_custom_widths'
+            st = i_setProjectColumnWidths(st, {120, 4, '1x', 4, 220, 4, '2x', 0});
+        case 'layout_lower_board_off'
+            st = i_setProjectBoardOff(st, [false true]);
+        case 'layout_upper_board_off'
+            st = i_setProjectBoardOff(st, [true false]);
+        case 'layout_hsplit_grid'
+            st = i_setProjectPreset(st, 'layout-hsplit');
+        case 'hidden_panel_columns'
+            st = i_setProjectHiddenPanels(st);
+        case 'flight_sync'
+            st.FlightSync = struct('IsSynced', true, 'SyncT1', 0, 'SyncT2', 0);
+        case 'video_sync_with_avi'
+            if isfield(st, 'Flights')
+                for fIdx = 1:min(2, numel(st.Flights))
+                    st.Flights(fIdx).VideoSync = struct('IsSynced', true, ...
+                        'AnchorFrame', 1, 'AnchorTime', 0, 'VideoFps', 30, 'DataFps', 50);
+                end
+            end
+        case 'missing_plotconfig'
+            if isfield(st, 'PlotConfig'), st = rmfield(st, 'PlotConfig'); end
+        case 'missing_layout'
+            if isfield(st, 'UiState') && isfield(st.UiState, 'Layout')
+                st.UiState = rmfield(st.UiState, 'Layout');
+            end
+        case 'missing_projectsettings'
+            if isfield(st, 'ProjectSettings'), st = rmfield(st, 'ProjectSettings'); end
+        case 'flight1_only'
+            if isfield(st, 'Flights') && numel(st.Flights) >= 1
+                st.Flights = st.Flights(1);
+            end
+        case 'invalid_data_path'
+            st = i_setProjectBrokenPath(st, 'DataFile', fixtureDir);
+        case 'invalid_avi_path'
+            st = i_setProjectBrokenPath(st, 'AviFile', fixtureDir);
+        case 'old_schema'
+            if isfield(st, 'Schema'), st.Schema = 'FlightDataDashboardProject'; end
+            if isfield(st, 'Version'), st.Version = 1; end
+        case 'extra_unknown_fields'
+            st.UnknownFutureField = struct('Value', 42, 'Text', 'ignored by restore');
+        otherwise
+            error('AutoTest:UnknownProjectFixtureKind', 'Unknown project fixture kind: %s', char(kind));
+    end
+end
+
+function st = i_trimProjectPlotConfig(st, maxTabs, maxPlots)
+    if ~isfield(st, 'PlotConfig') || isempty(st.PlotConfig), return; end
+    try
+        for fIdx = 1:min(2, numel(st.PlotConfig.Flights))
+            tabs = st.PlotConfig.Flights(fIdx).Tabs;
+            if numel(tabs) > maxTabs, tabs = tabs(1:maxTabs); end
+            for tIdx = 1:numel(tabs)
+                if isfield(tabs(tIdx), 'Plots') && numel(tabs(tIdx).Plots) > maxPlots
+                    tabs(tIdx).Plots = tabs(tIdx).Plots(1:maxPlots);
+                end
+            end
+            st.PlotConfig.Flights(fIdx).Tabs = tabs;
+        end
+    catch
+    end
+end
+
+function st = i_setProjectAxisLimits(st, xlimv, ylimv)
+    if ~isfield(st, 'PlotConfig') || isempty(st.PlotConfig), return; end
+    try
+        for fIdx = 1:min(2, numel(st.PlotConfig.Flights))
+            tabs = st.PlotConfig.Flights(fIdx).Tabs;
+            for tIdx = 1:numel(tabs)
+                for pIdx = 1:numel(tabs(tIdx).Plots)
+                    tabs(tIdx).Plots(pIdx).XLimMode = 'manual';
+                    tabs(tIdx).Plots(pIdx).XLim = xlimv;
+                    tabs(tIdx).Plots(pIdx).YLimMode = 'manual';
+                    tabs(tIdx).Plots(pIdx).YLim = ylimv;
+                end
+            end
+            st.PlotConfig.Flights(fIdx).Tabs = tabs;
+        end
+    catch
+    end
+end
+
+function st = i_setProjectColumnWidths(st, widths)
+    try
+        if ~isfield(st, 'UiState'), st.UiState = struct(); end
+        if ~isfield(st.UiState, 'Layout') || isempty(st.UiState.Layout)
+            st.UiState.Layout = struct();
+        end
+        st.UiState.Layout.ColumnWidth = {widths, widths};
+    catch
+    end
+end
+
+function st = i_setProjectBoardOff(st, offState)
+    try
+        if ~isfield(st, 'UiState'), st.UiState = struct(); end
+        if ~isfield(st.UiState, 'Layout') || isempty(st.UiState.Layout)
+            st.UiState.Layout = struct();
+        end
+        st.UiState.Layout.BoardOffState = logical(offState);
+    catch
+    end
+end
+
+function st = i_setProjectPreset(st, presetName)
+    try
+        if ~isfield(st, 'UiState'), st.UiState = struct(); end
+        if ~isfield(st.UiState, 'Layout') || isempty(st.UiState.Layout)
+            st.UiState.Layout = struct();
+        end
+        st.UiState.Layout.CurrentLayoutPreset = char(presetName);
+    catch
+    end
+end
+
+function st = i_setProjectHiddenPanels(st)
+    try
+        if ~isfield(st, 'UiState'), st.UiState = struct(); end
+        if ~isfield(st.UiState, 'Layout') || isempty(st.UiState.Layout)
+            st.UiState.Layout = struct();
+        end
+        pv = st.UiState.Layout.PanelVisible;
+        for fIdx = 1:min(2, numel(pv))
+            pv(fIdx).info = false;
+            pv(fIdx).dataView = false;
+        end
+        st.UiState.Layout.PanelVisible = pv;
+    catch
+    end
+end
+
+function st = i_setProjectBrokenPath(st, fieldName, fixtureDir)
+    try
+        brokenPath = fullfile(fixtureDir, ['missing_' lower(fieldName) '.dat']);
+        if strcmp(fieldName, 'AviFile')
+            brokenPath = fullfile(fixtureDir, 'missing_video.avi');
+        end
+        if isfield(st, 'Flights') && ~isempty(st.Flights)
+            st.Flights(1).(fieldName) = brokenPath;
+        end
+    catch
+    end
+end
+
+function issues = i_validateProjectRestore(st, exp, issues) %#ok<INUSD>
+    snap = i_projectSnapshot(st);
+    if ~isfield(st, 'ProjectFilePath') || isempty(st.ProjectFilePath) || ~isfile(st.ProjectFilePath)
+        issues{end + 1} = 'project restore did not bind ProjectFilePath to an existing file';
+    end
+    if ~isfield(st, 'ProjectDirty') || st.ProjectDirty
+        issues{end + 1} = 'project restore left ProjectDirty=true for a clean fixture';
+    end
+    if numel(st.boards) < 2 || ~st.boards(1).exists || ~st.boards(2).exists
+        issues{end + 1} = 'project restore lost board test state';
+    end
+    if ~isfield(st, 'BodyRowHeight') || isempty(st.BodyRowHeight)
+        issues{end + 1} = 'project restore did not restore layout row state';
+    end
+    if ~any(snap.dataLoaded) && ~strcmp(exp.projectRestoreKind, 'flight1_only')
+        issues{end + 1} = 'project restore did not leave any flight data loaded';
+    end
+    if strcmp(exp.projectRestoreKind, 'flight_sync') && ...
+            (~isfield(st, 'SyncState') || ~isfield(st.SyncState, 'IsSynced') || ~st.SyncState.IsSynced)
+        issues{end + 1} = 'flight sync fixture did not restore SyncState.IsSynced';
+    end
+    if any(strcmp(exp.projectRestoreKind, {'layout_lower_board_off', 'layout_upper_board_off'})) && ~any(st.BoardOffState)
+        issues{end + 1} = 'board-off fixture did not restore BoardOffState';
+    end
+end
+
+function issues = i_validateProjectSafeFailure(st, exp, issues) %#ok<INUSD>
+    snap = i_projectSnapshot(st);
+    if numel(st.boards) < 2 || ~st.boards(1).exists || ~st.boards(2).exists
+        issues{end + 1} = sprintf('safe-failure fixture %s invalidated board handles', exp.projectSafeFailureKind);
+    end
+    if ~isfield(st, 'BodyRowHeight') || isempty(st.BodyRowHeight)
+        issues{end + 1} = sprintf('safe-failure fixture %s lost layout state', exp.projectSafeFailureKind);
+    end
+    if isempty(snap.boardOff) || numel(snap.rowCounts) < 2
+        issues{end + 1} = sprintf('safe-failure fixture %s produced an incomplete project snapshot', exp.projectSafeFailureKind);
+    end
+end
+
+function snap = i_projectSnapshot(st)
+    snap = struct('dataLoaded', false(1, 2), 'rowCounts', zeros(1, 2), ...
+        'currentIndex', NaN(1, 2), 'boardOff', [], 'panelVisible', [], ...
+        'syncEnabled', false, 'videoSyncEnabled', false(1, 2), ...
+        'plotTabCounts', zeros(1, 2), 'columnWidths', {cell(1, 2)});
+    try
+        snap.boardOff = logical(st.BoardOffState);
+        if isfield(st, 'SyncState') && isfield(st.SyncState, 'IsSynced')
+            snap.syncEnabled = logical(st.SyncState.IsSynced);
+        end
+        for fIdx = 1:min(2, numel(st.boards))
+            b = st.boards(fIdx);
+            snap.dataLoaded(fIdx) = logical(b.dataLoaded);
+            snap.rowCounts(fIdx) = double(b.rawDataRows);
+            snap.currentIndex(fIdx) = double(b.currentIndex);
+            snap.plotTabCounts(fIdx) = double(b.plotTabCount);
+            snap.videoSyncEnabled(fIdx) = logical(b.videoSync.IsSynced);
+            snap.columnWidths{fIdx} = b.dataGridColumnWidth;
+            snap.panelVisible = [snap.panelVisible; ...
+                logical([b.PanelVisible.attitude, b.PanelVisible.mapOnly, b.PanelVisible.altOnly, ...
+                b.PanelVisible.info, b.PanelVisible.dataView, b.PanelVisible.video])]; %#ok<AGROW>
+        end
+    catch
+    end
+end
+
+function i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, panelName, fIdx)
+    if nargin < 8 || isempty(fIdx), fIdx = 1; end
+    label = regexprep(char(panelName), '[^\w\-]', '_');
+    file = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, label));
+    target = i_findPanelCaptureTarget(app, char(panelName), fIdx);
+    if isempty(target) || ~isvalid(target)
+        error('AutoTest:PanelCaptureTargetMissing', 'Panel capture target missing: %s', char(panelName));
+    end
+    try
+        exportapp(target, file);
+    catch
+        frame = getframe(target);
+        img = frame.cdata;
+        if captureOpts.scale < 1
+            img = i_resizeImageNearest(img, captureOpts.scale);
+        end
+        imwrite(img, file);
+    end
+    info = dir(file);
+    if isempty(info) || info(1).bytes <= 0
+        error('AutoTest:PanelCaptureEmpty', 'Panel capture file is empty: %s', file);
+    end
+end
+
+function target = i_findPanelCaptureTarget(app, panelName, fIdx)
+    target = [];
+    switch lower(char(panelName))
+        case {'main', 'dashboard'}
+            target = app.UIFigure;
+        case {'editdialog', 'projecteditor'}
+            app.testHook('openEditDialog');
+            target = app.EditDialog;
+        case {'videocontrol', 'avicontrol'}
+            target = app.UI(fIdx).vidControlDialog;
+            if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
+                app.testHook('toggleVideoControlDialog', fIdx);
+                target = app.UI(fIdx).vidControlDialog;
+            end
+        case {'videoviewer', 'videoplayer'}
+            target = app.UI(fIdx).vidViewerDialog;
+        case {'flightplay', 'flightplaycontrol'}
+            try
+                target = app.UI(fIdx).flightPlayControlPanel;
+            catch
+                target = [];
+            end
+            if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
+                app.testHook('toggleFlightPlayControlPanel', fIdx);
+            end
+            target = app.UIFigure;
+        otherwise
+            error('AutoTest:UnknownPanelCaptureTarget', 'Unknown panel capture target: %s', char(panelName));
+    end
+end
+
+function tf = i_isHandleVisible(h)
+    tf = false;
+    try
+        tf = ~isempty(h) && isvalid(h) && strcmpi(char(h.Visible), 'on');
+    catch
+        tf = false;
+    end
+end
+
+function i_writeText(filePath, txt)
+    fid = fopen(filePath, 'w', 'n', 'UTF-8');
+    if fid < 0
+        error('AutoTest:WriteFailed', 'Could not write %s', filePath);
+    end
+    cleaner = onCleanup(@() fclose(fid));
+    fwrite(fid, txt, 'char');
+    clear cleaner;
 end
 
 % =========================================================================
@@ -1613,6 +2026,7 @@ function cases = i_buildCaseMatrix()
     % action builders
     P   = @(fIdx, name, lbl)   struct('fn','togglePanel',                 'args',{{fIdx, name}}, 'label',lbl, 'row',NaN);
     BV  = @(fIdx, lbl)         struct('fn','toggleBoardVisibility',       'args',{{fIdx}},       'label',lbl, 'row',NaN);
+    BVR = @(lbl)               struct('fn','ensureNoBoardOff',            'args',{{}},           'label',lbl, 'row',NaN);
     BOA = @(offIdx, lbl)       struct('fn','boardOffAddPlotTab',          'args',{{offIdx}},     'label',lbl, 'row',NaN);
     BOC = @(offIdx, lbl)       struct('fn','boardOffClearCurrentTab',     'args',{{offIdx}},     'label',lbl, 'row',NaN);
     BOP = @(offIdx, row, lbl)  struct('fn','boardOffPlotSelectedVariable','args',{{offIdx}},     'label',lbl, 'row',row);
@@ -1649,6 +2063,12 @@ function cases = i_buildCaseMatrix()
     FPSY = @(t1, t2, en, lbl)  struct('fn','setFlightDataSync',             'args',{{t1, t2, en}}, 'label',lbl, 'row',NaN);
     FPLAY = @(fIdx, lbl)       struct('fn','startFlightPlay',               'args',{{fIdx}},      'label',lbl, 'row',NaN);
     FSTOP = @(fIdx, lbl)       struct('fn','stopFlightPlay',                'args',{{fIdx}},      'label',lbl, 'row',NaN);
+    PR  = @(kind, lbl)         struct('fn','loadProjectFixture',            'args',{{kind}},      'label',lbl, 'row',NaN);
+    PRF = @(kind, lbl)         struct('fn','loadProjectFixtureSafeFailure', 'args',{{kind}},      'label',lbl, 'row',NaN);
+    PRE = @(kind, lbl)         struct('fn','openProjectFixtureInEditDialog','args',{{kind}},      'label',lbl, 'row',NaN);
+    VCD = @(fIdx, lbl)         struct('fn','toggleVideoControlDialog',       'args',{{fIdx}},     'label',lbl, 'row',NaN);
+    GTF = @(fIdx, fr, lbl)     struct('fn','goToFrame',                     'args',{{fIdx, fr}}, 'label',lbl, 'row',NaN);
+    CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
         'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false);
@@ -1936,9 +2356,76 @@ function cases = i_buildCaseMatrix()
         'play timer', 'timer can start and stop without leaking active state', ...
         {FPT(1,'open'), FPLAY(1,'start play'), FSTOP(1,'stop play')});
 
+    % I-PROJECT-RESTORE: project fixture restore and safe failure coverage.
+    projectKinds = {'full', 'data_only', 'data_plot_single', 'data_plot_multi', ...
+        'manual_axis_limits', 'layout_normal_custom_widths', 'layout_lower_board_off', ...
+        'layout_upper_board_off', 'layout_hsplit_grid', 'hidden_panel_columns', ...
+        'flight_sync', 'video_sync_with_avi', 'missing_plotconfig', 'missing_layout', ...
+        'missing_projectsettings', 'flight1_only', 'invalid_data_path', ...
+        'invalid_avi_path', 'corrupt_json', 'old_schema', 'extra_unknown_fields'};
+    for pIdx = 1:numel(projectKinds)
+        kind = projectKinds{pIdx};
+        title = sprintf('I-PROJECT-RESTORE-%02d %s fixture', pIdx, kind);
+        if any(strcmp(kind, {'invalid_data_path', 'invalid_avi_path', 'corrupt_json'}))
+            acts = {PRF(kind, ['safe load failure: ' kind])};
+        elseif strcmp(kind, 'layout_lower_board_off')
+            acts = {BVR('reset board-off'), BV(2, 'lower board off'), PR(kind, ['restore: ' kind])};
+        elseif strcmp(kind, 'layout_upper_board_off')
+            acts = {BVR('reset board-off'), BV(1, 'upper board off'), PR(kind, ['restore: ' kind])};
+        elseif strcmp(kind, 'hidden_panel_columns')
+            acts = {BVR('reset board-off'), P(1, 'info', 'hide info'), P(1, 'dataView', 'hide plot data'), PR(kind, ['restore: ' kind])};
+        else
+            acts = {BVR('reset board-off'), PR(kind, ['restore: ' kind])};
+        end
+        cases(end + 1) = mk('I-PROJECT-RESTORE', title, 'project restore', ...
+            ['fixture restores concrete state: ' kind], acts);
+    end
+    cases(end + 1) = mk('I-PROJECT-RESTORE','I-PROJECT-RESTORE-22 edit dialog project open path', ...
+        'project restore through edit dialog', 'EditDialog stays visible and project path is restored', ...
+        {BVR('reset board-off'), PRE('full', 'open fixture through edit dialog')});
+
+    % J-PANEL-SYNC: cross-panel state propagation for main, edit, video, and flight-play controls.
+    for jIdx = 1:10
+        fIdx = 1 + mod(jIdx - 1, 2);
+        cases(end + 1) = mk('J-PANEL-SYNC', sprintf('J-PANEL-SYNC-%02d flight play row sync F%d', jIdx, fIdx), ...
+            'flight play sync', 'frame, slider and main time state stay aligned', ...
+            {BVR('reset board-off'), FPT(fIdx, 'open flight play'), FPM(fIdx, 1 + mod(jIdx, 4), 'move data row'), FPR(fIdx, 'refresh play UI')});
+    end
+    for jIdx = 11:20
+        fIdx = 1 + mod(jIdx - 1, 2);
+        tabNames = {'Project', 'Files', 'Sync', 'Options', 'Plot Manager', 'Export'};
+        tabName = tabNames{1 + mod(jIdx - 11, numel(tabNames))};
+        cases(end + 1) = mk('J-PANEL-SYNC', sprintf('J-PANEL-SYNC-%02d edit dialog %s sync', jIdx, tabName), ...
+            'edit dialog sync', 'dialog tab switch preserves dashboard state', ...
+            {BVR('reset board-off'), OED('open edit dialog'), SET(tabName, ['switch to ' tabName]), ATC(fIdx, 1 + mod(jIdx, 8), 'main time change'), APD('apply pending')});
+    end
+    for jIdx = 21:30
+        fIdx = 1 + mod(jIdx - 1, 2);
+        targetFrame = 1 + mod(jIdx * 3, 20);
+        cases(end + 1) = mk('J-PANEL-SYNC', sprintf('J-PANEL-SYNC-%02d video control sync F%d', jIdx, fIdx), ...
+            'video control sync', 'video control frame and dashboard video state stay aligned', ...
+            {BVR('reset board-off'), SVS(fIdx, 1, 0, 30, 50, 'enable video sync'), VCD(fIdx, 'open video control'), GTF(fIdx, targetFrame, 'go to frame'), VCD(fIdx, 'close video control')});
+    end
+
+    % K-PANEL-CAPTURE: mandatory external/control-panel capture coverage.
+    captureSpecs = { ...
+        'main', 1; 'editDialog', 1; 'videoControl', 1; 'videoViewer', 1; ...
+        'flightPlay', 1; 'main', 2; 'editDialog', 2; 'videoControl', 2; ...
+        'videoViewer', 2; 'flightPlay', 2; 'main', 1; 'editDialog', 1; ...
+        'videoControl', 1; 'videoViewer', 1; 'flightPlay', 1; 'main', 2};
+    for kIdx = 1:size(captureSpecs, 1)
+        panelName = captureSpecs{kIdx, 1};
+        fIdx = captureSpecs{kIdx, 2};
+        cases(end + 1) = mk('K-PANEL-CAPTURE', sprintf('K-PANEL-CAPTURE-%02d %s F%d', kIdx, panelName, fIdx), ...
+            'panel capture', 'required panel capture file exists and is non-empty', ...
+            {BVR('reset board-off'), CAP(panelName, fIdx, ['capture ' panelName])});
+    end
+
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)
         if strncmp(cases(k).title, 'E04', 3)
+            cases(k).requireAvi = true;
+        elseif contains(cases(k).title, 'video control') || contains(cases(k).title, 'video_sync_with_avi')
             cases(k).requireAvi = true;
         end
     end

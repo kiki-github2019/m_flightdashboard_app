@@ -533,6 +533,21 @@
                 case 'stopFlightPlay',                app.stopFlightPlay(varargin{:});
                 case 'setFlightDataSync',             app.setFlightDataSync(varargin{:});
                 case 'setVideoSync',                  app.setVideoSync(varargin{:});
+                case 'saveProjectFile',               varargout{1} = app.saveProjectFile(varargin{:});
+                case 'loadProjectFile',               varargout{1} = app.loadProjectFile(varargin{:});
+                case 'autoLoadProjectFromFile',       app.autoLoadProjectFromFile(varargin{:});
+                case 'editDialogOpenProjectFromPath'
+                    app.autoLoadProjectFromFile(varargin{1});
+                    try
+                        if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
+                            app.refreshEditDialog();
+                        end
+                    catch ME
+                        app.logCaught(ME, 'test:editDialogOpenProjectFromPath');
+                    end
+                case 'toggleVideoControlDialog',      app.toggleVideoControlDialog(varargin{:});
+                case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
+                case 'goToFrame',                     app.goToFrame(varargin{:});
                 case 'loadAviFileFromPath',           varargout{1} = app.loadAviFileFromPath(varargin{:});
                 case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
                 case 'addPlotTab',                    app.addPlotTab(varargin{:});
@@ -592,6 +607,32 @@
             state.CurrentLayoutPreset = char(app.CurrentLayoutPreset);
             state.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
             state.BodyRowSplitRatio = double(app.BodyRowSplitRatio);
+            state.ProjectFilePath = char(app.ProjectFilePath);
+            state.ProjectDirty = logical(app.ProjectDirty);
+            state.ProjectLastSaveText = char(app.ProjectLastSaveText);
+            state.SyncState = app.SyncState;
+            state.EditDialogVisible = false;
+            try
+                state.EditDialogVisible = ~isempty(app.EditDialog) && isvalid(app.EditDialog) && app.isUiVisible(app.EditDialog);
+            catch ME
+                app.logCaught(ME, 'test:get-edit-dialog-visible');
+            end
+            state.vidViewerDialogVisible = false(1, 2);
+            state.vidControlDialogVisible = false(1, 2);
+            try
+                for vIdx = 1:min(2, numel(app.UI))
+                    if isfield(app.UI(vIdx), 'vidViewerDialog') && ~isempty(app.UI(vIdx).vidViewerDialog) ...
+                            && isvalid(app.UI(vIdx).vidViewerDialog)
+                        state.vidViewerDialogVisible(vIdx) = app.isUiVisible(app.UI(vIdx).vidViewerDialog);
+                    end
+                    if isfield(app.UI(vIdx), 'vidControlDialog') && ~isempty(app.UI(vIdx).vidControlDialog) ...
+                            && isvalid(app.UI(vIdx).vidControlDialog)
+                        state.vidControlDialogVisible(vIdx) = app.isUiVisible(app.UI(vIdx).vidControlDialog);
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'test:get-video-dialog-visible');
+            end
             state.UserLayoutPresetCount = numel(app.UserLayoutPresets);
             state.UserLayoutPresetNames = {};
             if ~isempty(app.UserLayoutPresets) && isstruct(app.UserLayoutPresets)
