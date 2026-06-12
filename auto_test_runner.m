@@ -1781,8 +1781,15 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
                 target = app.UI(fIdx).vidControlDialog;
             end
         case {'videoviewer', 'videoplayer'}
+            % v-fix12: 명시적 capture 시에만 viewer open. 없으면 hook 시도 후 미가용 시 main fallback.
             target = app.UI(fIdx).vidViewerDialog;
+            if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
+                try, app.testHook('setVideoViewerVisible', fIdx, true, false); catch; end
+                target = app.UI(fIdx).vidViewerDialog;
+            end
+            if isempty(target) || ~isvalid(target), target = app.UIFigure; end
         case {'flightplay', 'flightplaycontrol'}
+            % v-fix11: panel 단독 캡처 (main figure 덮어쓰기 제거)
             try
                 target = app.UI(fIdx).flightPlayControlPanel;
             catch
@@ -1790,8 +1797,9 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
             end
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 app.testHook('toggleFlightPlayControlPanel', fIdx);
+                try, target = app.UI(fIdx).flightPlayControlPanel; catch; end
             end
-            target = app.UIFigure;
+            if isempty(target) || ~isvalid(target), target = app.UIFigure; end
         otherwise
             error('AutoTest:UnknownPanelCaptureTarget', 'Unknown panel capture target: %s', char(panelName));
     end
@@ -2546,6 +2554,8 @@ function cases = i_buildCaseMatrix()
             cases(k).requireAvi = true;
         elseif contains(cases(k).title, 'video control') || contains(cases(k).title, 'video_sync_with_avi')
             cases(k).requireAvi = true;
+        elseif contains(lower(cases(k).title), 'videoviewer') || contains(lower(cases(k).title), 'video viewer')
+            cases(k).requireAvi = true;   % v-fix12: video viewer capture 는 AVI 필요
         end
     end
 end

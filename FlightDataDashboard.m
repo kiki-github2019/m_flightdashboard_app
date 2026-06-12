@@ -589,6 +589,7 @@
                         try, app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad'); catch; end
                     end
                     app.safeRefreshEditDialog('test:editDialogOpenProjectFromPath:refresh');
+                case 'setVideoViewerVisible',         app.setVideoViewerVisible(varargin{:});
                 case 'toggleVideoControlDialog',      app.toggleVideoControlDialog(varargin{:});
                 case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
                 case 'goToFrame',                     app.goToFrame(varargin{:});
