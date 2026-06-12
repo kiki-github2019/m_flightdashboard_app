@@ -562,7 +562,6 @@
                 case 'getSelectedInfoValueForTest'
                     % v-fix6: 선택 항목의 현재 index 실제 값 (exact target 확보)
                     fk = varargin{1};
-                    val = NaN;
                     try
                         yCol = app.Models(fk).displayMeta(app.Models(fk).selectedRow).header;
                         ix = max(1, min(height(app.Models(fk).rawData), round(app.Models(fk).currentIndex)));
@@ -600,7 +599,7 @@
                     try
                         app.autoLoadProjectFromFile(varargin{1});
                     catch ME
-                        try, app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad'); catch; end
+                        try app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad'); catch; end
                     end
                     app.safeRefreshEditDialog('test:editDialogOpenProjectFromPath:refresh');
                 case 'setVideoViewerVisible',         app.setVideoViewerVisible(varargin{:});
@@ -2531,7 +2530,6 @@
             % - DebugMode일 때만 콘솔 출력 (silent 태그는 콘솔 출력 생략)
             % - ring buffer는 항상 유지 → app.dumpErrorLog()로 사후 조사
             % [Medium] delete 진행 중에는 콘솔만 억제하고, ring buffer 태그는 보존한다.
-            appValid = false;
             try
                 appValid = ~isempty(app) && isvalid(app);
             catch
@@ -2541,7 +2539,6 @@
                 return;
             end
 
-            suppressConsole = false;
             try
                 suppressConsole = logical(app.IsDeleting);
             catch
@@ -2587,7 +2584,6 @@
                 % ring buffer 자체가 실패해도 절대 throw 안 함
             end
 
-            debugMode = false;
             try
                 debugMode = logical(app.DebugMode);
             catch
@@ -4354,8 +4350,6 @@
             targetLayout.RowHeight{end+1} = app.PLOT_ROW_HEIGHT;
             newRowIdx = numel(targetLayout.RowHeight);
 
-            tTheme = app.getLightTheme();   % v-style
-            p = uipanel(targetLayout, 'BorderType', 'line', 'BackgroundColor', [1 1 1]);
             % [Manual visual test] H-plot card/axis readability colors.
             % MATLAB uiaxes does not provide a separate "Y-axis-only background"
             % property.  Therefore, set the surrounding plot card/grid background
@@ -5888,7 +5882,6 @@
                     app.logCaught(ME, 'auto-load');
                 catch
                 end
-                appValid = false;
                 try
                     appValid = ~isempty(app) && isvalid(app);
                 catch
@@ -6883,7 +6876,7 @@
             try
                 app.autoLoadProjectFromFile(fullfile(pn, fn));   % v-fixE: load 예외 격리
             catch ME
-                try, app.logCaught(ME, 'editDialogOpenProject:autoLoad'); catch; end
+                try app.logCaught(ME, 'editDialogOpenProject:autoLoad'); catch; end
             end
             app.safeRefreshEditDialog('editDialogOpenProject:refresh');
         end
@@ -6895,7 +6888,7 @@
             try
                 app.autoLoadProjectFromFile(app.ProjectFilePath);   % v-fix: load 예외가 refresh 로 전파되지 않도록 격리
             catch ME
-                try, app.logCaught(ME, 'editDialogAutoLoad:autoLoad'); catch; end
+                try app.logCaught(ME, 'editDialogAutoLoad:autoLoad'); catch; end
             end
             app.safeRefreshEditDialog('editDialogAutoLoad:refresh');
         end
@@ -6916,7 +6909,7 @@
             try
                 app.refreshEditDialog();
             catch ME
-                try, app.logCaught(ME, tag); catch; end
+                try app.logCaught(ME, tag); catch; end
             end
         end
 
@@ -8517,13 +8510,11 @@
                 [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
                 if ~okIdx, return; end
                 if ~app.isFlightPlayUiReady(fIdx), return; end
-                panelVisible = false;
                 try
                     panelVisible = app.isUiVisible(app.UI(fIdx).flightPlayControlPanel);
                 catch
                     panelVisible = false;
                 end
-                playing = false;
                 try
                     playing = fIdx <= numel(app.FlightPlayActive) && logical(app.FlightPlayActive(fIdx));
                 catch
@@ -8567,7 +8558,7 @@
                 try
                     app.stopFlightPlay(fIdx);
                 catch ME_stop
-                    try, app.logCaught(ME_stop, 'flight-play:collapse-stop'); catch; end
+                    try app.logCaught(ME_stop, 'flight-play:collapse-stop'); catch; end
                 end
                 if isfield(app.UI(fIdx), 'flightPlayControlPanel') && ~isempty(app.UI(fIdx).flightPlayControlPanel) ...
                         && isvalid(app.UI(fIdx).flightPlayControlPanel)
@@ -8683,7 +8674,7 @@
                         app.FlightPlayActive(fIdx) = false;
                         if numel(app.FlightPlayTimer) >= fIdx && ~isempty(app.FlightPlayTimer{fIdx}) ...
                                 && isvalid(app.FlightPlayTimer{fIdx})
-                            try, stop(app.FlightPlayTimer{fIdx}); catch; end
+                            try stop(app.FlightPlayTimer{fIdx}); catch; end
                             delete(app.FlightPlayTimer{fIdx});
                         end
                         app.FlightPlayTimer{fIdx} = [];
@@ -8906,7 +8897,7 @@
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
-                                try, h.Layout.Row = 2; h.Layout.Column = cols(b); catch; end
+                                try h.Layout.Row = 2; h.Layout.Column = cols(b); catch; end
                             end
                         end
                         if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
@@ -8920,7 +8911,7 @@
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
-                                try, h.Layout.Row = 1; h.Layout.Column = cols(b); catch; end
+                                try h.Layout.Row = 1; h.Layout.Column = cols(b); catch; end
                             end
                         end
                         if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
@@ -13494,7 +13485,7 @@
             dlg = uifigure('Name', sprintf('동기시간 찾기 - Flight Data %d (%s)', fIdx, yCol), ...
                 'Position', [200 200 560 460], 'Color', t.dialogBg);
             app.SyncSearchDialogs{fIdx} = dlg;
-            try, dlg.AutoResizeChildren = 'off'; catch; end
+            try dlg.AutoResizeChildren = 'off'; catch; end
             gl = uigridlayout(dlg, [4 4], 'RowHeight', {32, '1x', 32, 36}, ...
                 'ColumnWidth', {'1x', 90, 90, 90}, 'Padding', [8 8 8 8], ...
                 'RowSpacing', 6, 'ColumnSpacing', 6, 'BackgroundColor', t.dialogBg);
@@ -13546,8 +13537,8 @@
                 cand = {};
                 if ~isempty(app.EditDialog), cand(end+1,:) = {app.EditDialog, 'editdialog'}; end
                 for fk = 1:numel(app.UI)
-                    try, cand(end+1,:) = {app.UI(fk).vidControlDialog, sprintf('vidctrl_f%d', fk)}; catch; end %#ok<AGROW>
-                    try, cand(end+1,:) = {app.UI(fk).vidViewerDialog,  sprintf('vidview_f%d', fk)}; catch; end %#ok<AGROW>
+                    try cand(end+1,:) = {app.UI(fk).vidControlDialog, sprintf('vidctrl_f%d', fk)}; catch; end %#ok<AGROW>
+                    try cand(end+1,:) = {app.UI(fk).vidViewerDialog,  sprintf('vidview_f%d', fk)}; catch; end %#ok<AGROW>
                 end
                 for fk = 1:numel(app.SyncSearchDialogs)
                     cand(end+1,:) = {app.SyncSearchDialogs{fk}, sprintf('syncsearch_f%d', fk)}; %#ok<AGROW>
@@ -13593,7 +13584,7 @@
             rows = [rk, double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
         end
 
-        function r = syncSearchClosestDisplayRow(~, rows, target)
+        function r = syncSearchClosestDisplayRow(~, rows)
             % nearest 결과에서 |Diff| 최소 표시행 (Rank 기준 selection 용)
             r = 1;
             try
@@ -13614,10 +13605,10 @@
                     infoLbl.Text = '검색 결과 없음 (유효 숫자값 없음).';
                 elseif any(rows(:,4) == target)   % Value 열 = 4
                     infoLbl.Text = sprintf('일치 %d개 표시.', size(rows,1));
-                    try, resTable.Selection = [1 1]; catch; end
+                    try resTable.Selection = [1 1]; catch; end
                 else
                     infoLbl.Text = sprintf('일치값 없음 → 가장 가까운 %d개 표시.', size(rows,1));
-                    try, resTable.Selection = [app.syncSearchClosestDisplayRow(rows, target), 1]; catch; end
+                    try resTable.Selection = [app.syncSearchClosestDisplayRow(rows), 1]; catch; end
                 end
             catch ME
                 app.logCaught(ME, 'sync-search:run');
