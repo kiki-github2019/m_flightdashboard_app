@@ -1437,8 +1437,14 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
                 issues{end + 1} = sprintf('board %d %s PanelVisible expected=%d actual=%d', ...
                     fIdx, nm, exp.panel(fIdx).(nm), st.boards(fIdx).PanelVisible.(nm));
             end
-            if any(strcmp(nm, {'attitude', 'map', 'video'})) && ...
-                    ~st.BoardOffState(fIdx) && st.boards(fIdx).sideHandleVisible.(nm) ~= st.boards(fIdx).PanelVisible.(nm)
+            % v-fixB2: video 는 외부 viewer dialog 로 표시되는데, board-off 중에는
+            % v5-A 정책이 모든 video viewer 를 강제 숨김 → source 보드의 video
+            % handle≠PanelVisible 은 정상. video handle 검사는 board-off 없을 때만.
+            checkHandle = any(strcmp(nm, {'attitude', 'map', 'video'})) && ~st.BoardOffState(fIdx);
+            if strcmp(nm, 'video') && ~isempty(activeOff)
+                checkHandle = false;
+            end
+            if checkHandle && st.boards(fIdx).sideHandleVisible.(nm) ~= st.boards(fIdx).PanelVisible.(nm)
                 issues{end + 1} = sprintf('board %d %s handle visibility mismatch', fIdx, nm);
             end
         end
