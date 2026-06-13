@@ -2090,6 +2090,9 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         if captureOpts.scale < 1
             img = i_resizeImageNearest(img, captureOpts.scale);
         end
+        % v-noteL6: dedup 는 capture 비용 (getframe + scale + signature) 자체를
+        %           줄이지 않는다 — 디스크 저장(imwrite) 과 markdown 인라인을
+        %           skip 하여 결과물 크기/리뷰 노이즈만 절약한다.
         if isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
             sig = i_captureImageSignature(img);
             if i_captureDuplicate(i_captureTargetKey(figh), sig, false)
