@@ -546,7 +546,7 @@ function app = i_setupFreshApp(needAvi)
     %          (delete + closeAppDialogs + aggressiveCleanup) → 다음 case 의
     %          i_aggressiveCleanup 사이 race / 잔여 figure 누수 차단.
     try
-        dataFiles = {1, 'flight_data1.dat'; 2, 'flight_data2.dat'};
+        dataFiles = i_defaultDataFiles();
         for k = 1:size(dataFiles, 1)
             fIdx  = dataFiles{k, 1};
             fpath = dataFiles{k, 2};
@@ -565,7 +565,7 @@ function app = i_setupFreshApp(needAvi)
         end
 
         if needAvi
-            aviFiles = {1, 'flight_data1_fps35.avi'; 2, 'flight_data2_fps7.avi'};
+            aviFiles = i_defaultAviFiles();
             for k = 1:size(aviFiles, 1)
                 fIdx  = aviFiles{k, 1};
                 fpath = aviFiles{k, 2};
@@ -595,6 +595,18 @@ function app = i_setupFreshApp(needAvi)
         app = [];
         rethrow(setupErr);
     end
+end
+
+function dataFiles = i_defaultDataFiles()
+    % v-fixL5: i_setupFreshApp 가 사용하는 기본 flight data 경로 — 단일 변경점.
+    dataFiles = {1, 'flight_data1.dat'; ...
+                 2, 'flight_data2.dat'};
+end
+
+function aviFiles = i_defaultAviFiles()
+    % v-fixL5: i_setupFreshApp 가 needAvi 시 로드하는 기본 AVI 경로 — 단일 변경점.
+    aviFiles  = {1, 'flight_data1_fps35.avi'; ...
+                 2, 'flight_data2_fps7.avi'};
 end
 
 % =========================================================================
