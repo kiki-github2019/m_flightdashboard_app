@@ -603,6 +603,38 @@ function dataFiles = i_defaultDataFiles()
                  2, 'flight_data2.dat'};
 end
 
+function ok = i_waitUntil(predicate, timeoutS, pollS)
+    % v-fixL6: 고정 pause 대체 — predicate 가 true 가 될 때까지 폴링 + drawnow.
+    %          timeout 시 false 반환. predicate 내부 throw 는 한 라운드 skip 으로 처리.
+    if nargin < 2 || isempty(timeoutS), timeoutS = 3.0; end
+    if nargin < 3 || isempty(pollS), pollS = 0.05; end
+    t0 = tic;
+    ok = false;
+    while toc(t0) < timeoutS
+        try
+            if predicate()
+                ok = true;
+                return;
+            end
+        catch
+        end
+        pause(pollS);
+        drawnow;
+    end
+end
+
+function ok = i_flightPlayProgressed(app, fIdxP, idx0)
+    st = app.testHook('getTestState');
+    ok = logical(st.boards(fIdxP).flightPlay.playActive) ...
+        && double(st.boards(fIdxP).currentIndex) > idx0;
+end
+
+function ok = i_flightPlayStopped(app, fIdxP)
+    st = app.testHook('getTestState');
+    ok = ~logical(st.boards(fIdxP).flightPlay.playActive) ...
+        && ~logical(app.testHook('isFlightPlayTimerAlive', fIdxP));
+end
+
 function aviFiles = i_defaultAviFiles()
     % v-fixL5: i_setupFreshApp 가 needAvi 시 로드하는 기본 AVI 경로 — 단일 변경점.
     aviFiles  = {1, 'flight_data1_fps35.avi'; ...
@@ -781,27 +813,30 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             app.testHook(act.fn, act.args{:});
         case 'flightPlayStartStopCycle'
             % v5-H: timer 활성 상태에서 getframe 금지 (case97 hang) — start→검증→stop 원자 수행
+            % v-fixL6: 고정 pause 대신 폴링 + 타임아웃 — 조건 만족 즉시 진행.
             fIdxP = act.args{1};
             idx0 = double(beforeState.boards(fIdxP).currentIndex);
             app.testHook('startFlightPlay', fIdxP);
-            pause(1.0); drawnow;
-            stP = app.testHook('getTestState');
-            if ~logical(stP.boards(fIdxP).flightPlay.playActive)
-                error('AutoTest:FlightPlayStartFailed', 'flight %d play timer did not activate', fIdxP);
-            end
-            % v5-J: 실제 row 진행 검증 (active 플래그만으로는 false PASS 가능)
-            if ~(double(stP.boards(fIdxP).currentIndex) > idx0)
+            okStart = i_waitUntil(@() i_flightPlayProgressed(app, fIdxP, idx0), 3.0, 0.05);
+            if ~okStart
+                stP = app.testHook('getTestState');
+                if ~logical(stP.boards(fIdxP).flightPlay.playActive)
+                    error('AutoTest:FlightPlayStartFailed', 'flight %d play timer did not activate', fIdxP);
+                end
+                % v5-J: 실제 row 진행 검증 (active 플래그만으로는 false PASS 가능)
                 error('AutoTest:FlightPlayDidNotAdvance', 'flight %d currentIndex did not advance during play', fIdxP);
             end
             app.testHook('stopFlightPlay', fIdxP);
-            pause(0.2); drawnow;
-            stP = app.testHook('getTestState');
-            if logical(stP.boards(fIdxP).flightPlay.playActive)
-                error('AutoTest:FlightPlayStopFailed', 'flight %d play timer still active after stop', fIdxP);
-            end
-            % v5-J: timer handle Running 상태까지 직접 검증
-            if logical(app.testHook('isFlightPlayTimerAlive', fIdxP))
-                error('AutoTest:FlightPlayTimerNotCleaned', 'flight %d play timer still running after stop', fIdxP);
+            okStop = i_waitUntil(@() i_flightPlayStopped(app, fIdxP), 2.0, 0.05);
+            if ~okStop
+                stP = app.testHook('getTestState');
+                if logical(stP.boards(fIdxP).flightPlay.playActive)
+                    error('AutoTest:FlightPlayStopFailed', 'flight %d play timer still active after stop', fIdxP);
+                end
+                % v5-J: timer handle Running 상태까지 직접 검증
+                if logical(app.testHook('isFlightPlayTimerAlive', fIdxP))
+                    error('AutoTest:FlightPlayTimerNotCleaned', 'flight %d play timer still running after stop', fIdxP);
+                end
             end
         case 'setFlightDataSync'
             app.testHook('setFlightDataSync', act.args{:});
