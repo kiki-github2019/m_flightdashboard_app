@@ -2206,7 +2206,10 @@ end
 function key = i_captureTargetKey(figh)
     % v-fixM: class + Tag + Name 조합 — Name/Title 미설정 dialog 들이
     %         모두 'figure' 키로 충돌해 서로 dedup 비교 대상이 되던 문제 차단.
-    parts = {'figure', '', ''};
+    % v-fixM4: 핸들 식별자(Number 또는 double 변환) 도 추가 — class+Tag+Name 가
+    %          모두 동일한 두 figure 가 실제로는 다른 핸들이면 dedup map 에서 분리.
+    %          uifigure 등 double() 실패 핸들은 catch → 기존 키로 fallback.
+    parts = {'figure', '', '', ''};
     try
         parts{1} = char(class(figh));
     catch
@@ -2225,7 +2228,16 @@ function key = i_captureTargetKey(figh)
         end
     catch
     end
-    key = sprintf('%s|%s|%s', parts{1}, parts{2}, parts{3});
+    try
+        if isprop(figh, 'Number') && ~isempty(figh.Number)
+            parts{4} = sprintf('n%d', figh.Number);
+        else
+            parts{4} = sprintf('h%g', double(figh));
+        end
+    catch
+        parts{4} = '';
+    end
+    key = sprintf('%s|%s|%s|%s', parts{1}, parts{2}, parts{3}, parts{4});
 end
 
 function sig = i_captureImageSignature(img)
