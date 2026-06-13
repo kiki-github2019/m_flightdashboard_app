@@ -119,15 +119,16 @@ function auto_test_runner(varargin)
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', '', ...
                             'captureError', ''), nCases, 1);
-    for i = 1:nCases
-        results(i).id    = i;
-        results(i).group = cases(i).group;
-        results(i).title = cases(i).title;
+    % v-fixL1: 'i' (imaginary unit shadowing) 대신 의미 있는 이름 사용.
+    for k = 1:nCases
+        results(k).id    = k;
+        results(k).group = cases(k).group;
+        results(k).title = cases(k).title;
     end
 
     for ii = 1:numel(caseOrder)
-        i = caseOrder(ii);
-        tc = cases(i);
+        caseIdx = caseOrder(ii);
+        tc = cases(caseIdx);
         % v-chunk: 새 chunk 시작 시 progress/index 파일 신규 생성
         if ii == chunkStartIdx
             chunkEndIdx = min(ii + chunkSize - 1, numel(caseOrder));
@@ -142,35 +143,35 @@ function auto_test_runner(varargin)
             end
             pendingSafeWarnings = {};   % 첫 chunk 에만 기록
         end
-        fprintf('\n[%02d/%02d] %s | %s\n', i, nCases, tc.group, tc.title);
-        i_appendProgressMd(progressFile, i, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
+        fprintf('\n[%02d/%02d] %s | %s\n', caseIdx, nCases, tc.group, tc.title);
+        i_appendProgressMd(progressFile, caseIdx, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
 
         if isfield(tc, 'skipReason') && ~isempty(tc.skipReason)
-            r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
+            r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SKIPPED', 'steps', 0, 'error', char(tc.skipReason), ...
                        'captureError', '');
-            results(i) = r;
-            i_writeCaseMd(outDir, i, tc, r);
-            i_appendProgressMd(progressFile, i, 0, 'SKIPPED', r.error);
+            results(caseIdx) = r;
+            i_writeCaseMd(outDir, caseIdx, tc, r);
+            i_appendProgressMd(progressFile, caseIdx, 0, 'SKIPPED', r.error);
             fprintf('  SKIPPED: %s\n', r.error);
             continue;
         end
 
         if tc.requireAvi && strcmp(loadAviMode, 'never')
-            r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
+            r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SKIPPED', 'steps', 0, ...
                        'error', 'LoadAvi=never: AVI-required case skipped', ...
                        'captureError', '');
-            results(i) = r;
-            i_writeCaseMd(outDir, i, tc, r);
-            i_appendProgressMd(progressFile, i, 0, 'SKIPPED', r.error);
+            results(caseIdx) = r;
+            i_writeCaseMd(outDir, caseIdx, tc, r);
+            i_appendProgressMd(progressFile, caseIdx, 0, 'SKIPPED', r.error);
             fprintf('  SKIPPED: %s\n', r.error);
             continue;
         end
 
-        i_appendProgressMd(progressFile, i, 0, 'CLEANUP_BEFORE', 'closing leftover dashboard figures');
+        i_appendProgressMd(progressFile, caseIdx, 0, 'CLEANUP_BEFORE', 'closing leftover dashboard figures');
         cleanupStats = i_aggressiveCleanup();   % kill any leftover figures/timers/dialogs
-        i_appendProgressMd(progressFile, i, 0, 'CLEANUP_BEFORE_DONE', i_cleanupSummary(cleanupStats));
+        i_appendProgressMd(progressFile, caseIdx, 0, 'CLEANUP_BEFORE_DONE', i_cleanupSummary(cleanupStats));
 
         app = [];
         try
@@ -181,38 +182,38 @@ function auto_test_runner(varargin)
                 needAvi = strcmp(loadAviMode, 'always') || ...
                           (strcmp(loadAviMode, 'lazy') && tc.requireAvi);
             end
-            i_appendProgressMd(progressFile, i, 0, 'SETUP_START', sprintf('needAvi=%d', needAvi));
+            i_appendProgressMd(progressFile, caseIdx, 0, 'SETUP_START', sprintf('needAvi=%d', needAvi));
             app = i_setupFreshApp(needAvi);
-            i_appendProgressMd(progressFile, i, 0, 'SETUP_DONE', 'fresh app ready');
-            r   = i_runCase(app, tc, i, outDir, progressFile, captureOpts);
+            i_appendProgressMd(progressFile, caseIdx, 0, 'SETUP_DONE', 'fresh app ready');
+            r   = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts);
         catch ME
-            r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
+            r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SETUP_FAIL', 'steps', 0, 'error', i_errorReport(ME), ...
                        'captureError', '');
-            i_appendProgressMd(progressFile, i, 0, 'SETUP_FAIL', r.error);
+            i_appendProgressMd(progressFile, caseIdx, 0, 'SETUP_FAIL', r.error);
             fprintf('  SETUP_FAIL: %s\n', ME.message);
         end
 
         try
             if ~isempty(app) && isvalid(app)
-                i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_APP_START', 'closing app dialogs and main figure');
+                i_appendProgressMd(progressFile, caseIdx, r.steps, 'CLEANUP_APP_START', 'closing app dialogs and main figure');
                 i_closeAppDialogs(app);
                 i_settleUi(1);
                 delete(app);
-                i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_APP_DONE', 'app deleted');
+                i_appendProgressMd(progressFile, caseIdx, r.steps, 'CLEANUP_APP_DONE', 'app deleted');
             end
         catch ME
-            i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_WARN', ME.message);
+            i_appendProgressMd(progressFile, caseIdx, r.steps, 'CLEANUP_WARN', ME.message);
             fprintf('  CLEANUP_WARN: %s\n', ME.message);
         end
-        i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_AFTER_START', 'aggressive cleanup after case');
+        i_appendProgressMd(progressFile, caseIdx, r.steps, 'CLEANUP_AFTER_START', 'aggressive cleanup after case');
         cleanupStats = i_aggressiveCleanup();
         i_settleUi(2);            % let MATLAB GC/layout settle before next case
-        i_appendProgressMd(progressFile, i, r.steps, 'CLEANUP_AFTER_DONE', i_cleanupSummary(cleanupStats));
+        i_appendProgressMd(progressFile, caseIdx, r.steps, 'CLEANUP_AFTER_DONE', i_cleanupSummary(cleanupStats));
 
-        results(i) = r;
-        i_writeCaseMd(outDir, i, tc, r);
-        i_appendProgressMd(progressFile, i, r.steps, r.status, r.error);
+        results(caseIdx) = r;
+        i_writeCaseMd(outDir, caseIdx, tc, r);
+        i_appendProgressMd(progressFile, caseIdx, r.steps, r.status, r.error);
         % v-chunk: 현 chunk 의 index 즉시 갱신 (중간 crash 대비)
         chunkCases = caseOrder(chunkStartIdx:chunkEndIdx);
         try
@@ -2650,8 +2651,8 @@ function i_writeIndexMd(outDir, results, indexFile, progressFile)
     fprintf(fid, '\n## 케이스 목록\n\n');
     fprintf(fid, '| # | Group | Title | Status | Steps |\n');
     fprintf(fid, '|---|---|---|---|---|\n');
-    for i = 1:numel(results)
-        r = results(i);
+    for k = 1:numel(results)
+        r = results(k);
         fprintf(fid, '| %02d | %s | [%s](case%02d.md) | `%s` | %d |\n', ...
             r.id, r.group, r.title, r.id, r.status, r.steps);
     end
