@@ -648,6 +648,16 @@ function ok = i_flightPlayStopped(app, fIdxP)
         && ~logical(app.testHook('isFlightPlayTimerAlive', fIdxP));
 end
 
+function i_stopFlightPlayQuietly(app, fIdxP)
+    try
+        if ~isempty(app) && isvalid(app)
+            app.testHook('stopFlightPlay', fIdxP);
+        end
+    catch
+        % Best-effort timer cleanup for error paths.
+    end
+end
+
 function aviFiles = i_defaultAviFiles()
     % v-fixL5: i_setupFreshApp 가 needAvi 시 로드하는 기본 AVI 경로 — 단일 변경점.
     aviFiles  = {1, 'flight_data1_fps35.avi'; ...
@@ -830,6 +840,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             fIdxP = act.args{1};
             idx0 = double(beforeState.boards(fIdxP).currentIndex);
             app.testHook('startFlightPlay', fIdxP);
+            cleanupPlay = onCleanup(@() i_stopFlightPlayQuietly(app, fIdxP));
             okStart = i_waitUntil(@() i_flightPlayProgressed(app, fIdxP, idx0), 3.0, 0.05);
             if ~okStart
                 stP = app.testHook('getTestState');
@@ -851,6 +862,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                     error('AutoTest:FlightPlayTimerNotCleaned', 'flight %d play timer still running after stop', fIdxP);
                 end
             end
+            clear cleanupPlay;
         case 'setFlightDataSync'
             app.testHook('setFlightDataSync', act.args{:});
         case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
@@ -2074,10 +2086,40 @@ function i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, pane
     %          위험이 있으므로 panelOpts.deduplicate=false 로 강제 비활성.
     panelOpts = captureOpts;
     panelOpts.deduplicate = false;
-    [ok, ~] = i_captureFigure(target, file, panelOpts);
+    captureTarget = i_captureFigureTarget(app, target);
+    [ok, ~] = i_captureFigure(captureTarget, file, panelOpts);
     info = dir(file);
     if ~ok || isempty(info) || info(1).bytes <= 0
         error('AutoTest:PanelCaptureEmpty', 'Panel capture file is empty: %s', file);
+    end
+end
+
+function captureTarget = i_captureFigureTarget(app, target)
+    captureTarget = target;
+    if i_isFigureHandle(target)
+        return;
+    end
+    try
+        fig = ancestor(target, 'figure');
+        if ~isempty(fig) && isvalid(fig)
+            captureTarget = fig;
+            return;
+        end
+    catch
+    end
+    try
+        if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
+            captureTarget = app.UIFigure;
+        end
+    catch
+    end
+end
+
+function tf = i_isFigureHandle(h)
+    try
+        tf = ~isempty(h) && isvalid(h) && strcmpi(char(get(h, 'Type')), 'figure');
+    catch
+        tf = false;
     end
 end
 
@@ -3235,11 +3277,13 @@ function cases = i_buildCaseMatrix()
         cases(k).forbidAvi = false;
         if strncmp(cases(k).title, 'E04', 3)
             cases(k).requireAvi = true;
-        elseif contains(cases(k).title, 'video control') || contains(cases(k).title, 'video_sync_with_avi')
+        elseif contains(lower(cases(k).title), 'videocontrol') || ...
+                contains(lower(cases(k).title), 'video control') || ...
+                contains(cases(k).title, 'video_sync_with_avi')
             cases(k).requireAvi = true;
         elseif contains(lower(cases(k).title), 'videoviewer') || contains(lower(cases(k).title), 'video viewer')
             cases(k).requireAvi = true;   % v-fix12: video viewer capture 는 AVI 필요
-        elseif contains(cases(k).title, 'H-FLIGHT-PLAY-09')
+        elseif contains(cases(k).title, 'H-FLIGHT-PLAY')
             % v5-I: row timer 검증 — AVI 불필요. LoadAvi='always' 에서도 로드 금지 (R2025a hang 리소스 절감)
             cases(k).forbidAvi = true;
         end

@@ -9259,8 +9259,24 @@
                 if isempty(dlg) || ~isvalid(dlg), return; end
                 % v5-A2: board-off 중 외부 Video Player 표시 금지 — 모든 호출 경로 최종 방어
                 if tf && ~isempty(find(app.BoardOffState, 1))
+                    try
+                        app.hideVideoControlDialog(fIdx);
+                    catch ME_control
+                        app.logCaught(ME_control, 'videoViewerVisible:boardOffControl');
+                    end
                     dlg.Visible = 'off';
                     app.UI(fIdx).PanelVisible.video = true;   % board-on 복귀용 상태만 유지
+                    if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
+                        app.UI(fIdx).btnVid.Text = '비디오 창 예약';
+                    end
+                    try
+                        app.updateVideoDialogFollowState(fIdx);
+                    catch ME_follow
+                        app.logCaught(ME_follow, 'videoViewerVisible:boardOffFollow');
+                    end
+                    if doReflow
+                        app.reflowBoardColumns(fIdx);
+                    end
                     return;
                 end
                 if tf
