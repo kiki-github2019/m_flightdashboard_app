@@ -2492,13 +2492,22 @@ end
 function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
     name = sprintf('case%02d_step%02d.png', caseIdx, stepIdx);
     filePath = fullfile(outDir, name);
+    parts = {};
     if isfile(filePath)
-        txt = sprintf('![](%s)', name);
+        parts{end + 1} = sprintf('![](%s)', name); %#ok<AGROW>
     elseif i_captureDuplicateFile('has', filePath)
-        txt = '(duplicate skipped)';
+        parts{end + 1} = '(duplicate skipped)'; %#ok<AGROW>
     else
-        txt = '(not captured)';
+        parts{end + 1} = '(not captured)'; %#ok<AGROW>
     end
+    % v-fixM1: 동 step 의 외부 dialog 캡처 (caseXX_stepYY_TAG.png) 도 함께 인라인.
+    %          dedup 으로 disk 에 없는 파일은 자연히 누락. <br> 로 셀 내 줄바꿈.
+    suffixGlob = sprintf('case%02d_step%02d_*.png', caseIdx, stepIdx);
+    extras = dir(fullfile(outDir, suffixGlob));
+    for k = 1:numel(extras)
+        parts{end + 1} = sprintf('![](%s)', extras(k).name); %#ok<AGROW>
+    end
+    txt = strjoin(parts, '<br>');
 end
 
 function i_writeIndexMd(outDir, results, indexFile, progressFile)
