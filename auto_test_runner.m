@@ -2076,10 +2076,19 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
     mainDuplicate = strcmp(status, 'duplicate');
     % v-fix3: 열린 외부 dashboard dialog 도 함께 캡처. main dedup 여부와 무관 —
     % main 동일 상태에서 새 dialog 가 열린 경우 (EditDialog/SyncSearch 등) 누락 방지.
+    % v-fixH3: 실패 시 stderr 에 1줄 경고. silent swallow 제거 — 어떤 dialog 가
+    %          어떤 이유로 캡처 실패했는지 audit. (i_capture 는 progressFile 핸들이
+    %          없어 stderr 로 한정 — 필요 시 caller 가 stderr 를 progress 로 redirect.)
     extras = i_collectOpenDialogs(app);
     for e = 1:size(extras, 1)
-        f2 = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, extras{e, 2}));
-        try i_captureFigure(extras{e, 1}, f2, captureOpts); catch; end
+        tag = char(extras{e, 2});
+        f2 = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, tag));
+        try
+            i_captureFigure(extras{e, 1}, f2, captureOpts);
+        catch ME_extra
+            fprintf(2, '  [capture] EXTRAS_CAPTURE_WARN dialog="%s" case%02d step%02d: %s\n', ...
+                tag, caseIdx, stepIdx, ME_extra.message);
+        end
     end
     if ~captured && ~mainDuplicate
         error('AutoTest:CaptureFailed', 'Failed to capture %s', mainFile);
