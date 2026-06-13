@@ -2443,9 +2443,7 @@
                                 end
                             end
                         catch e
-                            if app.DebugMode
-                                fprintf('[goToFrame] error: %s\n', e.message);
-                            end
+                            app.logCaught(e, 'processFrameInternal:final-update');
                         end
                         delete(cleanupVideoSyncFlags);
                     end
