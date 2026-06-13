@@ -85,7 +85,7 @@ function auto_test_runner(varargin)
     end
     captureOpts = struct('mode', captureMode, 'scale', captureScale, ...
                          'deduplicate', logical(opts.DeduplicateCaptures));
-    i_captureDuplicate('', '', true);
+    i_captureDuplicateReset();
 
     % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
     if ~isempty(char(opts.OutputDir))
@@ -2115,26 +2115,43 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
 end
 
 function key = i_captureTargetKey(figh)
-    key = 'figure';
+    % v-fixM: class + Tag + Name 조합 — Name/Title 미설정 dialog 들이
+    %         모두 'figure' 키로 충돌해 서로 dedup 비교 대상이 되던 문제 차단.
+    parts = {'figure', '', ''};
     try
-        if isprop(figh, 'Name') && ~isempty(figh.Name)
-            key = char(figh.Name);
-        elseif isprop(figh, 'Title') && ~isempty(figh.Title)
-            key = char(figh.Title);
+        parts{1} = char(class(figh));
+    catch
+    end
+    try
+        if isprop(figh, 'Tag') && ~isempty(figh.Tag)
+            parts{2} = char(figh.Tag);
         end
     catch
     end
+    try
+        if isprop(figh, 'Name') && ~isempty(figh.Name)
+            parts{3} = char(figh.Name);
+        elseif isprop(figh, 'Title') && ~isempty(figh.Title)
+            parts{3} = char(figh.Title);
+        end
+    catch
+    end
+    key = sprintf('%s|%s|%s', parts{1}, parts{2}, parts{3});
 end
 
 function sig = i_captureImageSignature(img)
+    % v-fixL7: JVM 미가용 환경(headless 등) 대비 두 단계 — 1차 MD5(java),
+    %          실패 시 stride 샘플링 통계로 fallback. fallback 은 충돌률이
+    %          높으니 운영용보다 가벼운 자가검증 목적으로만 신뢰.
+    FALLBACK_TARGET_SAMPLES = 80;  % 한 변당 약 80 픽셀까지 다운샘플
     try
         md = java.security.MessageDigest.getInstance('MD5');
         md.update(uint8(img(:)));
         raw = typecast(md.digest(), 'uint8');
         sig = lower(reshape(dec2hex(raw, 2).', 1, []));
     catch
-        strideR = max(1, floor(size(img, 1) / 80));
-        strideC = max(1, floor(size(img, 2) / 80));
+        strideR = max(1, floor(size(img, 1) / FALLBACK_TARGET_SAMPLES));
+        strideC = max(1, floor(size(img, 2) / FALLBACK_TARGET_SAMPLES));
         sample = double(img(1:strideR:end, 1:strideC:end, :));
         sig = sprintf('%dx%dx%d:%0.0f:%0.0f', ...
             size(img, 1), size(img, 2), size(img, 3), ...
@@ -2159,6 +2176,14 @@ function duplicate = i_captureDuplicate(key, sig, reset)
         return;
     end
     lastSigByKey(key) = sig;
+end
+
+function i_captureDuplicateReset()
+    % v-fixM: runner 진입부에서 dedup signature persistent 상태를 명시 초기화.
+    %         persistent 은 함수 스코프이므로 auto_test_runner 의 로컬 i_captureDuplicate
+    %         persistent 만 해당. auto_test_runner_under_user 는 dedup helper 를
+    %         호출하지 않아 별도 reset 불필요 (스코프 자체가 분리).
+    i_captureDuplicate('', '', true);
 end
 
 function dlgs = i_collectOpenDialogs(app)
