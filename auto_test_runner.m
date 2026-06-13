@@ -674,6 +674,13 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
         if strcmp(r.status, 'EXCEPTION'), break; end
         if strcmp(r.status, 'CAPTURE_FAIL'), break; end
 
+        % v-fixH4: 액션이 skipValidateState 플래그를 가지면 직후 validation 건너뜀.
+        %          CAP() 등 dialog/viewer 자동 open side effect 가 false FAIL 유발.
+        if isfield(act, 'skipValidateState') && act.skipValidateState
+            i_appendProgressMd(progressFile, caseIdx, r.steps, 'VALIDATION_SKIPPED', act.label);
+            continue;
+        end
+
         st = app.testHook('getTestState');
         [ok, msg] = i_validateState(st, exp);
         if ~ok
@@ -2587,7 +2594,11 @@ function cases = i_buildCaseMatrix()
     PRE = @(kind, lbl)         struct('fn','openProjectFixtureInEditDialog','args',{{kind}},      'label',lbl, 'row',NaN);
     VCD = @(fIdx, lbl)         struct('fn','toggleVideoControlDialog',       'args',{{fIdx}},     'label',lbl, 'row',NaN);
     GTF = @(fIdx, fr, lbl)     struct('fn','goToFrame',                     'args',{{fIdx, fr}}, 'label',lbl, 'row',NaN);
-    CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN);
+    % v-fixH4: CAP 은 i_findPanelCaptureTarget 가 dialog/viewer 를 자동 open 하는
+    %          side effect 가 있어 직후 i_validateState 가 가시성 delta 로 false FAIL
+    %          가능 — 'skipValidateState' 플래그로 검증 면제 (캡처 존재 보장은
+    %          i_captureRequiredPanel 가 throw 로 직접 수행).
+    CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN, 'skipValidateState', true);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
         'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false, ...
