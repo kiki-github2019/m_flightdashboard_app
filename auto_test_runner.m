@@ -1942,18 +1942,14 @@ function i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, pane
     if isempty(target) || ~isvalid(target)
         error('AutoTest:PanelCaptureTargetMissing', 'Panel capture target missing: %s', char(panelName));
     end
-    try
-        exportapp(target, file);
-    catch
-        frame = getframe(target);
-        img = frame.cdata;
-        if captureOpts.scale < 1
-            img = i_resizeImageNearest(img, captureOpts.scale);
-        end
-        imwrite(img, file);
-    end
+    % v-fixM2: 저장/스케일/exportapp fallback 로직을 i_captureFigure 로 일원화.
+    %          단, CAP() 는 명시적 panel-존재 assertion 이라 dedup skip 시 false fail
+    %          위험이 있으므로 panelOpts.deduplicate=false 로 강제 비활성.
+    panelOpts = captureOpts;
+    panelOpts.deduplicate = false;
+    [ok, ~] = i_captureFigure(target, file, panelOpts);
     info = dir(file);
-    if isempty(info) || info(1).bytes <= 0
+    if ~ok || isempty(info) || info(1).bytes <= 0
         error('AutoTest:PanelCaptureEmpty', 'Panel capture file is empty: %s', file);
     end
 end
