@@ -2426,8 +2426,8 @@
                         prevDraggedFromVideo = app.DraggedFromVideo;
                         prevUpdating = app.IsUpdating(fIdx);
                         app.DraggedFromVideo = true;
-                        cleanupVideoSyncFlags = onCleanup(@() restoreVideoSyncFlags( ...
-                            app, fIdx, prevDraggedFromVideo, prevUpdating));
+                        cleanupVideoSyncFlags = onCleanup(@() app.restoreVideoSyncFlags( ...
+                            fIdx, prevDraggedFromVideo, prevUpdating));
                         try
                             if strcmp(mode, 'drag')
                                 app.updateMarkersOnly(fIdx, idx);
@@ -2479,10 +2479,10 @@
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
                         % v-fixL11: 기존 IsUpdating(fIdx)=true → catch → false 패턴은
                         %           이전 값(다른 경로에서 set true)을 false 로 덮어쓸 위험.
-                        %           i_restoreIsUpdating + onCleanup 으로 이전값 복원.
+                        %           restoreIsUpdating (private method) + onCleanup 으로 이전값 복원.
                         prevUpdating = app.IsUpdating(fIdx);
                         app.IsUpdating(fIdx) = true;
-                        cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating));
+                        cleanupUpdating = onCleanup(@() app.restoreIsUpdating(fIdx, prevUpdating));
                         try
                             app.updateDashboard(fIdx, app.Models(fIdx).currentIndex);
                         catch ME_sliderSync
@@ -3834,7 +3834,7 @@
                     % [Major 4] IsUpdating 복원을 onCleanup 로 고정 (예외 경로에서도 복원 보장)
                     prevUpdating = app.IsUpdating(fIdx);
                     app.IsUpdating(fIdx) = true;
-                    cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating));
+                    cleanupUpdating = onCleanup(@() app.restoreIsUpdating(fIdx, prevUpdating));
                     try
                         app.updateDashboard(fIdx, idx);
                     catch e
@@ -13961,6 +13961,40 @@
             cleanupAsyncDecodeCache();
         end
     end
+
+    % =========================================================================
+    % v-fixH1/H2: onCleanup 복원 helper 들을 private method 로 이동.
+    %   classdef 밖 local function 은 private property (IsUpdating /
+    %   DraggedFromVideo) 직접 set 에 실패해 try/catch 가 silent swallow 하던
+    %   문제를 닫음. 모든 cleanup body 는 자체 try/catch + logCaught 로 감싸
+    %   onCleanup 콜백 밖으로 예외가 새지 않게 한다.
+    % =========================================================================
+    methods (Access = private)
+        function restoreVideoSyncFlags(app, fIdx, prevDraggedFromVideo, prevUpdating)
+            try
+                if isempty(app) || ~isvalid(app), return; end
+                if app.IsDeleting, return; end
+                app.DraggedFromVideo = logical(prevDraggedFromVideo);
+                if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
+                    app.IsUpdating(fIdx) = logical(prevUpdating);
+                end
+            catch ME
+                try app.logCaught(ME, 'restoreVideoSyncFlags'); catch; end
+            end
+        end
+
+        function restoreIsUpdating(app, fIdx, prevValue)
+            try
+                if isempty(app) || ~isvalid(app), return; end
+                if app.IsDeleting, return; end
+                if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
+                    app.IsUpdating(fIdx) = logical(prevValue);
+                end
+            catch ME
+                try app.logCaught(ME, 'restoreIsUpdating'); catch; end
+            end
+        end
+    end
 end
 
 % =========================================================================
@@ -13977,28 +14011,6 @@ end
 function out = ternary(cond, ifTrue, ifFalse)
     % Simple ternary helper for UI Enable / mode string toggles.
     if cond, out = ifTrue; else, out = ifFalse; end
-end
-
-function i_restoreIsUpdating(app, fIdx, prevValue)
-    % [Major 4] onCleanup target — restore IsUpdating(fIdx) even if the body throws.
-    try
-        if isempty(app) || ~isvalid(app), return; end
-        if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
-            app.IsUpdating(fIdx) = logical(prevValue);
-        end
-    catch
-    end
-end
-
-function restoreVideoSyncFlags(app, fIdx, prevDraggedFromVideo, prevUpdating)
-    try
-        if isempty(app) || ~isvalid(app), return; end
-        app.DraggedFromVideo = logical(prevDraggedFromVideo);
-        if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
-            app.IsUpdating(fIdx) = logical(prevUpdating);
-        end
-    catch
-    end
 end
 
 function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
