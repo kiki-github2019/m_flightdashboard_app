@@ -8466,7 +8466,43 @@
             app.refreshFlightPlayControlPanel(fIdx);
             app.refreshBoardOffSummaryPanel(fIdx);
 
+            % [R3] project 복원/동기 refresh 등으로 altitude marker/xline 의 상호작용
+            % 콜백이 유실될 수 있어 best-effort 로 재부착 (GUI 드래그 안정성 + case118).
+            app.ensureAltitudeMarkerCallbacks(fIdx);
+
             drawnow limitrate;
+        end
+
+        function ensureAltitudeMarkerCallbacks(app, fIdx)
+            % [R3] hAltMarker / timeLine 의 HitTest/PickableParts/ButtonDownFcn 복구.
+            % project 복원·동기 갱신 후 콜백이 비거나 HitTest='off' 가 되어 마커
+            % 드래그가 죽는 회귀(case118 'altitude marker/xline callback missing') 방지.
+            try
+                if isempty(app.UI) || fIdx < 1 || fIdx > numel(app.UI), return; end
+                dragCb = @(src, event) app.startPlotMarkerDrag(fIdx, 0, src, event);
+                if isfield(app.UI(fIdx), 'hAltMarker')
+                    mk = app.UI(fIdx).hAltMarker;
+                    if ~isempty(mk) && isgraphics(mk) && isvalid(mk)
+                        if isprop(mk, 'HitTest'), mk.HitTest = 'on'; end
+                        if isprop(mk, 'PickableParts'), mk.PickableParts = 'visible'; end
+                        if isprop(mk, 'ButtonDownFcn') && isempty(mk.ButtonDownFcn)
+                            mk.ButtonDownFcn = dragCb;
+                        end
+                    end
+                end
+                if isfield(app.UI(fIdx), 'timeLine')
+                    tl = app.UI(fIdx).timeLine;
+                    if ~isempty(tl) && isgraphics(tl) && isvalid(tl)
+                        if isprop(tl, 'HitTest'), tl.HitTest = 'on'; end
+                        if isprop(tl, 'PickableParts'), tl.PickableParts = 'visible'; end
+                        if isprop(tl, 'ButtonDownFcn') && isempty(tl.ButtonDownFcn)
+                            tl.ButtonDownFcn = dragCb;
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'ensureAltitudeMarkerCallbacks');
+            end
         end
 
         function ui = createFlightPlayControlPanel(app, parent, fIdx, t)
