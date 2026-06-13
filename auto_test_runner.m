@@ -906,8 +906,26 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
         case 'editDialogSaveProject'
             % v-fixG: ProjectFilePath 가 비어 있으면 uiputfile 이 떠서 hang —
             %         setPath 가 선행되었는지 확인 후에만 실행.
+            % v-fixH5: getTestState / ProjectFilePath 접근 실패를 silent 로 두면
+            %          curPath='' 가 되어 UserInputActionBlocked 가 false positive
+            %          로 발화 — 실제 hook 오류를 별도 명시 에러로 분리.
             curPath = '';
-            try st = app.testHook('getTestState'); curPath = char(st.ProjectFilePath); catch; end
+            hookErr = [];
+            try
+                st = app.testHook('getTestState');
+                if ~isfield(st, 'ProjectFilePath')
+                    error('AutoTest:EditSaveProjectHookError', ...
+                        'getTestState 응답에 ProjectFilePath 필드 없음 — hook schema 변경 의심.');
+                end
+                curPath = char(st.ProjectFilePath);
+            catch ME_st
+                hookErr = ME_st;
+            end
+            if ~isempty(hookErr)
+                fprintf(2, '  [editDialogSaveProject] EDIT_SAVE_PROJECT_HOOK_ERROR: %s\n', hookErr.message);
+                error('AutoTest:EditSaveProjectHookError', ...
+                    'getTestState/ProjectFilePath 조회 실패: %s', hookErr.message);
+            end
             if isempty(curPath)
                 error('AutoTest:UserInputActionBlocked', ...
                     'editDialogSaveProject without preset ProjectFilePath would open uiputfile - use setProjectFilePath first.');
