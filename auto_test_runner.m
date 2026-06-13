@@ -2092,7 +2092,7 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
             sig = i_captureImageSignature(img);
             if i_captureDuplicate(i_captureTargetKey(figh), sig, false)
                 status = 'duplicate';
-                i_writeText([file '.duplicate.txt'], 'duplicate capture skipped');
+                i_captureDuplicateFile('add', file);
                 clear f img;
                 return;
             end
@@ -2109,6 +2109,23 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         exportapp(figh, file);
         try drawnow limitrate; catch; end
         ok = isfile(file);
+        % v-fixM5: exportapp fallback 경로도 dedup 적용 — 저장된 PNG 를 imread 로
+        %          다시 읽어 signature 비교. getframe 경로와 다른 source 지만 키별
+        %          연속 호출 단위에서 동일 결과면 fallback 끼리도 dup 인식 가능.
+        if ok && isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
+            try
+                img2 = imread(file);
+                sig2 = i_captureImageSignature(img2);
+                if i_captureDuplicate(i_captureTargetKey(figh), sig2, false)
+                    status = 'duplicate';
+                    i_captureDuplicateFile('add', file);
+                    try delete(file); catch; end
+                    ok = false;
+                    return;
+                end
+            catch
+            end
+        end
         if ok, status = 'saved'; end
     catch
     end
@@ -2184,6 +2201,38 @@ function i_captureDuplicateReset()
     %         persistent 만 해당. auto_test_runner_under_user 는 dedup helper 를
     %         호출하지 않아 별도 reset 불필요 (스코프 자체가 분리).
     i_captureDuplicate('', '', true);
+    i_captureDuplicateFile('reset', '');
+end
+
+function out = i_captureDuplicateFile(mode, filePath)
+    % v-fixM/L8: dedup 으로 저장 skip 된 PNG 경로를 persistent set 에 기록 +
+    %            outDir 의 duplicates.log 에 append 하여 단일 audit 채널로 통합.
+    %            i_captureMarkdown 은 set 을 조회해 "(duplicate skipped)" 마크업 결정.
+    persistent dupSet
+    out = false;
+    if isempty(dupSet)
+        dupSet = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+    end
+    switch lower(char(mode))
+        case 'reset'
+            dupSet = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+        case 'add'
+            fp = char(filePath);
+            if isempty(fp), return; end
+            dupSet(fp) = true;
+            try
+                logFile = fullfile(fileparts(fp), 'duplicates.log');
+                fid = fopen(logFile, 'a', 'n', 'UTF-8');
+                if fid >= 0
+                    fprintf(fid, '%s\n', fp);
+                    fclose(fid);
+                end
+            catch
+            end
+            out = true;
+        case 'has'
+            out = isKey(dupSet, char(filePath));
+    end
 end
 
 function dlgs = i_collectOpenDialogs(app)
@@ -2362,7 +2411,7 @@ function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
     filePath = fullfile(outDir, name);
     if isfile(filePath)
         txt = sprintf('![](%s)', name);
-    elseif isfile([filePath '.duplicate.txt'])
+    elseif i_captureDuplicateFile('has', filePath)
         txt = '(duplicate skipped)';
     else
         txt = '(not captured)';
