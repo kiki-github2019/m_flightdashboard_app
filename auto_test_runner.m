@@ -2034,7 +2034,10 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
             % v-fix12: 명시적 capture 시에만 viewer open. 없으면 hook 시도 후 미가용 시 main fallback.
             target = app.UI(fIdx).vidViewerDialog;
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
-                try app.testHook('setVideoViewerVisible', fIdx, true, false); catch; end
+                try
+                    app.testHook('setVideoViewerVisible', fIdx, true, false);
+                catch
+                end
                 target = app.UI(fIdx).vidViewerDialog;
             end
             % v-fix10: main figure fallback 제거 — viewer 미가용 시 false PASS 방지
@@ -2051,7 +2054,10 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
             end
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 app.testHook('toggleFlightPlayControlPanel', fIdx);
-                try target = app.UI(fIdx).flightPlayControlPanel; catch; end
+                try
+                    target = app.UI(fIdx).flightPlayControlPanel;
+                catch
+                end
             end
             % v-fix2: main figure fallback 제거 — panel 미가용 시 false PASS 방지
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
