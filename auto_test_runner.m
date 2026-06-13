@@ -2318,21 +2318,34 @@ function out = i_captureDuplicateFile(mode, filePath)
     % v-fixM/L8: dedup 으로 저장 skip 된 PNG 경로를 persistent set 에 기록 +
     %            outDir 의 duplicates.log 에 append 하여 단일 audit 채널로 통합.
     %            i_captureMarkdown 은 set 을 조회해 "(duplicate skipped)" 마크업 결정.
-    persistent dupSet
+    % v-fixM5: reset 후 첫 'add' 호출에서 duplicates.log 를 'w' 로 truncate +
+    %          timestamp 헤더 1줄. 다음 run 의 stale 라인 누적 차단.
+    persistent dupSet needTruncate
     out = false;
     if isempty(dupSet)
         dupSet = containers.Map('KeyType', 'char', 'ValueType', 'logical');
     end
+    if isempty(needTruncate), needTruncate = true; end
     switch lower(char(mode))
         case 'reset'
             dupSet = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+            needTruncate = true;
         case 'add'
             fp = char(filePath);
             if isempty(fp), return; end
             dupSet(fp) = true;
             try
                 logFile = fullfile(fileparts(fp), 'duplicates.log');
-                fid = fopen(logFile, 'a', 'n', 'UTF-8');
+                if needTruncate
+                    fid = fopen(logFile, 'w', 'n', 'UTF-8');
+                    if fid >= 0
+                        fprintf(fid, '# Duplicate captures — run %s\n', ...
+                            char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')));
+                    end
+                    needTruncate = false;
+                else
+                    fid = fopen(logFile, 'a', 'n', 'UTF-8');
+                end
                 if fid >= 0
                     fprintf(fid, '%s\n', fp);
                     fclose(fid);
