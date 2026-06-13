@@ -1128,17 +1128,15 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = false;
                 exp.summaryVisible(fIdx) = false;
                 exp.sourceColumnsHidden(3 - fIdx) = false;
-                % v5-B: mid-off 영속 정책(v-final P8) — 복원 후 expected 패널 상태는
-                % 복원 직전 실측 (during-off toggle 유지가 정책 ground truth)
-                pNames = {'attitude', 'map', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
+                % v-fixB1: mid-off 영속 정책. 기존 v5-B 는 beforeState.boards().PanelVisible
+                % 를 복사했으나, board-off 중 source 보드의 PanelVisible 모델이 reflow/settle
+                % 로 토글 직전 값으로 되돌아가 신뢰 불가(로그상 exp=1/actual=0 오탐).
+                % exp.panel 은 이미 board-off 중 source togglePanel 을 정확히 추적하므로
+                % 그대로 유지하고, 앱이 복원 시 ensureBoardCorePanelsVisible 로 양 보드
+                % info/dataView 를 강제 ON 하는 것만 반영한다.
                 for bIdx = 1:2
-                    try
-                        for nIdx = 1:numel(pNames)
-                            exp.panel(bIdx).(pNames{nIdx}) = ...
-                                logical(beforeState.boards(bIdx).PanelVisible.(pNames{nIdx}));
-                        end
-                    catch
-                    end
+                    exp.panel(bIdx).info = true;
+                    exp.panel(bIdx).dataView = true;
                 end
             elseif ~any(exp.boardOff)
                 exp.boardOff(fIdx) = true;
@@ -1147,6 +1145,12 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 % v5-G: Policy B — board-off 진입 시 양 보드 flight-play panel collapse
                 exp.flightPlayVisible(:) = false;
                 exp.flightPlayActive(:) = false;
+                % v-fixB3: board-off 중 source 보드는 hsplit(upper info+plot)으로 info/dataView
+                % 가 강제 visible (G-LAYOUT-20/21 'info/dataView hide before board off →
+                % forced visible'). off 직전 토글로 꺼져 있어도 앱이 ON 으로 강제하므로 반영.
+                srcIdx = 3 - fIdx;
+                exp.panel(srcIdx).info = true;
+                exp.panel(srcIdx).dataView = true;
             end
         case 'ensureNoBoardOff'
             exp.boardOff(:) = false;
