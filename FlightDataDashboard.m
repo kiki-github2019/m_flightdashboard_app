@@ -662,6 +662,8 @@
                 case 'setProjectFilePath'
                     % v-fixG: 자동 러너가 비모달 editDialogSaveProject 경로를 타게 하려고
                     %         ProjectFilePath 를 사전 세팅/초기화하는 테스트 전용 setter.
+                    % v-fixM4: varargout{1} = 이전 값. 호출측이 복원에 사용 가능.
+                    if nargout >= 1, varargout{1} = char(app.ProjectFilePath); end
                     if isempty(varargin)
                         app.ProjectFilePath = '';
                     else

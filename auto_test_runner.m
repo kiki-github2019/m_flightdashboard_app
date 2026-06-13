@@ -86,6 +86,12 @@ function auto_test_runner(varargin)
     captureOpts = struct('mode', captureMode, 'scale', captureScale, ...
                          'deduplicate', logical(opts.DeduplicateCaptures));
     i_captureDuplicateReset();
+    % v-fixM4: G-EDIT-09 등에서 생성한 tempname() 기반 .fdproj 파일이 runner 종료
+    %          (정상/예외 모두) 시점에 일괄 삭제되도록 onCleanup 등록. 각 case 는
+    %          fresh app 으로 시작하므로 app 측 ProjectFilePath 복원은 자동.
+    i_tempProjectFileRegistry('reset', '');
+    cleanupTempProjFiles = onCleanup(@() i_tempProjectFileRegistry('cleanup', '')); %#ok<NASGU>
+
 
     % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
     if ~isempty(char(opts.OutputDir))
@@ -2191,6 +2197,32 @@ function duplicate = i_captureDuplicate(key, sig, reset)
     lastSigByKey(key) = sig;
 end
 
+function i_tempProjectFileRegistry(mode, path)
+    % v-fixM4: G-EDIT-09 등 testHook setProjectFilePath 로 사용된 임시 .fdproj
+    %          경로 등록 + runner 종료 시 일괄 삭제. 각 case 는 fresh app 으로
+    %          시작하므로 app 측 ProjectFilePath 복원은 불필요 — 디스크에 남는
+    %          orphan 파일 정리만 책임진다.
+    persistent registry
+    if isempty(registry), registry = {}; end
+    switch lower(char(mode))
+        case 'reset'
+            registry = {};
+        case 'add'
+            p = char(path);
+            if isempty(p), return; end
+            registry{end + 1} = p; %#ok<AGROW>
+        case 'cleanup'
+            for k = 1:numel(registry)
+                p = registry{k};
+                try
+                    if isfile(p), delete(p); end
+                catch
+                end
+            end
+            registry = {};
+    end
+end
+
 function i_captureDuplicateReset()
     % v-fixM: runner 진입부에서 dedup signature persistent 상태를 명시 초기화.
     %         persistent 은 함수 스코프이므로 auto_test_runner 의 로컬 i_captureDuplicate
@@ -2778,7 +2810,10 @@ function cases = i_buildCaseMatrix()
         'apply pending', 'applyPendingDialogChanges 호출', ...
         {OED('open'), APD('apply pending'), CED('close')});
     % v-fixG: ProjectFilePath 를 사전 세팅해 uiputfile 모달을 우회 — 임시 .fdproj 경로 사용.
+    % v-fixM4: 임시 파일을 runner-level registry 에 등록 → runner 종료 시 onCleanup
+    %          이 일괄 삭제. case throw 로 SPP('') 가 누락돼도 잔존 방지.
     gEdit09SavePath = [tempname() '.fdproj'];
+    i_tempProjectFileRegistry('add', gEdit09SavePath);
     cases(end + 1) = mk('G-EDIT','G-EDIT-09 project save through EditDialog', ...
         'project save', 'editDialogSaveProject 호출 (pre-set ProjectFilePath)', ...
         {SPP(gEdit09SavePath, 'preset project path'), ...
