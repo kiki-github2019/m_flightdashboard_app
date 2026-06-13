@@ -2104,9 +2104,12 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         % v-noteL6: dedup 는 capture 비용 (getframe + scale + signature) 자체를
         %           줄이지 않는다 — 디스크 저장(imwrite) 과 markdown 인라인을
         %           skip 하여 결과물 크기/리뷰 노이즈만 절약한다.
+        % v-fixH2: signature source 가 다른 경로 (getframe vs exportapp+imread) 끼리
+        %          비교되면 같은 화면도 다른 sig 로 인식되어 dedup 비결정 — 키에 경로
+        %          tag(|gf / |ea) 를 붙여 namespace 분리, 동일 source 내에서만 비교.
         if isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
             sig = i_captureImageSignature(img);
-            if i_captureDuplicate(i_captureTargetKey(figh), sig, false)
+            if i_captureDuplicate([i_captureTargetKey(figh) '|gf'], sig, false)
                 status = 'duplicate';
                 i_captureDuplicateFile('add', file);
                 clear f img;
@@ -2126,13 +2129,14 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         try drawnow limitrate; catch; end
         ok = isfile(file);
         % v-fixM5: exportapp fallback 경로도 dedup 적용 — 저장된 PNG 를 imread 로
-        %          다시 읽어 signature 비교. getframe 경로와 다른 source 지만 키별
-        %          연속 호출 단위에서 동일 결과면 fallback 끼리도 dup 인식 가능.
+        %          다시 읽어 signature 비교. fallback 끼리 dup 인식 가능.
+        % v-fixH2: getframe 경로와 source 가 달라 cross-비교는 의미 없음 → '|ea' tag 로
+        %          namespace 분리. 같은 figh 가 두 경로 모두를 거쳐도 키 충돌 없음.
         if ok && isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
             try
                 img2 = imread(file);
                 sig2 = i_captureImageSignature(img2);
-                if i_captureDuplicate(i_captureTargetKey(figh), sig2, false)
+                if i_captureDuplicate([i_captureTargetKey(figh) '|ea'], sig2, false)
                     status = 'duplicate';
                     i_captureDuplicateFile('add', file);
                     try delete(file); catch; end
