@@ -2399,8 +2399,18 @@
             frameNo = round(frameNo);
             frameNo = max(1, min(frameNo, totalF));
 
-            % 2. 변경 없으면 종료
-            if app.VideoSyncState(fIdx).CurrentFrame == frameNo, return; end
+            % 2. 변경 없으면 — drag 는 그대로 종료, final+IsSynced 는 data 측
+            %    정합만 한번 점검 (frame 동일해도 spinner/currentIndex 가 외부
+            %    조작으로 drift 했을 수 있음. v-fixM3).
+            if app.VideoSyncState(fIdx).CurrentFrame == frameNo
+                if strcmp(mode, 'final') ...
+                        && app.VideoSyncState(fIdx).IsSynced ...
+                        && ~isempty(app.Models(fIdx).rawData)
+                    app.syncDataSideToFrame(fIdx, frameNo, 'final');
+                    app.refreshBoardOffSummaryPanel(fIdx);
+                end
+                return;
+            end
             app.VideoSyncState(fIdx).CurrentFrame = frameNo;
 
             % 3. 모든 표시 요소 일괄 동기화
@@ -2415,43 +2425,51 @@
 
             % 5. 동기 모드일 때 비행데이터 측도 갱신
             if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
-                try
-                    targetTime = app.frameToTime(fIdx, frameNo);
-                    timeCol = app.Models(fIdx).mappedCols.Time;
-                    times = app.Models(fIdx).rawData.(timeCol);
-                    targetTime = max(times(1), min(targetTime, times(end)));
-                    idx = app.findClosestIndexByTime(times, targetTime);
-
-                    if ~isequal(app.Models(fIdx).currentIndex, idx)
-                        prevDraggedFromVideo = app.DraggedFromVideo;
-                        prevUpdating = app.IsUpdating(fIdx);
-                        app.DraggedFromVideo = true;
-                        cleanupVideoSyncFlags = onCleanup(@() app.restoreVideoSyncFlags( ...
-                            fIdx, prevDraggedFromVideo, prevUpdating));
-                        try
-                            if strcmp(mode, 'drag')
-                                app.updateMarkersOnly(fIdx, idx);
-                            else
-                                app.IsUpdating(fIdx) = true;
-                                app.Models(fIdx).currentIndex = idx;
-                                app.updateDashboard(fIdx, idx);
-                                if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
-                                    currDataTime = app.Models(fIdx).rawData.(timeCol)(idx);
-                                    if abs(app.UI(fIdx).spinner.Value - currDataTime) > eps
-                                        app.UI(fIdx).spinner.Value = currDataTime;
-                                    end
-                                end
-                            end
-                        catch e
-                            app.logCaught(e, 'processFrameInternal:final-update');
-                        end
-                        delete(cleanupVideoSyncFlags);
-                    end
-                catch ME_silent
-                    app.logCaught(ME_silent, 'processFrameInternal:data-sync');
-                end
+                app.syncDataSideToFrame(fIdx, frameNo, mode);
             end
             app.refreshBoardOffSummaryPanel(fIdx);
+        end
+
+        % v-fixM3: processFrameInternal 의 data-side 동기화 블록을 분리.
+        %   - 일반 경로: video frame 변경 직후 호출 (drag/final 모두).
+        %   - same-frame final 경로: video frame 동일해도 currentIndex/spinner
+        %     stale 가능성에 대해 idempotent 정합 (drag 는 호출되지 않음).
+        function syncDataSideToFrame(app, fIdx, frameNo, mode)
+            try
+                targetTime = app.frameToTime(fIdx, frameNo);
+                timeCol = app.Models(fIdx).mappedCols.Time;
+                times = app.Models(fIdx).rawData.(timeCol);
+                targetTime = max(times(1), min(targetTime, times(end)));
+                idx = app.findClosestIndexByTime(times, targetTime);
+
+                if ~isequal(app.Models(fIdx).currentIndex, idx)
+                    prevDraggedFromVideo = app.DraggedFromVideo;
+                    prevUpdating = app.IsUpdating(fIdx);
+                    app.DraggedFromVideo = true;
+                    cleanupVideoSyncFlags = onCleanup(@() app.restoreVideoSyncFlags( ...
+                        fIdx, prevDraggedFromVideo, prevUpdating));
+                    try
+                        if strcmp(mode, 'drag')
+                            app.updateMarkersOnly(fIdx, idx);
+                        else
+                            app.IsUpdating(fIdx) = true;
+                            app.Models(fIdx).currentIndex = idx;
+                            app.updateDashboard(fIdx, idx);
+                            if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
+                                currDataTime = app.Models(fIdx).rawData.(timeCol)(idx);
+                                if abs(app.UI(fIdx).spinner.Value - currDataTime) > eps
+                                    app.UI(fIdx).spinner.Value = currDataTime;
+                                end
+                            end
+                        end
+                    catch e
+                        app.logCaught(e, 'syncDataSideToFrame:update');
+                    end
+                    delete(cleanupVideoSyncFlags);
+                end
+            catch ME_silent
+                app.logCaught(ME_silent, 'syncDataSideToFrame:resolve');
+            end
         end
 
         % [V3.15 항목 1] 슬라이더 드래그 중 콜백 (ValueChangingFcn)
