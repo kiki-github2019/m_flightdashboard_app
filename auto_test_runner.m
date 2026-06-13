@@ -1303,6 +1303,13 @@ function exp = i_updateExpectedState(exp, act, beforeState)
         case 'goToFrame'
             fIdx = act.args{1};
             exp.videoFrameExpected(fIdx) = act.args{2};
+            % v-fixSync: video sync 활성 시 goToFrame 은 frame→time→index 로 데이터
+            % currentIndex 를 동기 이동시킨다 (앱 의도 동작, commit 627d519). 정확한
+            % index 는 앱 내부 anchor/fps 매핑에 의존하므로 literal 검증 대신 don't-care
+            % 로 둔다 — frame 정합성은 videoFrameExpected + anchor 공식이 별도 검증.
+            if exp.videoSynced(fIdx)
+                exp.currentIndex(fIdx) = NaN;
+            end
         case 'captureRequiredPanel'
             exp.minRequiredPanelCaptures = exp.minRequiredPanelCaptures + 1;
             panelName = lower(char(act.args{1}));
