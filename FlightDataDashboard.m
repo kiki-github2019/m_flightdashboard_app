@@ -2423,12 +2423,17 @@
                     idx = app.findClosestIndexByTime(times, targetTime);
 
                     if ~isequal(app.Models(fIdx).currentIndex, idx)
+                        prevDraggedFromVideo = app.DraggedFromVideo;
+                        prevUpdating = app.IsUpdating(fIdx);
                         app.DraggedFromVideo = true;
+                        cleanupVideoSyncFlags = onCleanup(@() restoreVideoSyncFlags( ...
+                            app, fIdx, prevDraggedFromVideo, prevUpdating));
                         try
                             if strcmp(mode, 'drag')
                                 app.updateMarkersOnly(fIdx, idx);
                             else
                                 app.IsUpdating(fIdx) = true;
+                                app.Models(fIdx).currentIndex = idx;
                                 app.updateDashboard(fIdx, idx);
                                 if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
                                     currDataTime = app.Models(fIdx).rawData.(timeCol)(idx);
@@ -2436,15 +2441,13 @@
                                         app.UI(fIdx).spinner.Value = currDataTime;
                                     end
                                 end
-                                app.IsUpdating(fIdx) = false;
                             end
                         catch e
-                            app.IsUpdating(fIdx) = false;
                             if app.DebugMode
                                 fprintf('[goToFrame] error: %s\n', e.message);
                             end
                         end
-                        app.DraggedFromVideo = false;
+                        delete(cleanupVideoSyncFlags);
                     end
                 catch ME_silent
                     app.logCaught(ME_silent, 'processFrameInternal:data-sync');
@@ -13978,6 +13981,17 @@ function i_restoreIsUpdating(app, fIdx, prevValue)
         if isempty(app) || ~isvalid(app), return; end
         if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
             app.IsUpdating(fIdx) = logical(prevValue);
+        end
+    catch
+    end
+end
+
+function restoreVideoSyncFlags(app, fIdx, prevDraggedFromVideo, prevUpdating)
+    try
+        if isempty(app) || ~isvalid(app), return; end
+        app.DraggedFromVideo = logical(prevDraggedFromVideo);
+        if fIdx >= 1 && fIdx <= numel(app.IsUpdating)
+            app.IsUpdating(fIdx) = logical(prevUpdating);
         end
     catch
     end
