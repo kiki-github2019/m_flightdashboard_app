@@ -2184,8 +2184,10 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         clear f img;
         try drawnow limitrate; catch; end
         ok = isfile(file);
-        if ok, status = 'saved'; end
-        if ok, return; end
+        if ok
+            status = 'saved';
+            return;
+        end
     catch
     end
     try
