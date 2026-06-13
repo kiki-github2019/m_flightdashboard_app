@@ -1289,20 +1289,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.projectRestoreRequired = true;
             exp.projectRestoreKind = char(act.args{1});
             exp.projectSafeFailureRequired = false;
-            % v-fixB4: project 복원은 저장된 UiState(preset/PanelVisible)를 그대로
-            % 적용하므로 expected 가 fixture 가 설정한 값을 반영해야 함.
-            switch exp.projectRestoreKind
-                case 'layout_hsplit_grid'
-                    % fixture 가 UiState.Layout.CurrentLayoutPreset='layout-hsplit' 설정 (case115)
-                    exp.currentLayoutPreset = 'layout-hsplit';
-                case 'hidden_panel_columns'
-                    % fixture 가 양 보드 info/dataView=false 설정 (case116) — board 복원과 달리
-                    % project 복원은 ensureBoardCorePanelsVisible 강제 없이 저장값 그대로 적용.
-                    for bIdx = 1:2
-                        exp.panel(bIdx).info = false;
-                        exp.panel(bIdx).dataView = false;
-                    end
-            end
+            exp = i_applyProjectFixtureExpected(exp, exp.projectRestoreKind);
         case 'loadProjectFixtureSafeFailure'
             exp.projectSafeFailureRequired = true;
             exp.projectSafeFailureKind = char(act.args{1});
@@ -1348,6 +1335,34 @@ function exp = i_updateExpectedLayoutPreset(exp, presetName)
     end
     exp.currentLayoutPreset = presetName;
     % v4: exp.panel, exp.boardOff, exp.summaryVisible, exp.sourceColumnsHidden 변경 금지
+end
+
+function exp = i_applyProjectFixtureExpected(exp, kind)
+    % v-fixB4: project 복원은 저장된 UiState(preset/PanelVisible)를 그대로 적용하므로
+    % expected 가 fixture 가 설정한 값을 반영해야 한다. fixture 별 expected 보정의
+    % 단일 소스. (loadProjectFixture 경로에서 호출)
+    switch char(kind)
+        case 'layout_hsplit_grid'
+            % fixture 가 UiState.Layout.CurrentLayoutPreset='layout-hsplit' 설정 (case115)
+            exp.currentLayoutPreset = 'layout-hsplit';
+        case 'hidden_panel_columns'
+            % fixture 가 양 보드 info/dataView=false 설정 (case116) — board 복원과 달리
+            % project 복원은 ensureBoardCorePanelsVisible 강제 없이 저장값 그대로 적용.
+            for bIdx = 1:2
+                exp.panel(bIdx).info = false;
+                exp.panel(bIdx).dataView = false;
+            end
+        % 아래 fixture 들은 별도 expected override 불필요 — 현재 runner 에서 이미 정합:
+        %   layout_lower_board_off / layout_upper_board_off: 케이스가 PR 이전에
+        %       BV(2)/BV(1) 로 board-off 를 선행 → exp.boardOff 가 toggleBoardVisibility
+        %       off-branch 에서 이미 설정됨. i_validateProjectRestore 도 board-off 검증.
+        %   flight_sync: i_validateProjectRestore 가 SyncState 직접 검증 (PASS 중).
+        %   video_sync_with_avi: exp.videoSynced 미설정 → i_validateState 의 동기 검증은
+        %       conditional 이라 미발화. 유일 실패였던 altitude marker/xline 콜백은
+        %       FDD 측(ensureAltitudeMarkerCallbacks)에서 해소 → 여기 expected 보정 불필요.
+        otherwise
+            % 기타 fixture (full/data_only/manual_axis_limits/...) — 보정 없음.
+    end
 end
 
 function idx = i_clampIndex(st, fIdx, value)
