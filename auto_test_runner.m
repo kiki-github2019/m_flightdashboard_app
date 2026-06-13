@@ -2392,9 +2392,15 @@ function i_tempProjectFileRegistry(mode, path)
         case 'cleanup'
             for k = 1:numel(registry)
                 p = registry{k};
-                try
-                    if isfile(p), delete(p); end
-                catch
+                cleanupTargets = {p, [p '.autosave.json']};
+                for targetIdx = 1:numel(cleanupTargets)
+                    try
+                        if isfile(cleanupTargets{targetIdx})
+                            delete(cleanupTargets{targetIdx});
+                        end
+                    catch
+                        % Best-effort temp project cleanup only.
+                    end
                 end
             end
             registry = {};

@@ -664,10 +664,15 @@
                     %         ProjectFilePath 를 사전 세팅/초기화하는 테스트 전용 setter.
                     % v-fixM4: varargout{1} = 이전 값. 호출측이 복원에 사용 가능.
                     if nargout >= 1, varargout{1} = char(app.ProjectFilePath); end
-                    if isempty(varargin)
+                    if isempty(varargin) || isempty(varargin{1})
                         app.ProjectFilePath = '';
                     else
-                        app.ProjectFilePath = char(varargin{1});
+                        app.ProjectFilePath = app.normalizeAbsPath(varargin{1});
+                    end
+                    try
+                        app.refreshProjectTab();
+                    catch ME_pathRefresh
+                        app.logCaught(ME_pathRefresh, 'testHook:setProjectFilePath:refreshProjectTab');
                     end
                 case 'editDialogApplyOptionDraft',    app.editDialogApplyOptionDraft();
                 case 'capturePlotConfigAndRefresh',   app.capturePlotConfigAndRefresh();
@@ -2444,7 +2449,9 @@
                 targetTime = max(times(1), min(targetTime, times(end)));
                 idx = app.findClosestIndexByTime(times, targetTime);
 
-                if ~isequal(app.Models(fIdx).currentIndex, idx)
+                indexChanged = ~isequal(app.Models(fIdx).currentIndex, idx);
+                finalRefresh = strcmp(mode, 'final');
+                if indexChanged || finalRefresh
                     prevDraggedFromVideo = app.DraggedFromVideo;
                     prevUpdating = app.IsUpdating(fIdx);
                     app.DraggedFromVideo = true;
@@ -2452,7 +2459,9 @@
                         fIdx, prevDraggedFromVideo, prevUpdating));
                     try
                         if strcmp(mode, 'drag')
-                            app.updateMarkersOnly(fIdx, idx);
+                            if indexChanged
+                                app.updateMarkersOnly(fIdx, idx);
+                            end
                         else
                             app.IsUpdating(fIdx) = true;
                             app.Models(fIdx).currentIndex = idx;
@@ -2497,19 +2506,10 @@
                     % drag 모드는 updateMarkersOnly만 호출 → 테이블/게이지 stale 가능
                     % final 모드 1회 강제 호출로 전체 동기화 보장
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
-                        % v-fixL11: 기존 IsUpdating(fIdx)=true → catch → false 패턴은
-                        %           이전 값(다른 경로에서 set true)을 false 로 덮어쓸 위험.
-                        %           restoreIsUpdating (private method) + onCleanup 으로 이전값 복원.
-                        prevUpdating = app.IsUpdating(fIdx);
-                        app.IsUpdating(fIdx) = true;
-                        cleanupUpdating = onCleanup(@() app.restoreIsUpdating(fIdx, prevUpdating));
-                        try
-                            app.updateDashboard(fIdx, app.Models(fIdx).currentIndex);
-                        catch ME_sliderSync
-                            app.logCaught(ME_sliderSync, 'onVdubSliderChanged:final-sync');
-                        end
-                        delete(cleanupUpdating);
+                        app.syncDataSideToFrame(fIdx, target, 'final');
+                        app.refreshBoardOffSummaryPanel(fIdx);
                     end
+                    app.prefetchAdjacentFrames(fIdx);
                     return;
                 end
                 app.goToFrame(fIdx, src.Value, 'final');
