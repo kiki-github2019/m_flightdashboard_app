@@ -1,0 +1,21 @@
+#!/bin/sh
+# Opt-in pre-commit hook: run the MATLAB heuristic linter on staged .m files.
+# Advisory by default (does NOT block the commit). To make it blocking, change
+# the final `exit 0` to `exit "$rc"`.
+#
+# Install:  cp tools/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+root="$(git rev-parse --show-toplevel)"
+files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.m$' || true)
+[ -z "$files" ] && exit 0
+
+py=$(command -v python3 || command -v python)
+[ -z "$py" ] && { echo "pre-commit: python not found, skipping lint"; exit 0; }
+
+# shellcheck disable=SC2086
+"$py" "$root/tools/lint_matlab.py" $files
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "pre-commit: lint_matlab reported $rc HIGH/MEDIUM finding(s) (advisory)."
+fi
+exit 0

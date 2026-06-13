@@ -166,3 +166,6 @@ doc/
 - Critical 1~3 / Major 1~6 안정화 패치
 
 자세한 내역은 `git log --oneline` 참조.
+
+## 정적 린트 (opt-in)
+`python tools/lint_matlab.py FlightDataDashboard.m auto_test_runner.m` — MATLAB `.m` 휴리스틱 린터(사용법: `doc/lint-matlab-usage.md`, pre-commit hook 설치는 사용자 선택).
