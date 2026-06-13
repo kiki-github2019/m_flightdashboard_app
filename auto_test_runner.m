@@ -2101,13 +2101,15 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
     % 일반 step 캡처는 상태 왜곡 없이 skip(+콘솔 기록), 'fail' 진단 캡처만 정지 후 진행.
     try
         st = app.testHook('getTestState');
-        activeFp = [];
+        % v-fixL4: false(1,2) 마스크 + find — n=2 한정이라 무해하지만 더 관용적.
+        activeMask = false(1, 2);
         for fp = 1:2
             if numel(st.boards) >= fp && isfield(st.boards(fp), 'flightPlay') ...
                     && logical(st.boards(fp).flightPlay.playActive)
-                activeFp(end+1) = fp; %#ok<AGROW>
+                activeMask(fp) = true;
             end
         end
+        activeFp = find(activeMask);
         if ~isempty(activeFp)
             if strcmpi(reason, 'fail')
                 for fp = activeFp
