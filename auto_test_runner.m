@@ -1293,6 +1293,20 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.projectRestoreRequired = true;
             exp.projectRestoreKind = char(act.args{1});
             exp.projectSafeFailureRequired = false;
+            % v-fixB4: project 복원은 저장된 UiState(preset/PanelVisible)를 그대로
+            % 적용하므로 expected 가 fixture 가 설정한 값을 반영해야 함.
+            switch exp.projectRestoreKind
+                case 'layout_hsplit_grid'
+                    % fixture 가 UiState.Layout.CurrentLayoutPreset='layout-hsplit' 설정 (case115)
+                    exp.currentLayoutPreset = 'layout-hsplit';
+                case 'hidden_panel_columns'
+                    % fixture 가 양 보드 info/dataView=false 설정 (case116) — board 복원과 달리
+                    % project 복원은 ensureBoardCorePanelsVisible 강제 없이 저장값 그대로 적용.
+                    for bIdx = 1:2
+                        exp.panel(bIdx).info = false;
+                        exp.panel(bIdx).dataView = false;
+                    end
+            end
         case 'loadProjectFixtureSafeFailure'
             exp.projectSafeFailureRequired = true;
             exp.projectSafeFailureKind = char(act.args{1});
