@@ -2477,12 +2477,18 @@
                     % drag 모드는 updateMarkersOnly만 호출 → 테이블/게이지 stale 가능
                     % final 모드 1회 강제 호출로 전체 동기화 보장
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
+                        % v-fixL11: 기존 IsUpdating(fIdx)=true → catch → false 패턴은
+                        %           이전 값(다른 경로에서 set true)을 false 로 덮어쓸 위험.
+                        %           i_restoreIsUpdating + onCleanup 으로 이전값 복원.
+                        prevUpdating = app.IsUpdating(fIdx);
                         app.IsUpdating(fIdx) = true;
+                        cleanupUpdating = onCleanup(@() i_restoreIsUpdating(app, fIdx, prevUpdating));
                         try
                             app.updateDashboard(fIdx, app.Models(fIdx).currentIndex);
-                        catch
+                        catch ME_sliderSync
+                            app.logCaught(ME_sliderSync, 'onVdubSliderChanged:final-sync');
                         end
-                        app.IsUpdating(fIdx) = false;
+                        delete(cleanupUpdating);
                     end
                     return;
                 end
