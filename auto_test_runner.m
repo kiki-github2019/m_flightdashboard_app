@@ -1,3 +1,4 @@
+% encoding: UTF-8
 function auto_test_runner(varargin)
 %AUTO_TEST_RUNNER  FlightDataDashboard 보드 off/on + 패널 토글 50 케이스 회귀.
 %
@@ -586,12 +587,24 @@ function app = i_setupFreshApp(needAvi)
     catch setupErr
         try
             if ~isempty(app) && isvalid(app)
-                try i_closeAppDialogs(app); catch; end
-                try delete(app); catch; end
+                try
+                    i_closeAppDialogs(app);
+                catch
+                    % Best-effort cleanup only.
+                end
+                try
+                    delete(app);
+                catch
+                    % Best-effort cleanup only.
+                end
             end
         catch
         end
-        try i_aggressiveCleanup(); catch; end
+        try
+            i_aggressiveCleanup();
+        catch
+            % Best-effort cleanup only.
+        end
         app = [];
         rethrow(setupErr);
     end
@@ -990,7 +1003,11 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if ~isempty(hookErr)
                 fprintf(2, '  [editDialogSaveProject] EDIT_SAVE_PROJECT_HOOK_ERROR: %s\n', hookErr.message);
                 % v-fixM6: ring buffer 에도 보존 (app.dumpErrorLog 로 사후 조사 가능)
-                try app.logCaught(hookErr, 'runner:editDialogSaveProject:getTestState'); catch; end
+                try
+                    app.logCaught(hookErr, 'runner:editDialogSaveProject:getTestState');
+                catch
+                    % Preserve original hook error.
+                end
                 error('AutoTest:EditSaveProjectHookError', ...
                     'getTestState/ProjectFilePath 조회 실패: %s', hookErr.message);
             end
@@ -2172,7 +2189,11 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
     catch ME_activeFp
         % v-fixM6: app ring buffer 에도 흔적 — getTestState / flightPlay 필드 schema
         %          오류가 silent 로 사라지지 않도록.
-        try app.logCaught(ME_activeFp, 'runner:i_capture:flightPlayActiveProbe'); catch; end
+        try
+            app.logCaught(ME_activeFp, 'runner:i_capture:flightPlayActiveProbe');
+        catch
+            % Continue capture fallback without masking the probe result.
+        end
     end
     % main figure (suffix 없음 — legacy 파일명 호환)
     mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
@@ -2231,7 +2252,11 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         end
         imwrite(img, file);
         clear f img;
-        try drawnow limitrate; catch; end
+        try
+            drawnow limitrate;
+        catch
+            % Capture result already written; draw flush is non-critical.
+        end
         ok = isfile(file);
         if ok
             status = 'saved';
@@ -2241,7 +2266,11 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
     end
     try
         exportapp(figh, file);
-        try drawnow limitrate; catch; end
+        try
+            drawnow limitrate;
+        catch
+            % Capture result already written; draw flush is non-critical.
+        end
         ok = isfile(file);
         % v-fixM5: exportapp fallback 경로도 dedup 적용 — 저장된 PNG 를 imread 로
         %          다시 읽어 signature 비교. fallback 끼리 dup 인식 가능.
@@ -2254,7 +2283,11 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
                 if i_captureDuplicate([i_captureTargetKey(figh) '|ea'], sig2, false)
                     status = 'duplicate';
                     i_captureDuplicateFile('add', file);
-                    try delete(file); catch; end
+                    try
+                        delete(file);
+                    catch
+                        % Duplicate cleanup is best-effort.
+                    end
                     ok = false;
                     return;
                 end
@@ -2430,7 +2463,11 @@ function dlgs = i_collectOpenDialogs(app)
         end
     catch ME_dlg
         % v-fixM6: ring buffer 에도 흔적 (hook 실패가 silent 로 cell(0,2) 만 반환되던 것)
-        try app.logCaught(ME_dlg, 'runner:i_collectOpenDialogs'); catch; end
+        try
+            app.logCaught(ME_dlg, 'runner:i_collectOpenDialogs');
+        catch
+            % Fall back to empty dialog set below.
+        end
         dlgs = cell(0, 2);
     end
 end
@@ -2562,7 +2599,11 @@ function fid = i_progressMdHandle(mode, progressFile)
     switch lower(char(mode))
         case 'init'
             if currentFid > 0
-                try fclose(currentFid); catch; end
+                try
+                    fclose(currentFid);
+                catch
+                    % Continue by reopening the progress file.
+                end
             end
             currentFid = -1; currentPath = '';
             if isempty(p), fid = -1; return; end
@@ -2574,7 +2615,11 @@ function fid = i_progressMdHandle(mode, progressFile)
                 fid = currentFid; return;
             end
             if currentFid > 0
-                try fclose(currentFid); catch; end
+                try
+                    fclose(currentFid);
+                catch
+                    % Continue by reopening the progress file.
+                end
             end
             currentFid = -1; currentPath = '';
             if isempty(p), fid = -1; return; end
@@ -2583,7 +2628,11 @@ function fid = i_progressMdHandle(mode, progressFile)
             fid = currentFid;
         case 'close'
             if currentFid > 0
-                try fclose(currentFid); catch; end
+                try
+                    fclose(currentFid);
+                catch
+                    % Best-effort close.
+                end
             end
             currentFid = -1; currentPath = '';
             fid = -1;
