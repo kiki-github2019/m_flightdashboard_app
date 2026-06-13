@@ -941,6 +941,8 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             end
             if ~isempty(hookErr)
                 fprintf(2, '  [editDialogSaveProject] EDIT_SAVE_PROJECT_HOOK_ERROR: %s\n', hookErr.message);
+                % v-fixM6: ring buffer 에도 보존 (app.dumpErrorLog 로 사후 조사 가능)
+                try app.logCaught(hookErr, 'runner:editDialogSaveProject:getTestState'); catch; end
                 error('AutoTest:EditSaveProjectHookError', ...
                     'getTestState/ProjectFilePath 조회 실패: %s', hookErr.message);
             end
@@ -2111,7 +2113,10 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
                 return;
             end
         end
-    catch
+    catch ME_activeFp
+        % v-fixM6: app ring buffer 에도 흔적 — getTestState / flightPlay 필드 schema
+        %          오류가 silent 로 사라지지 않도록.
+        try app.logCaught(ME_activeFp, 'runner:i_capture:flightPlayActiveProbe'); catch; end
     end
     % main figure (suffix 없음 — legacy 파일명 호환)
     mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
@@ -2365,7 +2370,9 @@ function dlgs = i_collectOpenDialogs(app)
         if ~iscell(dlgs) || size(dlgs, 2) ~= 2
             dlgs = cell(0, 2);
         end
-    catch
+    catch ME_dlg
+        % v-fixM6: ring buffer 에도 흔적 (hook 실패가 silent 로 cell(0,2) 만 반환되던 것)
+        try app.logCaught(ME_dlg, 'runner:i_collectOpenDialogs'); catch; end
         dlgs = cell(0, 2);
     end
 end
