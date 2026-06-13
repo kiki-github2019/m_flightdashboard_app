@@ -115,7 +115,8 @@ function auto_test_runner(varargin)
     pendingSafeWarnings = safeWarnings;
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
-                            'status', 'SKIPPED', 'steps', 0, 'error', ''), nCases, 1);
+                            'status', 'SKIPPED', 'steps', 0, 'error', '', ...
+                            'captureError', ''), nCases, 1);
     for i = 1:nCases
         results(i).id    = i;
         results(i).group = cases(i).group;
@@ -144,7 +145,8 @@ function auto_test_runner(varargin)
 
         if isfield(tc, 'skipReason') && ~isempty(tc.skipReason)
             r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
-                       'status', 'SKIPPED', 'steps', 0, 'error', char(tc.skipReason));
+                       'status', 'SKIPPED', 'steps', 0, 'error', char(tc.skipReason), ...
+                       'captureError', '');
             results(i) = r;
             i_writeCaseMd(outDir, i, tc, r);
             i_appendProgressMd(progressFile, i, 0, 'SKIPPED', r.error);
@@ -155,7 +157,8 @@ function auto_test_runner(varargin)
         if tc.requireAvi && strcmp(loadAviMode, 'never')
             r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SKIPPED', 'steps', 0, ...
-                       'error', 'LoadAvi=never: AVI-required case skipped');
+                       'error', 'LoadAvi=never: AVI-required case skipped', ...
+                       'captureError', '');
             results(i) = r;
             i_writeCaseMd(outDir, i, tc, r);
             i_appendProgressMd(progressFile, i, 0, 'SKIPPED', r.error);
@@ -182,7 +185,8 @@ function auto_test_runner(varargin)
             r   = i_runCase(app, tc, i, outDir, progressFile, captureOpts);
         catch ME
             r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
-                       'status', 'SETUP_FAIL', 'steps', 0, 'error', i_errorReport(ME));
+                       'status', 'SETUP_FAIL', 'steps', 0, 'error', i_errorReport(ME), ...
+                       'captureError', '');
             i_appendProgressMd(progressFile, i, 0, 'SETUP_FAIL', r.error);
             fprintf('  SETUP_FAIL: %s\n', ME.message);
         end
@@ -579,7 +583,7 @@ end
 % =========================================================================
 function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
     r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
-               'status', 'PASS', 'steps', 0, 'error', '');
+               'status', 'PASS', 'steps', 0, 'error', '', 'captureError', '');
 
     i_settleUi(1);
     try
@@ -655,9 +659,16 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_SKIPPED', captureOpts.mode);
             end
         catch ME
-            r.status = 'CAPTURE_FAIL';
-            r.error  = sprintf('step %d (%s): %s\n%s', j + 1, act.label, ME.message, i_errorReport(ME));
-            i_appendProgressMd(progressFile, caseIdx, r.steps, r.status, r.error);
+            % v-fixH1: 액션이 이미 EXCEPTION/FAIL 로 끝났으면 그 메시지가 회귀 분석의 1차
+            %          단서 — capture 실패가 덮어쓰지 않도록 별도 captureError 에 보존.
+            capMsg = sprintf('step %d (%s): %s\n%s', j + 1, act.label, ME.message, i_errorReport(ME));
+            if strcmp(r.status, 'PASS')
+                r.status = 'CAPTURE_FAIL';
+                r.error  = capMsg;
+            else
+                r.captureError = capMsg;
+            end
+            i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_FAIL', capMsg);
             fprintf('  CAPTURE_FAIL at step %d: %s\n', j + 1, ME.message);
         end
         if strcmp(r.status, 'EXCEPTION'), break; end
@@ -2433,6 +2444,9 @@ function i_writeCaseMd(outDir, idx, tc, r)
 
     if ~isempty(r.error)
         fprintf(fid, '\n## Failure Detail\n```\n%s\n```\n', r.error);
+    end
+    if isfield(r, 'captureError') && ~isempty(r.captureError)
+        fprintf(fid, '\n## Capture Failure (secondary)\n```\n%s\n```\n', r.captureError);
     end
     clear closeFid;
 end
