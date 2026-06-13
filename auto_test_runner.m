@@ -23,6 +23,7 @@ function auto_test_runner(varargin)
 %       'LoadAvi' (default 'lazy') : 'lazy' | 'always' | 'never'
 %       'CaptureMode' (default 'baseline') : 'all' | 'baseline' | 'fail' | 'none'
 %       'CaptureScale' (default 0.60) : PNG 축소 비율, 0 < value <= 1
+%       'DeduplicateCaptures' (default true) : 연속 중복 PNG 저장 생략
 %
 %   사용:
 %       >> auto_test_runner                                       % 전체, asc
@@ -46,6 +47,7 @@ function auto_test_runner(varargin)
     p.addParameter('LoadAvi', 'lazy', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureMode', 'baseline', @(s) ischar(s) || isstring(s));
     p.addParameter('CaptureScale', 0.60, @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0 && x <= 1);
+    p.addParameter('DeduplicateCaptures', true, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
     p.addParameter('OnlineSafeMode', false, @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
     p.addParameter('OutputDir', '', @(s) ischar(s) || isstring(s));
     p.parse(varargin{:});
@@ -81,7 +83,9 @@ function auto_test_runner(varargin)
             warning('auto_test_runner:OnlineSafeMode', '%s', safeWarnings{sw});
         end
     end
-    captureOpts = struct('mode', captureMode, 'scale', captureScale);
+    captureOpts = struct('mode', captureMode, 'scale', captureScale, ...
+                         'deduplicate', logical(opts.DeduplicateCaptures));
+    i_captureDuplicate('', '', true);
 
     % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
     if ~isempty(char(opts.OutputDir))
@@ -131,6 +135,16 @@ function auto_test_runner(varargin)
         end
         fprintf('\n[%02d/%02d] %s | %s\n', i, nCases, tc.group, tc.title);
         i_appendProgressMd(progressFile, i, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
+
+        if isfield(tc, 'skipReason') && ~isempty(tc.skipReason)
+            r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
+                       'status', 'SKIPPED', 'steps', 0, 'error', char(tc.skipReason));
+            results(i) = r;
+            i_writeCaseMd(outDir, i, tc, r);
+            i_appendProgressMd(progressFile, i, 0, 'SKIPPED', r.error);
+            fprintf('  SKIPPED: %s\n', r.error);
+            continue;
+        end
 
         if tc.requireAvi && strcmp(loadAviMode, 'never')
             r = struct('id', i, 'group', tc.group, 'title', tc.title, ...
@@ -564,8 +578,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
     i_settleUi(1);
     try
         i_appendProgressMd(progressFile, caseIdx, 1, 'BASELINE_CAPTURE_START', 'capture initial dashboard');
-        if i_capture(app, outDir, caseIdx, 1, captureOpts, 'baseline')
+        [captured, captureStatus] = i_capture(app, outDir, caseIdx, 1, captureOpts, 'baseline');
+        if captured
             i_appendProgressMd(progressFile, caseIdx, 1, 'BASELINE_CAPTURE_DONE', 'baseline image saved');
+        elseif strcmp(captureStatus, 'duplicate')
+            i_appendProgressMd(progressFile, caseIdx, 1, 'BASELINE_CAPTURE_DUPLICATE_SKIPPED', 'duplicate image skipped');
         else
             i_appendProgressMd(progressFile, caseIdx, 1, 'BASELINE_CAPTURE_SKIPPED', captureOpts.mode);
         end
@@ -585,8 +602,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
         r.status = 'FAIL';
         r.error = sprintf('baseline validation: %s', msg);
         try
-            if i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail')
+            [captured, captureStatus] = i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail');
+            if captured
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_DONE', 'baseline validation');
+            elseif strcmp(captureStatus, 'duplicate')
+                i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_DUPLICATE_SKIPPED', 'duplicate image skipped');
             else
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_SKIPPED', captureOpts.mode);
             end
@@ -620,8 +640,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
             if strcmp(r.status, 'EXCEPTION')
                 captureReason = 'fail';
             end
-            if i_capture(app, outDir, caseIdx, r.steps, captureOpts, captureReason)
+            [captured, captureStatus] = i_capture(app, outDir, caseIdx, r.steps, captureOpts, captureReason);
+            if captured
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_DONE', act.label);
+            elseif strcmp(captureStatus, 'duplicate')
+                i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_DUPLICATE_SKIPPED', act.label);
             else
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_SKIPPED', captureOpts.mode);
             end
@@ -640,8 +663,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
             r.status = 'FAIL';
             r.error = sprintf('step %d (%s): %s', j + 1, act.label, msg);
             try
-                if i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail')
+                [captured, captureStatus] = i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail');
+                if captured
                     i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_DONE', act.label);
+                elseif strcmp(captureStatus, 'duplicate')
+                    i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_DUPLICATE_SKIPPED', act.label);
                 else
                     i_appendProgressMd(progressFile, caseIdx, r.steps, 'FAIL_CAPTURE_SKIPPED', captureOpts.mode);
                 end
@@ -846,13 +872,13 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, act.args{:});
         % v-runner: EditDialog dispatch (모든 boardOff 상태에서 허용)
         case {'openEditDialog','closeEditDialog','applyPendingDialogChanges', ...
-              'editDialogSaveProject','editDialogApplyOptionDraft', ...
+              'editDialogApplyOptionDraft', ...
               'capturePlotConfigAndRefresh','editDialogRebuildPlots','editDialogApplyPlotProps', ...
               'editDialogSyncTabXLimAll','editDialogSyncSelectedPlotXLimAll'}
             app.testHook(act.fn);
         case {'editDialogToggleXAuto','editDialogToggleYAuto','switchEditDialogTab'}
             app.testHook(act.fn, act.args{:});
-        case {'editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
+        case {'editDialogSaveProject','editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
             % v5-L: 모달 파일 dialog 로 사용자 입력 대기 → 자동 러너 hang 위험. 별도 러너 사용.
             error('AutoTest:UserInputActionBlocked', ...
                 'action %s waits for user input - run auto_test_runner_under_user instead', act.fn);
@@ -1988,8 +2014,9 @@ end
 % =========================================================================
 % Capture helpers
 % =========================================================================
-function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason)
+function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason)
     captured = false;
+    status = 'skipped';
     if nargin < 6 || isempty(reason), reason = 'step'; end
     if ~i_shouldCapture(captureOpts, reason)
         return;
@@ -2021,20 +2048,28 @@ function captured = i_capture(app, outDir, caseIdx, stepIdx, captureOpts, reason
     end
     % main figure (suffix 없음 — legacy 파일명 호환)
     mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
-    captured = i_captureFigure(app.UIFigure, mainFile, captureOpts);
-    % v-fix3: 열린 외부 dashboard dialog 도 함께 캡처 (figure type suffix)
+    [captured, status] = i_captureFigure(app.UIFigure, mainFile, captureOpts);
+    mainDuplicate = strcmp(status, 'duplicate');
+    % v-fix3: 열린 외부 dashboard dialog 도 함께 캡처. main dedup 여부와 무관 —
+    % main 동일 상태에서 새 dialog 가 열린 경우 (EditDialog/SyncSearch 등) 누락 방지.
     extras = i_collectOpenDialogs(app);
     for e = 1:size(extras, 1)
         f2 = fullfile(outDir, sprintf('case%02d_step%02d_%s.png', caseIdx, stepIdx, extras{e, 2}));
         try i_captureFigure(extras{e, 1}, f2, captureOpts); catch; end
     end
-    if ~captured
+    if ~captured && ~mainDuplicate
         error('AutoTest:CaptureFailed', 'Failed to capture %s', mainFile);
+    end
+    if mainDuplicate
+        status = 'duplicate';
+    else
+        status = 'saved';
     end
 end
 
-function ok = i_captureFigure(figh, file, captureOpts)
+function [ok, status] = i_captureFigure(figh, file, captureOpts)
     ok = false;
+    status = 'failed';
     if isempty(figh) || ~isvalid(figh), return; end
     try
         f = getframe(figh);
@@ -2042,10 +2077,20 @@ function ok = i_captureFigure(figh, file, captureOpts)
         if captureOpts.scale < 1
             img = i_resizeImageNearest(img, captureOpts.scale);
         end
+        if isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
+            sig = i_captureImageSignature(img);
+            if i_captureDuplicate(i_captureTargetKey(figh), sig, false)
+                status = 'duplicate';
+                i_writeText([file '.duplicate.txt'], 'duplicate capture skipped');
+                clear f img;
+                return;
+            end
+        end
         imwrite(img, file);
         clear f img;
         try drawnow limitrate; catch; end
         ok = isfile(file);
+        if ok, status = 'saved'; end
         if ok, return; end
     catch
     end
@@ -2053,8 +2098,56 @@ function ok = i_captureFigure(figh, file, captureOpts)
         exportapp(figh, file);
         try drawnow limitrate; catch; end
         ok = isfile(file);
+        if ok, status = 'saved'; end
     catch
     end
+end
+
+function key = i_captureTargetKey(figh)
+    key = 'figure';
+    try
+        if isprop(figh, 'Name') && ~isempty(figh.Name)
+            key = char(figh.Name);
+        elseif isprop(figh, 'Title') && ~isempty(figh.Title)
+            key = char(figh.Title);
+        end
+    catch
+    end
+end
+
+function sig = i_captureImageSignature(img)
+    try
+        md = java.security.MessageDigest.getInstance('MD5');
+        md.update(uint8(img(:)));
+        raw = typecast(md.digest(), 'uint8');
+        sig = lower(reshape(dec2hex(raw, 2).', 1, []));
+    catch
+        strideR = max(1, floor(size(img, 1) / 80));
+        strideC = max(1, floor(size(img, 2) / 80));
+        sample = double(img(1:strideR:end, 1:strideC:end, :));
+        sig = sprintf('%dx%dx%d:%0.0f:%0.0f', ...
+            size(img, 1), size(img, 2), size(img, 3), ...
+            sum(sample(:)), sum(sample(:) .* sample(:)));
+    end
+end
+
+function duplicate = i_captureDuplicate(key, sig, reset)
+    persistent lastSigByKey
+    duplicate = false;
+    if nargin >= 3 && reset
+        lastSigByKey = containers.Map('KeyType', 'char', 'ValueType', 'char');
+        return;
+    end
+    if isempty(lastSigByKey)
+        lastSigByKey = containers.Map('KeyType', 'char', 'ValueType', 'char');
+    end
+    key = char(key);
+    sig = char(sig);
+    if isKey(lastSigByKey, key) && strcmp(lastSigByKey(key), sig)
+        duplicate = true;
+        return;
+    end
+    lastSigByKey(key) = sig;
 end
 
 function dlgs = i_collectOpenDialogs(app)
@@ -2230,8 +2323,11 @@ end
 
 function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
     name = sprintf('case%02d_step%02d.png', caseIdx, stepIdx);
-    if isfile(fullfile(outDir, name))
+    filePath = fullfile(outDir, name);
+    if isfile(filePath)
         txt = sprintf('![](%s)', name);
+    elseif isfile([filePath '.duplicate.txt'])
+        txt = '(duplicate skipped)';
     else
         txt = '(not captured)';
     end
@@ -2313,7 +2409,6 @@ function cases = i_buildCaseMatrix()
     OED = @(lbl)               struct('fn','openEditDialog',                'args',{{}},          'label',lbl, 'row',NaN);
     CED = @(lbl)               struct('fn','closeEditDialog',               'args',{{}},          'label',lbl, 'row',NaN);
     APD = @(lbl)               struct('fn','applyPendingDialogChanges',     'args',{{}},          'label',lbl, 'row',NaN);
-    EDS = @(lbl)               struct('fn','editDialogSaveProject',         'args',{{}},          'label',lbl, 'row',NaN);
     EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
     SSA = @(fk, tv, lbl)       struct('fn','setPendingSyncAnchor',          'args',{{fk, tv}},   'label',lbl, 'row',NaN);
     SSAM = @(fk, tv, src, ix, vl, lbl) struct('fn','setPendingSyncAnchor',  'args',{{fk, tv, src, ix, vl}}, 'label',lbl, 'row',NaN);
@@ -2350,9 +2445,11 @@ function cases = i_buildCaseMatrix()
     CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
-        'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false, 'forbidAvi', false);
+        'target', tgt, 'expected', exp, 'actions', {acts}, 'requireAvi', false, ...
+        'forbidAvi', false, 'skipReason', '');
 
-    cases = struct('group',{}, 'title',{}, 'target',{}, 'expected',{}, 'actions',{}, 'requireAvi',{}, 'forbidAvi',{});
+    cases = struct('group',{}, 'title',{}, 'target',{}, 'expected',{}, 'actions',{}, ...
+                   'requireAvi',{}, 'forbidAvi',{}, 'skipReason',{});
 
     %% Group A — 보드 off 없음 (5)
     cases(end + 1) = mk('A','A01 기본 로드','','baseline 캡처', {});
@@ -2598,8 +2695,8 @@ function cases = i_buildCaseMatrix()
         'apply pending', 'applyPendingDialogChanges 호출', ...
         {OED('open'), APD('apply pending'), CED('close')});
     cases(end + 1) = mk('G-EDIT','G-EDIT-09 project save through EditDialog', ...
-        'project save', 'editDialogSaveProject 호출', ...
-        {OED('open'), SET('Project','tab=Project'), EDS('save project'), CED('close')});
+        'project save', 'requires user-selected project file path', {});
+    cases(end).skipReason = 'ProjectFilePath may be empty and editDialogSaveProject can open uiputfile.';
     cases(end + 1) = mk('G-EDIT','G-EDIT-10 close auto-applies pending changes', ...
         'close finalize', 'close 시 pending apply', ...
         {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply'), CED('close')});
