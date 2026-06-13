@@ -659,6 +659,14 @@
                 case 'applyPendingDialogChanges',     app.applyPendingDialogChanges();
                 case 'editDialogSaveProject',         app.editDialogSaveProject();
                 case 'editDialogSaveProjectAs',       app.editDialogSaveProjectAs();
+                case 'setProjectFilePath'
+                    % v-fixG: 자동 러너가 비모달 editDialogSaveProject 경로를 타게 하려고
+                    %         ProjectFilePath 를 사전 세팅/초기화하는 테스트 전용 setter.
+                    if isempty(varargin)
+                        app.ProjectFilePath = '';
+                    else
+                        app.ProjectFilePath = char(varargin{1});
+                    end
                 case 'editDialogApplyOptionDraft',    app.editDialogApplyOptionDraft();
                 case 'capturePlotConfigAndRefresh',   app.capturePlotConfigAndRefresh();
                 case 'editDialogRebuildPlots',        app.editDialogRebuildPlots();

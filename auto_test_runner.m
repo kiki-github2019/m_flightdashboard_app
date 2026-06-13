@@ -876,9 +876,20 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
               'capturePlotConfigAndRefresh','editDialogRebuildPlots','editDialogApplyPlotProps', ...
               'editDialogSyncTabXLimAll','editDialogSyncSelectedPlotXLimAll'}
             app.testHook(act.fn);
-        case {'editDialogToggleXAuto','editDialogToggleYAuto','switchEditDialogTab'}
+        case {'editDialogToggleXAuto','editDialogToggleYAuto','switchEditDialogTab', ...
+              'setProjectFilePath'}
             app.testHook(act.fn, act.args{:});
-        case {'editDialogSaveProject','editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
+        case 'editDialogSaveProject'
+            % v-fixG: ProjectFilePath 가 비어 있으면 uiputfile 이 떠서 hang —
+            %         setPath 가 선행되었는지 확인 후에만 실행.
+            curPath = '';
+            try st = app.testHook('getTestState'); curPath = char(st.ProjectFilePath); catch; end
+            if isempty(curPath)
+                error('AutoTest:UserInputActionBlocked', ...
+                    'editDialogSaveProject without preset ProjectFilePath would open uiputfile - use setProjectFilePath first.');
+            end
+            app.testHook(act.fn);
+        case {'editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
             % v5-L: 모달 파일 dialog 로 사용자 입력 대기 → 자동 러너 hang 위험. 별도 러너 사용.
             error('AutoTest:UserInputActionBlocked', ...
                 'action %s waits for user input - run auto_test_runner_under_user instead', act.fn);
@@ -2409,6 +2420,8 @@ function cases = i_buildCaseMatrix()
     OED = @(lbl)               struct('fn','openEditDialog',                'args',{{}},          'label',lbl, 'row',NaN);
     CED = @(lbl)               struct('fn','closeEditDialog',               'args',{{}},          'label',lbl, 'row',NaN);
     APD = @(lbl)               struct('fn','applyPendingDialogChanges',     'args',{{}},          'label',lbl, 'row',NaN);
+    EDS = @(lbl)               struct('fn','editDialogSaveProject',         'args',{{}},          'label',lbl, 'row',NaN);
+    SPP = @(path, lbl)         struct('fn','setProjectFilePath',            'args',{{path}},      'label',lbl, 'row',NaN);
     EAO = @(lbl)               struct('fn','editDialogApplyOptionDraft',    'args',{{}},          'label',lbl, 'row',NaN);
     SSA = @(fk, tv, lbl)       struct('fn','setPendingSyncAnchor',          'args',{{fk, tv}},   'label',lbl, 'row',NaN);
     SSAM = @(fk, tv, src, ix, vl, lbl) struct('fn','setPendingSyncAnchor',  'args',{{fk, tv, src, ix, vl}}, 'label',lbl, 'row',NaN);
@@ -2694,9 +2707,13 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('G-EDIT','G-EDIT-08 Apply pending dialog changes', ...
         'apply pending', 'applyPendingDialogChanges 호출', ...
         {OED('open'), APD('apply pending'), CED('close')});
+    % v-fixG: ProjectFilePath 를 사전 세팅해 uiputfile 모달을 우회 — 임시 .fdproj 경로 사용.
+    gEdit09SavePath = [tempname() '.fdproj'];
     cases(end + 1) = mk('G-EDIT','G-EDIT-09 project save through EditDialog', ...
-        'project save', 'requires user-selected project file path', {});
-    cases(end).skipReason = 'ProjectFilePath may be empty and editDialogSaveProject can open uiputfile.';
+        'project save', 'editDialogSaveProject 호출 (pre-set ProjectFilePath)', ...
+        {SPP(gEdit09SavePath, 'preset project path'), ...
+         OED('open'), SET('Project','tab=Project'), EDS('save project'), CED('close'), ...
+         SPP('', 'clear project path')});
     cases(end + 1) = mk('G-EDIT','G-EDIT-10 close auto-applies pending changes', ...
         'close finalize', 'close 시 pending apply', ...
         {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply'), CED('close')});
