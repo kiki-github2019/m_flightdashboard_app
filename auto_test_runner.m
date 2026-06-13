@@ -541,43 +541,59 @@ function app = i_setupFreshApp(needAvi)
     app = FlightDataDashboard();
     i_settleUi(1);
 
-    dataFiles = {1, 'flight_data1.dat'; 2, 'flight_data2.dat'};
-    for k = 1:size(dataFiles, 1)
-        fIdx  = dataFiles{k, 1};
-        fpath = dataFiles{k, 2};
-        if ~isfile(fpath)
-            error('AutoTest:MissingDataFile', 'Missing required data file: %s', fpath);
-        end
-        try
-            app.testHook('parseFlightData', fIdx, fpath);
-            app.testHook('setupDataUI', fIdx);
-            app.testHook('calculateBounds', fIdx);
-            app.testHook('initPlots', fIdx);
-            app.testHook('updateDashboard', fIdx, 1);
-        catch ME
-            error('AutoTest:DataLoadFailed', 'Data load failed for flight %d: %s', fIdx, ME.message);
-        end
-    end
-
-    if needAvi
-        aviFiles = {1, 'flight_data1_fps35.avi'; 2, 'flight_data2_fps7.avi'};
-        for k = 1:size(aviFiles, 1)
-            fIdx  = aviFiles{k, 1};
-            fpath = aviFiles{k, 2};
+    % v-fixM3: post-construction 단계 throw 시 partial app 즉시 회수.
+    %          (delete + closeAppDialogs + aggressiveCleanup) → 다음 case 의
+    %          i_aggressiveCleanup 사이 race / 잔여 figure 누수 차단.
+    try
+        dataFiles = {1, 'flight_data1.dat'; 2, 'flight_data2.dat'};
+        for k = 1:size(dataFiles, 1)
+            fIdx  = dataFiles{k, 1};
+            fpath = dataFiles{k, 2};
             if ~isfile(fpath)
-                error('AutoTest:MissingAviFile', 'Missing required AVI file: %s', fpath);
+                error('AutoTest:MissingDataFile', 'Missing required data file: %s', fpath);
             end
             try
-                ok = app.testHook('loadAviFileFromPath', fIdx, fpath, struct('promptOnSync', false));
-                if isempty(ok) || ~ok
-                    error('loadAviFileFromPath returned false');
-                end
+                app.testHook('parseFlightData', fIdx, fpath);
+                app.testHook('setupDataUI', fIdx);
+                app.testHook('calculateBounds', fIdx);
+                app.testHook('initPlots', fIdx);
+                app.testHook('updateDashboard', fIdx, 1);
             catch ME
-                error('AutoTest:AviLoadFailed', 'AVI load failed for flight %d: %s', fIdx, ME.message);
+                error('AutoTest:DataLoadFailed', 'Data load failed for flight %d: %s', fIdx, ME.message);
             end
         end
+
+        if needAvi
+            aviFiles = {1, 'flight_data1_fps35.avi'; 2, 'flight_data2_fps7.avi'};
+            for k = 1:size(aviFiles, 1)
+                fIdx  = aviFiles{k, 1};
+                fpath = aviFiles{k, 2};
+                if ~isfile(fpath)
+                    error('AutoTest:MissingAviFile', 'Missing required AVI file: %s', fpath);
+                end
+                try
+                    ok = app.testHook('loadAviFileFromPath', fIdx, fpath, struct('promptOnSync', false));
+                    if isempty(ok) || ~ok
+                        error('loadAviFileFromPath returned false');
+                    end
+                catch ME
+                    error('AutoTest:AviLoadFailed', 'AVI load failed for flight %d: %s', fIdx, ME.message);
+                end
+            end
+        end
+        i_settleUi(2);
+    catch setupErr
+        try
+            if ~isempty(app) && isvalid(app)
+                try i_closeAppDialogs(app); catch; end
+                try delete(app); catch; end
+            end
+        catch
+        end
+        try i_aggressiveCleanup(); catch; end
+        app = [];
+        rethrow(setupErr);
     end
-    i_settleUi(2);
 end
 
 % =========================================================================
