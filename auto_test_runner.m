@@ -91,6 +91,8 @@ function auto_test_runner(varargin)
     %          fresh app 으로 시작하므로 app 측 ProjectFilePath 복원은 자동.
     i_tempProjectFileRegistry('reset', '');
     cleanupTempProjFiles = onCleanup(@() i_tempProjectFileRegistry('cleanup', '')); %#ok<NASGU>
+    % v-fixM2: progress.md 용 persistent fid 도 runner 종료 시 close 보장.
+    cleanupProgressMd = onCleanup(@() i_progressMdHandle('close', '')); %#ok<NASGU>
 
 
     % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
@@ -2365,7 +2367,10 @@ end
 % =========================================================================
 function i_initProgressMd(progressFile, opts, nCases, caseOrder)
     if nargin < 4, caseOrder = []; end
-    fid = fopen(progressFile, 'w', 'n', 'UTF-8');
+    % v-fixM2/M7: persistent fid 핸들러로 일원화 — chunk 진입마다 'init' (truncate)
+    %             로 새 파일 열고, 이후 i_appendProgressMd 가 동일 fid 를 재사용.
+    %             runner onCleanup 이 'close' 호출 → fopen/fclose 수천 회 → 1 회/chunk.
+    fid = i_progressMdHandle('init', progressFile);
     if fid < 0, return; end
     try
         fprintf(fid, '# Auto Test Progress\n\n');
@@ -2385,7 +2390,7 @@ function i_initProgressMd(progressFile, opts, nCases, caseOrder)
         fprintf(fid, '|---|---:|---:|---|---|\n');
     catch
     end
-    fclose(fid);
+    % fclose 는 i_progressMdHandle('close', '') 한 곳에서만 — onCleanup 보장.
 end
 
 function s = i_vecToStr(v)
@@ -2426,7 +2431,9 @@ end
 
 function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
     if nargin < 5 || isempty(detail), detail = ''; end
-    fid = fopen(progressFile, 'a', 'n', 'UTF-8');
+    % v-fixM2: persistent fid 재사용 (init 직후엔 'w' fid 가 그대로 살아 있고,
+    %          chunk 사이 호출이면 'a' 로 lazy reopen). path 변경 시 자동 close+reopen.
+    fid = i_progressMdHandle('append', progressFile);
     if fid < 0, return; end
     try
         fprintf(fid, '| %s | %d | %d | `%s` | %s |\n', ...
@@ -2434,7 +2441,49 @@ function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
             caseIdx, stepIdx, i_mdEscape(status), i_mdEscape(detail));
     catch
     end
-    fclose(fid);
+end
+
+function fid = i_progressMdHandle(mode, progressFile)
+    % v-fixM2/M7: progress.md 용 persistent fid 핸들러. fopen/fclose 매 append 마다
+    %             수행하던 비용 제거. 'init' = truncate('w'), 'append' = ensure-open('a'
+    %             또는 init 직후 'w' 재사용), 'close' = 닫고 상태 클리어.
+    %             persistent 은 함수 스코프 — auto_test_runner 진입부의 onCleanup 으로
+    %             종료 시 'close' 보장.
+    persistent currentFid currentPath
+    if isempty(currentFid), currentFid = -1; end
+    if isempty(currentPath), currentPath = ''; end
+    p = char(progressFile);
+    switch lower(char(mode))
+        case 'init'
+            if currentFid > 0
+                try fclose(currentFid); catch; end
+            end
+            currentFid = -1; currentPath = '';
+            if isempty(p), fid = -1; return; end
+            currentFid = fopen(p, 'w', 'n', 'UTF-8');
+            currentPath = p;
+            fid = currentFid;
+        case 'append'
+            if currentFid > 0 && strcmp(currentPath, p)
+                fid = currentFid; return;
+            end
+            if currentFid > 0
+                try fclose(currentFid); catch; end
+            end
+            currentFid = -1; currentPath = '';
+            if isempty(p), fid = -1; return; end
+            currentFid = fopen(p, 'a', 'n', 'UTF-8');
+            currentPath = p;
+            fid = currentFid;
+        case 'close'
+            if currentFid > 0
+                try fclose(currentFid); catch; end
+            end
+            currentFid = -1; currentPath = '';
+            fid = -1;
+        otherwise
+            fid = -1;
+    end
 end
 
 function out = i_mdEscape(in)
