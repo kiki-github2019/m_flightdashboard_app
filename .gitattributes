@@ -1,0 +1,3 @@
+# MATLAB source 는 Windows 환경 기준 CRLF 로 체크아웃 — git autocrlf 의
+# "LF will be replaced by CRLF" 경고를 결정론적 처리로 대체한다.
+*.m text eol=crlf
