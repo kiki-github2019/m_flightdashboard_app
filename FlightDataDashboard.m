@@ -7034,7 +7034,7 @@
 
         function editDialogSaveProjectAs(app)
             [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
-            if isequal(fn, 0), return; end
+            if isequal(fn, 0), return; end   % 사용자 취소 → status 무변
             ok = app.saveProjectFile(fullfile(pn, fn));
             if ok
                 try
@@ -7042,6 +7042,9 @@
                 catch
                 end
                 app.safeRefreshEditDialog('editDialogSaveProjectAs:refresh');   % v-fixE
+                app.setEditDialogStatus('저장됨');   % [#1] Save As 정상 → 저장됨
+            else
+                app.setEditDialogStatus('오류');     % [#1] Save As 실패 → 오류
             end
         end
 
