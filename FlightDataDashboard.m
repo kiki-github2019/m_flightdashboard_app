@@ -127,6 +127,7 @@
         PendingFrame        = [NaN, NaN]     % [V3.17 (1)(9)] 처리 중 들어온 최신 frame 요청
         PendingMode         = {'', ''}        % [V3.17 (1)(9)] 처리 중 들어온 최신 mode
         InCascade           = false          % [V3.17 (4)(11)] cascade 재귀 가드 (인스턴스 속성)
+        InBoardToggle       = false          % [bug#4] toggleBoardVisibility 재진입 가드
         IsDecoding          = [false, false] % [V3.17 (7)] 디코딩 진행 중 가드
         CacheBytesUsed      = [0, 0]         % [V3.17 (6)] 비행경로별 실제 사용 메모리(bytes)
         FrameCacheHits      = {[], []}        % [V3.19 (3)] 각 frame의 액세스 횟수 (가중 LRU)
@@ -4130,6 +4131,15 @@
                 app.InCascade = logical(prevValue);
             catch ME
                 app.logCaught(ME, 'cascade-restore');
+            end
+        end
+
+        function restoreInBoardToggle(app)
+            % [bug#4] toggleBoardVisibility 재진입 가드 해제(항상 false — 재진입은 차단됨).
+            try
+                app.InBoardToggle = false;
+            catch ME
+                app.logCaught(ME, 'board-toggle-restore');
             end
         end
 
@@ -9714,6 +9724,11 @@
                 if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
                     return;
                 end
+                % [bug#4] 빠른 연속 토글 시 말미 drawnow 의 큐 drain 으로 재진입할 수 있어
+                % 인스턴스 플래그로 차단. onCleanup 으로 예외/조기반환 포함 해제 보장.
+                if app.InBoardToggle, return; end
+                app.InBoardToggle = true;
+                cleanupBoardToggle = onCleanup(@() app.restoreInBoardToggle()); %#ok<NASGU>
                 app.CurrentLayoutPreset = 'custom';
                 app.updateLayoutPresetButtons();
                 sourceIdx = app.getBoardOffSourceIdx(fIdx);
