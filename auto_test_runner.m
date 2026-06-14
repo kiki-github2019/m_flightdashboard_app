@@ -623,9 +623,14 @@ function ok = i_waitUntil(predicate, timeoutS, pollS)
     %          returns false on timeout. predicate-internal throw is treated as a skipped round.
     if nargin < 2 || isempty(timeoutS), timeoutS = 3.0; end
     if nargin < 3 || isempty(pollS), pollS = 0.05; end
+    % hard cap on poll iterations - guards clock jumps / infinite polling.
+    % Reaching the cap exits like the timeout path (ok=false, no new status).
+    MAX_WAIT_ITER = max(10000, ceil(timeoutS / max(pollS, 1e-3)) * 2);
     t0 = tic;
     ok = false;
-    while toc(t0) < timeoutS
+    iter = 0;
+    while toc(t0) < timeoutS && iter < MAX_WAIT_ITER
+        iter = iter + 1;
         try
             if predicate()
                 ok = true;
