@@ -1,42 +1,42 @@
 % encoding: UTF-8
 function auto_test_runner(varargin)
-%AUTO_TEST_RUNNER  FlightDataDashboard 보드 off/on + 패널 토글 50 케이스 회귀.
+%AUTO_TEST_RUNNER  FlightDataDashboard board off/on + panel toggle 50-case regression.
 %
-%   결과 저장 경로 (자동 탐지):
+%   Result output path (auto-detected):
 %       ~/MATLAB Drive/cowork_auto_test
 %       %USERPROFILE%/MATLAB Drive/cowork_auto_test
 %       /MATLAB Drive/cowork_auto_test
-%       <pwd>/cowork_auto_test (최종 폴백)
+%       <pwd>/cowork_auto_test (final fallback)
 %
-%   생성 파일:
+%   Generated files:
 %       index.md, caseNN.md, caseNN_stepMM.png
 %
-%   사전 조건:
-%       FlightDataDashboard.m, flight_data1.dat, flight_data2.dat 가 현재 폴더에 있을 것.
-%       AVI 파일은 LoadAvi='lazy' 일 때 E04 같은 sync 케이스만 사용함.
+%   Preconditions:
+%       FlightDataDashboard.m, flight_data1.dat, flight_data2.dat must be in the current folder.
+%       AVI files are used only by sync cases like E04 when LoadAvi='lazy'.
 %
-%   옵션 (MATLAB Online OOM 회피용):
-%       'Start' (default 1)    : 시작 케이스 번호
-%       'End'   (default Inf)  : 종료 케이스 번호 (양 끝 포함)
-%       'Order' (default 'asc'): 'asc' | 'desc' — 실행 순서
-%       'Skip'  (default [])   : 스킵할 케이스 번호 벡터
-%       'CaseList' (default []): 명시적 실행 순서 벡터 (지정 시 Start/End/Order 무시)
+%   Options (MATLAB Online OOM avoidance):
+%       'Start' (default 1)    : start case number
+%       'End'   (default Inf)  : end case number (both ends inclusive)
+%       'Order' (default 'asc'): 'asc' | 'desc' - run order
+%       'Skip'  (default [])   : case numbers to skip (vector)
+%       'CaseList' (default []): explicit run-order vector (overrides Start/End/Order)
 %       'LoadAvi' (default 'lazy') : 'lazy' | 'always' | 'never'
 %       'CaptureMode' (default 'baseline') : 'all' | 'baseline' | 'fail' | 'none'
-%       'CaptureScale' (default 0.60) : PNG 축소 비율, 0 < value <= 1
-%       'DeduplicateCaptures' (default true) : 연속 중복 PNG 저장 생략
+%       'CaptureScale' (default 0.60) : PNG shrink ratio, 0 < value <= 1
+%       'DeduplicateCaptures' (default true) : skip consecutive duplicate PNG saves
 %
-%   사용:
-%       >> auto_test_runner                                       % 전체, asc
-%       >> auto_test_runner('Start',1,'End',10)                   % 1~10 만 실행
-%       >> auto_test_runner('Order','desc','Skip',2)              % 전체 desc, case 2 skip
-%       >> auto_test_runner('Start',65,'End',3,'Order','desc')    % 65→3 역순
-%       >> auto_test_runner('CaseList',[65:-1:3 1])               % 명시적 순서
-%       >> auto_test_runner('CaseList',2,'CaptureMode','none','LoadAvi','never')  % case 2 단독 빠른 실행
-%       >> auto_test_runner('LoadAvi','never')                    % AVI 일체 미로드
-%       >> auto_test_runner('CaptureMode','all','CaptureScale',1) % 원본 캡처
+%   Usage:
+%       >> auto_test_runner                                       % all, asc
+%       >> auto_test_runner('Start',1,'End',10)                   % run 1-10 only
+%       >> auto_test_runner('Order','desc','Skip',2)              % all desc, skip case 2
+%       >> auto_test_runner('Start',65,'End',3,'Order','desc')    % 65->3 reverse
+%       >> auto_test_runner('CaseList',[65:-1:3 1])               % explicit order
+%       >> auto_test_runner('CaseList',2,'CaptureMode','none','LoadAvi','never')  % run case 2 alone (fast)
+%       >> auto_test_runner('LoadAvi','never')                    % do not load any AVI
+%       >> auto_test_runner('CaptureMode','all','CaptureScale',1) % original-size capture
 %       2026-06-06 1700 claude code recommandation
-%       >> auto_test_runner('OutputDir','D:\flightdashboard\1. 최초-MVC 전\cowork auto test', ...
+%       >> auto_test_runner('OutputDir','D:\flightdashboard\cowork auto test', ...
 %                 'LoadAvi','never','CaptureMode','fail','CaptureScale',0.6, ...
 %                 'OnlineSafeMode',true,'Order','desc','Skip',[2 5 6 37 48])
     p = inputParser;
@@ -67,7 +67,7 @@ function auto_test_runner(varargin)
     end
     captureScale = double(opts.CaptureScale);
     safeWarnings = {};
-    % v3 P9-strengthened: OnlineSafeMode — 실질 보호 (clamp + 강한 경고)
+    % v3 P9-strengthened: OnlineSafeMode - real protection (clamp + strong warnings)
     if logical(opts.OnlineSafeMode)
         if captureScale > 0.6
             safeWarnings{end + 1} = sprintf('OnlineSafeMode: CaptureScale %.2f → 0.6 자동 클램프', captureScale);
@@ -87,16 +87,16 @@ function auto_test_runner(varargin)
     captureOpts = struct('mode', captureMode, 'scale', captureScale, ...
                          'deduplicate', logical(opts.DeduplicateCaptures));
     i_captureDuplicateReset();
-    % v-fixM4: G-EDIT-09 등에서 생성한 tempname() 기반 .fdproj 파일이 runner 종료
-    %          (정상/예외 모두) 시점에 일괄 삭제되도록 onCleanup 등록. 각 case 는
-    %          fresh app 으로 시작하므로 app 측 ProjectFilePath 복원은 자동.
+    % v-fixM4: temp .fdproj files created by G-EDIT-09 etc. are deleted in bulk when the
+    %          runner ends (normal/exception both) via onCleanup. Each case starts with a
+    %          fresh app, so the app-side ProjectFilePath restore is automatic.
     i_tempProjectFileRegistry('reset', '');
     cleanupTempProjFiles = onCleanup(@() i_tempProjectFileRegistry('cleanup', '')); %#ok<NASGU>
-    % v-fixM2: progress.md 용 persistent fid 도 runner 종료 시 close 보장.
+    % v-fixM2: progress.md persistent fid is also guaranteed to close when the runner ends.
     cleanupProgressMd = onCleanup(@() i_progressMdHandle('close', '')); %#ok<NASGU>
 
 
-    % v3-audit G: OutputDir 명시 시 그대로 사용, 아니면 자동 탐지
+    % v3-audit G: use OutputDir as-is when specified, otherwise auto-detect
     if ~isempty(char(opts.OutputDir))
         outDir = char(opts.OutputDir);
     else
@@ -110,17 +110,17 @@ function auto_test_runner(varargin)
     iStart  = max(1, round(opts.Start));
     iEnd    = min(nCases, round(opts.End));
     caseOrder = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, opts.Skip, opts.CaseList);
-    % v-chunk: 10 케이스 단위 progress/index 분할. 파일명에 시작~끝 케이스 번호 포함.
+    % v-chunk: split progress/index per 10 cases. File names include start~end case numbers.
     chunkSize = 10;
-    chunkStartIdx = 1;          % 현 chunk 의 caseOrder 시작 인덱스
-    progressFile = '';          % 현 chunk 의 progress 파일
-    indexFile = '';             % 현 chunk 의 index 파일
+    chunkStartIdx = 1;          % caseOrder start index of the current chunk
+    progressFile = '';          % progress file of the current chunk
+    indexFile = '';             % index file of the current chunk
     pendingSafeWarnings = safeWarnings;
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', '', ...
                             'captureError', '', 'issues', ''), nCases, 1);
-    % v-fixL1: 'i' (imaginary unit shadowing) 대신 의미 있는 이름 사용.
+    % v-fixL1: use a meaningful name instead of 'i' (imaginary-unit shadowing).
     for k = 1:nCases
         results(k).id    = k;
         results(k).group = cases(k).group;
@@ -130,7 +130,7 @@ function auto_test_runner(varargin)
     for ii = 1:numel(caseOrder)
         caseIdx = caseOrder(ii);
         tc = cases(caseIdx);
-        % v-chunk: 새 chunk 시작 시 progress/index 파일 신규 생성
+        % v-chunk: create new progress/index files at the start of each chunk
         if ii == chunkStartIdx
             chunkEndIdx = min(ii + chunkSize - 1, numel(caseOrder));
             firstCase = caseOrder(ii);
@@ -142,7 +142,7 @@ function auto_test_runner(varargin)
             for sw = 1:numel(pendingSafeWarnings)
                 i_appendProgressMd(progressFile, 0, 0, 'ONLINE_SAFE_WARN', pendingSafeWarnings{sw});
             end
-            pendingSafeWarnings = {};   % 첫 chunk 에만 기록
+            pendingSafeWarnings = {};   % record only in the first chunk
         end
         fprintf('\n[%02d/%02d] %s | %s\n', caseIdx, nCases, tc.group, tc.title);
         i_appendProgressMd(progressFile, caseIdx, 0, 'START', sprintf('%s | %s', tc.group, tc.title));
@@ -176,7 +176,7 @@ function auto_test_runner(varargin)
 
         app = [];
         try
-            % v5-I: forbidAvi 는 LoadAvi='always' 보다 우선
+            % v5-I: forbidAvi takes priority over LoadAvi='always'
             if isfield(tc, 'forbidAvi') && tc.forbidAvi
                 needAvi = false;
             else
@@ -215,13 +215,13 @@ function auto_test_runner(varargin)
         results(caseIdx) = r;
         i_writeCaseMd(outDir, caseIdx, tc, r);
         i_appendProgressMd(progressFile, caseIdx, r.steps, r.status, r.error);
-        % v-chunk: 현 chunk 의 index 즉시 갱신 (중간 crash 대비)
+        % v-chunk: refresh the current chunk index immediately (guard against mid-run crash)
         chunkCases = caseOrder(chunkStartIdx:chunkEndIdx);
         try
             i_writeIndexMd(outDir, results(chunkCases), indexFile, progressFile);
         catch
         end
-        % v-chunk: chunk 끝 도달 시 finalize + 다음 chunk 준비
+        % v-chunk: on reaching chunk end, finalize + prepare next chunk
         if ii == chunkEndIdx
             chunkSubset = results(chunkCases);
             i_appendProgressMd(progressFile, 0, 0, 'CHUNK_FINISHED', sprintf('PASS=%d FAIL=%d', ...
@@ -245,7 +245,7 @@ end
 % Output dir resolution
 % =========================================================================
 function outDir = i_resolveOutputDir()
-    % v-local: 로컬 MATLAB 환경 전용. 프로젝트 내 cowork auto test 폴더 우선.
+    % v-local: local MATLAB env only. Prefer the in-project cowork auto test folder.
     candidates = {};
     candidates{end + 1} = fullfile(pwd, 'cowork auto test');
     candidates{end + 1} = fullfile(pwd, 'cowork_auto_test');
@@ -508,7 +508,7 @@ function tf = i_containsAny(txt, keys)
 end
 
 function i_settleUi(n, settleS)
-    % #7: settle 시간 인자화. 호출부가 settleS 미전달 시 기존 0.08 유지(동작 동등).
+    % #7: parameterize settle time. If caller omits settleS, keep the previous 0.08 (same behavior).
     if nargin < 1 || isempty(n), n = 1; end
     if nargin < 2 || isempty(settleS), settleS = 0.08; end
     for k = 1:max(1, n)
@@ -545,9 +545,9 @@ function app = i_setupFreshApp(needAvi)
     app = FlightDataDashboard();
     i_settleUi(1);
 
-    % v-fixM3: post-construction 단계 throw 시 partial app 즉시 회수.
-    %          (delete + closeAppDialogs + aggressiveCleanup) → 다음 case 의
-    %          i_aggressiveCleanup 사이 race / 잔여 figure 누수 차단.
+    % v-fixM3: on a post-construction throw, reclaim the partial app immediately.
+    %          (delete + closeAppDialogs + aggressiveCleanup) -> blocks the race / leftover
+    %          figure leak between this and the next case's i_aggressiveCleanup.
     try
         dataFiles = i_defaultDataFiles();
         for k = 1:size(dataFiles, 1)
@@ -613,14 +613,14 @@ function app = i_setupFreshApp(needAvi)
 end
 
 function dataFiles = i_defaultDataFiles()
-    % v-fixL5: i_setupFreshApp 가 사용하는 기본 flight data 경로 — 단일 변경점.
+    % v-fixL5: default flight-data paths used by i_setupFreshApp - single change point.
     dataFiles = {1, 'flight_data1.dat'; ...
                  2, 'flight_data2.dat'};
 end
 
 function ok = i_waitUntil(predicate, timeoutS, pollS)
-    % v-fixL6: 고정 pause 대체 — predicate 가 true 가 될 때까지 폴링 + drawnow.
-    %          timeout 시 false 반환. predicate 내부 throw 는 한 라운드 skip 으로 처리.
+    % v-fixL6: replaces fixed pause - poll until predicate is true + drawnow.
+    %          returns false on timeout. predicate-internal throw is treated as a skipped round.
     if nargin < 2 || isempty(timeoutS), timeoutS = 3.0; end
     if nargin < 3 || isempty(pollS), pollS = 0.05; end
     t0 = tic;
@@ -661,7 +661,7 @@ function i_stopFlightPlayQuietly(app, fIdxP)
 end
 
 function aviFiles = i_defaultAviFiles()
-    % v-fixL5: i_setupFreshApp 가 needAvi 시 로드하는 기본 AVI 경로 — 단일 변경점.
+    % v-fixL5: default AVI paths loaded by i_setupFreshApp when needAvi - single change point.
     aviFiles  = {1, 'flight_data1_fps35.avi'; ...
                  2, 'flight_data2_fps7.avi'};
 end
@@ -748,8 +748,8 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
                 i_appendProgressMd(progressFile, caseIdx, r.steps, 'CAPTURE_SKIPPED', captureOpts.mode);
             end
         catch ME
-            % v-fixH1: 액션이 이미 EXCEPTION/FAIL 로 끝났으면 그 메시지가 회귀 분석의 1차
-            %          단서 — capture 실패가 덮어쓰지 않도록 별도 captureError 에 보존.
+            % v-fixH1: if the action already ended in EXCEPTION/FAIL, that message is the primary
+            %          clue for regression analysis - keep it in a separate captureError so capture failure does not overwrite it.
             capMsg = sprintf('step %d (%s): %s\n%s', j + 1, act.label, ME.message, i_errorReport(ME));
             if strcmp(r.status, 'PASS')
                 r.status = 'CAPTURE_FAIL';
@@ -763,8 +763,8 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
         if strcmp(r.status, 'EXCEPTION'), break; end
         if strcmp(r.status, 'CAPTURE_FAIL'), break; end
 
-        % v-fixH4: 액션이 skipValidateState 플래그를 가지면 직후 validation 건너뜀.
-        %          CAP() 등 dialog/viewer 자동 open side effect 가 false FAIL 유발.
+        % v-fixH4: if the action has the skipValidateState flag, skip validation right after.
+        %          CAP() etc. auto-open dialog/viewer side effects cause false FAIL.
         if isfield(act, 'skipValidateState') && act.skipValidateState
             i_appendProgressMd(progressFile, caseIdx, r.steps, 'VALIDATION_SKIPPED', act.label);
             continue;
@@ -839,8 +839,8 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
               'startFlightPlay','stopFlightPlay'}
             app.testHook(act.fn, act.args{:});
         case 'flightPlayStartStopCycle'
-            % v5-H: timer 활성 상태에서 getframe 금지 (case97 hang) — start→검증→stop 원자 수행
-            % v-fixL6: 고정 pause 대신 폴링 + 타임아웃 — 조건 만족 즉시 진행.
+            % v5-H: getframe forbidden while a play timer is active (case97 hang) - atomic start->verify->stop
+            % v-fixL6: poll + timeout instead of fixed pause - proceed as soon as condition holds.
             fIdxP = act.args{1};
             idx0 = double(beforeState.boards(fIdxP).currentIndex);
             app.testHook('startFlightPlay', fIdxP);
@@ -851,7 +851,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                 if ~logical(stP.boards(fIdxP).flightPlay.playActive)
                     error('AutoTest:FlightPlayStartFailed', 'flight %d play timer did not activate', fIdxP);
                 end
-                % v5-J: 실제 row 진행 검증 (active 플래그만으로는 false PASS 가능)
+                % v5-J: verify actual row advance (active flag alone can give false PASS)
                 error('AutoTest:FlightPlayDidNotAdvance', 'flight %d currentIndex did not advance during play', fIdxP);
             end
             app.testHook('stopFlightPlay', fIdxP);
@@ -861,7 +861,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                 if logical(stP.boards(fIdxP).flightPlay.playActive)
                     error('AutoTest:FlightPlayStopFailed', 'flight %d play timer still active after stop', fIdxP);
                 end
-                % v5-J: timer handle Running 상태까지 직접 검증
+                % v5-J: directly verify the timer handle Running state too
                 if logical(app.testHook('isFlightPlayTimerAlive', fIdxP))
                     error('AutoTest:FlightPlayTimerNotCleaned', 'flight %d play timer still running after stop', fIdxP);
                 end
@@ -872,7 +872,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
         case {'setPendingSyncAnchor','applyPendingSyncAnchor'}
             app.testHook(act.fn, act.args{:});
         case 'computeSyncSearchRows'
-            % v-fix7: target='selected' 면 실제 선택값으로 교체 → empty/0 false PASS 방지
+            % v-fix7: if target='selected', replace with the actual selected value -> prevents empty/0 false PASS
             fIdxS = act.args{1}; tgt = act.args{2};
             if ischar(tgt) || isstring(tgt)
                 if strcmpi(char(tgt), 'selected')
@@ -910,13 +910,13 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
         case 'clearPendingSyncAnchor'
             app.testHook('clearPendingSyncAnchor');
         case 'assertPendingSyncAnchorCleared'
-            % v-fix8: clear 후 PendingFlightSyncAnchor.T1/T2 == NaN 직접 검증
+            % v-fix8: after clear, directly verify PendingFlightSyncAnchor.T1/T2 == NaN
             pa = app.testHook('getPendingSyncAnchor');
             if ~(isstruct(pa) && isnan(pa.T1) && isnan(pa.T2))
                 error('AutoTest:PendingSyncAnchorNotCleared', 'PendingFlightSyncAnchor T1/T2 not cleared to NaN');
             end
         case 'assertPendingSyncAnchorMeta'
-            % anchor metadata(Source/Index/Value) 보존 검증
+            % verify anchor metadata(Source/Index/Value) preservation
             pa = app.testHook('getPendingSyncAnchor');
             fkM = act.args{1}; srcM = char(act.args{2}); idxM = act.args{3}; valM = act.args{4};
             if fkM == 1
@@ -928,7 +928,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                 error('AutoTest:PendingSyncAnchorMetaMismatch', 'anchor metadata mismatch for flight %d', fkM);
             end
         case 'assertSyncSearchEdgeSafe'
-            % synthetic edge: all-NaN / empty / NaN·Inf target → zeros(0,5) 안전 반환 검증
+            % synthetic edge: all-NaN / empty / NaN/Inf target -> verify safe zeros(0,5) return
             edges = {{[NaN NaN], [1 2], 10}, {[], [], 5}, {[1 2 3], [1 2 3], NaN}, {[1 2 3], [1 2 3], Inf}};
             for eIdx = 1:numel(edges)
                 e = edges{eIdx};
@@ -938,19 +938,19 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                 end
             end
         case 'assertOpenDialogTagExists'
-            % 검색 dialog 등 실제 open 여부를 tag 로 직접 검증 (silent return → false PASS 차단)
+            % verify actual dialog open via tag (silent return -> blocks false PASS)
             dlgs = app.testHook('getOpenDialogHandlesForTest');
             if isempty(dlgs) || ~any(strcmp(dlgs(:, 2), char(act.args{1})))
                 error('AutoTest:OpenDialogMissing', 'Expected open dialog tag not found: %s', char(act.args{1}));
             end
         case 'searchFlightDataValue'
-            % v5-K: silent guard-return 차단 — dialog open 성공 여부 직접 확인
+            % v5-K: block silent guard-return - directly confirm dialog open success
             okS = app.testHook('searchFlightDataValue', act.args{:});
             if isempty(okS) || ~logical(okS)
                 error('AutoTest:SyncSearchDialogOpenFailed', 'searchFlightDataValue did not open dialog');
             end
         case 'assertSyncMenuExists'
-            % v-fix9: 정보테이블 context menu 에 '동기시간 찾기...' 존재 검증
+            % v-fix9: verify the sync-time-search menu item exists in the info-table context menu
             texts = app.testHook('getInfoTableMenuTexts', act.args{1}, act.args{2});
             if ~any(strcmp(texts, '동기시간 찾기...'))
                 error('AutoTest:SyncMenuMissing', 'board %d (%s) 동기시간 찾기 menu missing', act.args{1}, act.args{2});
@@ -989,7 +989,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             app.testHook('goToFrame', act.args{:});
         case 'captureRequiredPanel'
             i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, act.args{:});
-        % v-runner: EditDialog dispatch (모든 boardOff 상태에서 허용)
+        % v-runner: EditDialog dispatch (allowed in all boardOff states)
         case {'openEditDialog','closeEditDialog','applyPendingDialogChanges', ...
               'editDialogApplyOptionDraft', ...
               'capturePlotConfigAndRefresh','editDialogRebuildPlots','editDialogApplyPlotProps', ...
@@ -999,11 +999,11 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
               'setProjectFilePath'}
             app.testHook(act.fn, act.args{:});
         case 'editDialogSaveProject'
-            % v-fixG: ProjectFilePath 가 비어 있으면 uiputfile 이 떠서 hang —
-            %         setPath 가 선행되었는지 확인 후에만 실행.
-            % v-fixH5: getTestState / ProjectFilePath 접근 실패를 silent 로 두면
-            %          curPath='' 가 되어 UserInputActionBlocked 가 false positive
-            %          로 발화 — 실제 hook 오류를 별도 명시 에러로 분리.
+            % v-fixG: if ProjectFilePath is empty, uiputfile pops up and hangs -
+            %         only run after confirming setPath was done first.
+            % v-fixH5: leaving getTestState / ProjectFilePath access failure silent makes
+            %          curPath='' so UserInputActionBlocked fires as a false positive -
+            %          separate the real hook error into an explicit error.
             curPath = '';
             hookErr = [];
             try
@@ -1018,7 +1018,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             end
             if ~isempty(hookErr)
                 fprintf(2, '  [editDialogSaveProject] EDIT_SAVE_PROJECT_HOOK_ERROR: %s\n', hookErr.message);
-                % v-fixM6: ring buffer 에도 보존 (app.dumpErrorLog 로 사후 조사 가능)
+                % v-fixM6: preserve in the ring buffer too (post-mortem via app.dumpErrorLog)
                 try
                     app.logCaught(hookErr, 'runner:editDialogSaveProject:getTestState');
                 catch
@@ -1033,7 +1033,7 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             end
             app.testHook(act.fn);
         case {'editDialogSaveProjectAs','editDialogOpenProject','editDialogAutoLoad'}
-            % v5-L: 모달 파일 dialog 로 사용자 입력 대기 → 자동 러너 hang 위험. 별도 러너 사용.
+            % v5-L: modal file dialog waits for user input -> auto-runner hang risk. Use the separate runner.
             error('AutoTest:UserInputActionBlocked', ...
                 'action %s waits for user input - run auto_test_runner_under_user instead', act.fn);
         otherwise
@@ -1064,11 +1064,11 @@ function exp = i_expectedFromState(st)
     exp.minUserLayoutPresetCount = st.UserLayoutPresetCount;
     exp.requireColumnWidthChange = false(1, 2);
     exp.columnWidthBefore = cell(1, 2);
-    exp.flightSyncExpected = false;   % v-fix7: pending anchor 적용 후 SyncState 검증
-    exp.requireFlightSyncOff = false; % v-fix: T1-only/clear 후 미동기 검증
+    exp.flightSyncExpected = false;   % v-fix7: verify SyncState after pending anchor apply
+    exp.requireFlightSyncOff = false; % v-fix: verify not-synced after T1-only/clear
     exp.syncT1Expected = NaN;
     exp.syncT2Expected = NaN;
-    exp.pendingSyncT1 = NaN;          % v-fix: anchor 값 일반화
+    exp.pendingSyncT1 = NaN;          % v-fix: generalize anchor values
     exp.pendingSyncT2 = NaN;
     exp.flightPlayVisible = false(1, 2);
     exp.requireFlightPlay = false(1, 2);
@@ -1115,8 +1115,8 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.currentLayoutPreset = 'custom';
             name = char(act.args{2});
             if strcmp(name, 'map')
-                % v3 P1: 앱 btnMap 콜백은 togglePanel('mapOnly') — mapOnly 만 토글.
-                % 'map' alias 도 mapOnly 만 토글하도록 일치시킴. altOnly 는 불변.
+                % v3 P1: the app btnMap callback is togglePanel('mapOnly') - toggles mapOnly only.
+                % make 'map' alias toggle mapOnly only too. altOnly unchanged.
                 exp.panel(fIdx).mapOnly = ~exp.panel(fIdx).mapOnly;
                 exp.panel(fIdx).map = exp.panel(fIdx).mapOnly || exp.panel(fIdx).altOnly;
             else
@@ -1132,8 +1132,8 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = false;
                 exp.summaryVisible(fIdx) = false;
                 exp.sourceColumnsHidden(3 - fIdx) = false;
-                % v5-B: mid-off 영속 정책(v-final P8) — 복원 후 expected 패널 상태는
-                % 복원 직전 실측 (during-off toggle 유지가 정책 ground truth)
+                % v5-B: mid-off persistence policy(v-final P8) - expected panel state after restore is
+                % the pre-restore measurement (keeping during-off toggles is the policy ground truth)
                 pNames = {'attitude', 'map', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
                 for bIdx = 1:2
                     try
@@ -1148,7 +1148,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = true;
                 exp.summaryVisible(fIdx) = true;
                 exp.sourceColumnsHidden(3 - fIdx) = true;
-                % v5-G: Policy B — board-off 진입 시 양 보드 flight-play panel collapse
+                % v5-G: Policy B - on board-off entry, collapse the flight-play panel of both boards
                 exp.flightPlayVisible(:) = false;
                 exp.flightPlayActive(:) = false;
             end
@@ -1218,7 +1218,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.flightPlayActive(fIdx) = false;
             exp.requireFlightPlay(fIdx) = true;
         case 'flightPlayStartStopCycle'
-            % v5-H: 원자 start→stop — step 종료 시점은 항상 정지 상태
+            % v5-H: atomic start->stop - step end is always the stopped state
             fIdx = act.args{1};
             exp.flightPlayActive(fIdx) = false;
             exp.currentIndex(fIdx) = NaN;
@@ -1227,7 +1227,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
             exp.currentIndex(1) = 1;
             exp.currentIndex(2) = NaN;
         case 'applyPendingSyncAnchor'
-            % v-fix5: anchor 값 일반화 — pendingSyncT1/T2 모두 finite 일 때만 동기
+            % v-fix5: generalize anchor values - sync only when pendingSyncT1/T2 are both finite
             bothSet = isfinite(exp.pendingSyncT1) && isfinite(exp.pendingSyncT2);
             exp.flightSyncExpected = bothSet;
             exp.requireFlightSyncOff = ~bothSet;
@@ -1238,14 +1238,14 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.syncT2Expected = exp.pendingSyncT2;
             end
         case 'setPendingSyncAnchor'
-            % v-fix5: anchor 값 저장 (expected 일반화)
+            % v-fix5: store anchor values (expected generalization)
             if act.args{1} == 1, exp.pendingSyncT1 = act.args{2}; else, exp.pendingSyncT2 = act.args{2}; end
         case 'clearPendingSyncAnchor'
-            % v-fix: clear → pending NaN + 미동기
+            % v-fix: clear -> pending NaN + not synced
             exp.pendingSyncT1 = NaN; exp.pendingSyncT2 = NaN;
             exp.flightSyncExpected = false; exp.requireFlightSyncOff = true;
         case {'computeSyncSearchRows','assertSyncMenuExists','setSelectedRowForTest','searchFlightDataValue'}
-            % 검색 호출 / 메뉴 검증 / 행 선택 / dialog open — observable state 변화 없음
+            % search call / menu verify / row select / dialog open - no observable state change
         case 'applyLayoutPreset'
             exp = i_updateExpectedLayoutPreset(exp, char(act.args{1}));
         case 'setBodyRowSplitRatio'
@@ -1308,10 +1308,10 @@ function exp = i_updateExpectedState(exp, act, beforeState)
         case 'goToFrame'
             fIdx = act.args{1};
             exp.videoFrameExpected(fIdx) = act.args{2};
-            % v-fixSync: video sync 활성 시 goToFrame 은 frame→time→index 로 데이터
-            % currentIndex 를 동기 이동시킨다 (앱 의도 동작, commit 627d519). 정확한
-            % index 는 앱 내부 anchor/fps 매핑에 의존하므로 literal 검증 대신 don't-care
-            % 로 둔다 — frame 정합성은 videoFrameExpected + anchor 공식이 별도 검증.
+            % v-fixSync: when video sync is active, goToFrame moves data currentIndex via
+            % frame->time->index (intended app behavior, commit 627d519). The exact index
+            % depends on the app's internal anchor/fps mapping, so use don't-care instead of a literal check
+            % - frame consistency is verified separately by videoFrameExpected + the anchor formula.
             if exp.videoSynced(fIdx)
                 exp.currentIndex(fIdx) = NaN;
             end
@@ -1332,40 +1332,40 @@ function exp = i_updateExpectedState(exp, act, beforeState)
 end
 
 function exp = i_updateExpectedLayoutPreset(exp, presetName)
-    % v4: arrangement-only. PanelVisible / BoardOff / SummaryVisible / RowHeight 불변.
+    % v4: arrangement-only. PanelVisible / BoardOff / SummaryVisible / RowHeight unchanged.
     validNames = {'layout-grid', 'layout-vsplit', 'layout-hsplit', 'layout-compact', 'layout-reset'};
     if ~any(strcmp(presetName, validNames))
         presetName = 'layout-reset';
     end
     exp.currentLayoutPreset = presetName;
-    % v4: exp.panel, exp.boardOff, exp.summaryVisible, exp.sourceColumnsHidden 변경 금지
+    % v4: do not change exp.panel, exp.boardOff, exp.summaryVisible, exp.sourceColumnsHidden
 end
 
 function exp = i_applyProjectFixtureExpected(exp, kind)
-    % v-fixB4: project 복원은 저장된 UiState(preset/PanelVisible)를 그대로 적용하므로
-    % expected 가 fixture 가 설정한 값을 반영해야 한다. fixture 별 expected 보정의
-    % 단일 소스. (loadProjectFixture 경로에서 호출)
+    % v-fixB4: project restore applies the saved UiState(preset/PanelVisible) as-is, so
+    % expected must reflect the values the fixture set. Single source for per-fixture expected
+    % correction. (called from the loadProjectFixture path)
     switch char(kind)
         case 'layout_hsplit_grid'
-            % fixture 가 UiState.Layout.CurrentLayoutPreset='layout-hsplit' 설정 (case115)
+            % fixture sets UiState.Layout.CurrentLayoutPreset='layout-hsplit' (case115)
             exp.currentLayoutPreset = 'layout-hsplit';
         case 'hidden_panel_columns'
-            % fixture 가 양 보드 info/dataView=false 설정 (case116) — board 복원과 달리
-            % project 복원은 ensureBoardCorePanelsVisible 강제 없이 저장값 그대로 적용.
+            % fixture sets info/dataView=false on both boards (case116) - unlike board restore,
+            % project restore applies the saved value as-is without forcing ensureBoardCorePanelsVisible.
             for bIdx = 1:2
                 exp.panel(bIdx).info = false;
                 exp.panel(bIdx).dataView = false;
             end
-        % 아래 fixture 들은 별도 expected override 불필요 — 현재 runner 에서 이미 정합:
-        %   layout_lower_board_off / layout_upper_board_off: 케이스가 PR 이전에
-        %       BV(2)/BV(1) 로 board-off 를 선행 → exp.boardOff 가 toggleBoardVisibility
-        %       off-branch 에서 이미 설정됨. i_validateProjectRestore 도 board-off 검증.
-        %   flight_sync: i_validateProjectRestore 가 SyncState 직접 검증 (PASS 중).
-        %   video_sync_with_avi: exp.videoSynced 미설정 → i_validateState 의 동기 검증은
-        %       conditional 이라 미발화. 유일 실패였던 altitude marker/xline 콜백은
-        %       FDD 측(ensureAltitudeMarkerCallbacks)에서 해소 → 여기 expected 보정 불필요.
+        % the fixtures below need no separate expected override - already consistent in the current runner:
+        %   layout_lower_board_off / layout_upper_board_off: the case does BV(2)/BV(1) board-off
+        %       before PR -> exp.boardOff is already set in toggleBoardVisibility
+        %       off-branch. i_validateProjectRestore also verifies board-off.
+        %   flight_sync: i_validateProjectRestore directly verifies SyncState (currently PASS).
+        %   video_sync_with_avi: exp.videoSynced not set -> i_validateState's sync check is
+        %       conditional so it does not fire. The only failure (altitude marker/xline callback)
+        %       is resolved on the FDD side (ensureAltitudeMarkerCallbacks) -> no expected correction here.
         otherwise
-            % 기타 fixture (full/data_only/manual_axis_limits/...) — 보정 없음.
+            % other fixtures (full/data_only/manual_axis_limits/...) - no correction.
     end
 end
 
@@ -1380,14 +1380,14 @@ function idx = i_clampIndex(st, fIdx, value)
 end
 
 function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
-    % A3: 3번째 반환 issues = 불일치 항목 cell array. 호출부가 두 번째 반환만
-    % 쓰면 그대로 호환(MATLAB 다중 반환). issues 비면 통과.
-    % v3-lint: i_makePanelState / i_hasButtonText 제거 — board-off 새 policy 에서 미사용.
+    % A3: 3rd return issues = cell array of mismatch items. If the caller takes only the
+    % second return it stays compatible (MATLAB multiple return). Pass when issues is empty.
+    % v3-lint: removed i_makePanelState / i_hasButtonText - unused under the new board-off policy.
     issues = {};
     if sum(st.BoardOffState) > 1
         issues{end + 1} = 'both boards are off';
     end
-    % v-fix7: pending anchor 적용 후 flight sync 상태 검증
+    % v-fix7: verify flight sync state after pending anchor apply
     if isfield(exp, 'flightSyncExpected') && exp.flightSyncExpected
         if ~isfield(st, 'SyncState') || ~isfield(st.SyncState, 'IsSynced') || ~st.SyncState.IsSynced
             issues{end + 1} = 'flight sync not enabled after pending anchor apply';
@@ -1397,7 +1397,7 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
                 exp.syncT1Expected, exp.syncT2Expected, st.SyncState.SyncT1, st.SyncState.SyncT2);
         end
     end
-    % v-fix6: T1-only/clear 후 미동기 검증
+    % v-fix6: verify not-synced after T1-only/clear
     if isfield(exp, 'requireFlightSyncOff') && exp.requireFlightSyncOff
         if isfield(st, 'SyncState') && isfield(st.SyncState, 'IsSynced') && st.SyncState.IsSynced
             issues{end + 1} = 'flight sync enabled but expected off (partial/cleared anchor)';
@@ -1417,16 +1417,16 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
             i_boolVecString(exp.boardOff), i_boolVecString(st.BoardOffState));
     end
 
-    % v3 P2/P3/P4: 새 board-off policy = active source hsplit, summary panel 폐기.
-    % 무거운 hidden boardOffPanel findall/marker/xline scan 제거 (case 48 hard-crash 방지).
-    % 라이트한 검증만: source visible + off hidden + Video Player 비표시.
+    % v3 P2/P3/P4: new board-off policy = active source hsplit, summary panel dropped.
+    % removed heavy hidden boardOffPanel findall/marker/xline scan (prevents case 48 hard-crash).
+    % light checks only: source visible + off hidden + Video Player not shown.
     activeOff = find(st.BoardOffState, 1);
     if isempty(activeOff)
         for fIdx = 1:2
             if ~st.boards(fIdx).panelVisible
                 issues{end + 1} = sprintf('board %d panel hidden while no board-off active', fIdx);
             end
-            % v5-D/E: 의도적 panel-off(expected off) 와 hsplit arrangement 는 column hidden 합법
+            % v5-D/E: intentional panel-off(expected off) and hsplit arrangement legitimately hide columns
             isHsplitArr = isfield(st.boards(fIdx), 'arrangementMode') ...
                 && strcmp(char(st.boards(fIdx).arrangementMode), 'hsplit');
             if ~isHsplitArr ...
@@ -1444,13 +1444,13 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
         if ~st.boards(srcIdx).panelVisible
             issues{end + 1} = sprintf('source board %d panel hidden', srcIdx);
         end
-        % source 보드 arrangementMode = 'hsplit' (있을 때)
+        % source board arrangementMode = 'hsplit' (when present)
         if isfield(st.boards(srcIdx), 'arrangementMode') && ...
                 ~strcmp(char(st.boards(srcIdx).arrangementMode), 'hsplit')
             issues{end + 1} = sprintf('source board %d arrangementMode expected=hsplit actual=%s', ...
                 srcIdx, char(st.boards(srcIdx).arrangementMode));
         end
-        % Video Player 자동 팝업 금지 (있을 때만 체크)
+        % no auto popup of Video Player (check only when present)
         if isfield(st, 'vidViewerDialogVisible') && any(logical(st.vidViewerDialogVisible))
             issues{end + 1} = 'Video Player auto-opened during board-off';
         end
@@ -1468,9 +1468,9 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
                 issues{end + 1} = sprintf('board %d %s PanelVisible expected=%d actual=%d', ...
                     fIdx, nm, exp.panel(fIdx).(nm), st.boards(fIdx).PanelVisible.(nm));
             end
-            % v-fixB2: video 는 외부 viewer dialog 로 표시되는데, board-off 중에는
-            % v5-A 정책이 모든 video viewer 를 강제 숨김 → source 보드의 video
-            % handle≠PanelVisible 은 정상. video handle 검사는 board-off 없을 때만.
+            % v-fixB2: video is shown via an external viewer dialog, and during board-off
+            % the v5-A policy force-hides all video viewers -> the source board's video
+            % handle != PanelVisible is normal. Check video handle only when not in board-off.
             checkHandle = any(strcmp(nm, {'attitude', 'map', 'video'})) && ~st.BoardOffState(fIdx);
             if strcmp(nm, 'video') && ~isempty(activeOff)
                 checkHandle = false;
@@ -1606,8 +1606,8 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
 end
 
 function joined = i_recordValidationIssues(progressFile, caseIdx, stepIdx, issues)
-    % A3: 검증 불일치 항목을 progress.md 에 줄별(VALIDATION_ISSUE) 기록하고
-    % 개행 결합 문자열을 반환(r.issues 저장용 — case.md 에서 항목별 출력).
+    % A3: record validation mismatch items per-line (VALIDATION_ISSUE) to progress.md and
+    % return the newline-joined string (for storing in r.issues - per-item output in case.md).
     joined = '';
     if nargin < 4 || isempty(issues) || ~iscell(issues), return; end
     for k = 1:numel(issues)
@@ -1657,8 +1657,8 @@ function tf = i_buttonStateOk(btn, labelNeedle, enableValue)
 end
 
 function issues = i_validateBodyRows(st, exp, issues) %#ok<*AGROW>
-    % v3-new: board-off = active source hsplit + summary 폐기.
-    % row4 (summary row) 는 collapsed (0) 이 정상. row2 (splitter row) 도 board-off 시 0 허용.
+    % v3-new: board-off = active source hsplit + summary dropped.
+    % row4 (summary row) collapsed (0) is normal. row2 (splitter row) may also be 0 during board-off.
     if ~isfield(st, 'BodyRowHeight') || numel(st.BodyRowHeight) ~= 4
         issues{end + 1} = 'BodyGrid RowHeight is not a 4-row board/summary layout';
         return;
@@ -1697,7 +1697,7 @@ function issues = i_validateBodyRows(st, exp, issues) %#ok<*AGROW>
         issues{end + 1} = sprintf('board-off row splitter height expected=4 actual=%.3f', row2);
     end
     if activeOff == 1
-        % upper off: row1/row2=0, row3>0 (source 100%), row4 may be 0 (summary 폐기)
+        % upper off: row1/row2=0, row3>0 (source 100%), row4 may be 0 (summary dropped)
         if row1 ~= 0 || row3 <= 0 || row4 < 0
             issues{end + 1} = sprintf('upper-off rows invalid: row1=%g row3=%g row4=%g', row1, row3, row4);
         end
@@ -1746,8 +1746,8 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
     isSourceDuringBoardOff = ~isempty(activeOff) && fIdx == 3 - activeOff;
     if isSourceDuringBoardOff
         if numel(widths) >= 8
-            % v5-C: hsplit 소스는 info/plot 이 col1/3 으로 이동 — col6/7 만 0 요구.
-            % col4/5 는 sideAnalysis 배치(splitter+map)가 합법적으로 사용.
+            % v5-C: hsplit source moves info/plot to col1/3 - require 0 only on col6/7.
+            % col4/5 are legitimately used by the sideAnalysis layout (splitter+map).
             movedStillVisible = ~i_widthSpecIsZero(widths{6}) || ~i_widthSpecIsZero(widths{7});
         else
             movedStillVisible = ~i_widthSpecIsZero(widths{3}) || ~i_widthSpecIsZero(widths{4}) || ...
@@ -1759,7 +1759,7 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
         return;
     end
 
-    % v5-E: hsplit arrangement(preset) 는 평면 column 모델 미적용 — col 검증 skip
+    % v5-E: hsplit arrangement(preset) does not use the flat column model - skip col check
     if isfield(st.boards(fIdx), 'arrangementMode') ...
             && strcmp(char(st.boards(fIdx).arrangementMode), 'hsplit')
         return;
@@ -1795,8 +1795,8 @@ function issues = i_validateBoardColumnWidths(st, fIdx, activeOff, issues) %#ok<
 end
 
 function issues = i_validateFlightPlayState(st, exp, fIdx, issues) %#ok<*AGROW>
-    % v-fix-A: hidden+inactive 패널은 control 내부 검증 skip (baseline 전역 false FAIL 방지).
-    % control 검증은 panel visible / playActive / requireFlightPlay / expected visible|active 일 때만.
+    % v-fix-A: skip internal control checks for hidden+inactive panels (avoids global baseline false FAIL).
+    % control checks run only when panel visible / playActive / requireFlightPlay / expected visible|active.
     try
         fp = st.boards(fIdx).flightPlay;
         requireFP = exp.requireFlightPlay(fIdx);
@@ -1805,7 +1805,7 @@ function issues = i_validateFlightPlayState(st, exp, fIdx, issues) %#ok<*AGROW>
         validateControls = logical(fp.panelVisible) || logical(fp.playActive) || ...
                            requireFP || expVisible || expActive;
 
-        % 가시/활성 expected 상태는 항상 검증 (구조 안전성)
+        % always verify visible/active expected state (structural safety)
         if logical(fp.panelVisible) ~= expVisible
             issues{end + 1} = sprintf('board %d flight play panel visible expected=%d actual=%d', ...
                 fIdx, expVisible, fp.panelVisible);
@@ -1816,7 +1816,7 @@ function issues = i_validateFlightPlayState(st, exp, fIdx, issues) %#ok<*AGROW>
         end
 
         if ~validateControls
-            return;   % hidden+inactive 무관 case → control 내부 검증 skip
+            return;   % hidden+inactive irrelevant case -> skip internal control check
         end
 
         if requireFP
@@ -1888,9 +1888,9 @@ function tf = i_widthSpecIsZero(widthSpec)
 end
 
 function projectPath = i_createProjectFixture(app, kind, outDir) %#ok<INUSD>
-    % v-fixB3: cwd/outDir 대신 tempname 기반 고유 디렉터리에 fixture 생성 →
-    % 기존 잔존 fixture 와 경로 충돌 차단. 생성 .fdproj 는 i_tempProjectFileRegistry
-    % 에 등록해 runner 종료 시 일괄 삭제.
+    % v-fixB3: create the fixture in a unique tempname-based dir instead of cwd/outDir ->
+    % blocks path collision with leftover fixtures. The created .fdproj is registered in
+    % i_tempProjectFileRegistry for bulk deletion when the runner ends.
     fixtureDir = [tempname() '_fdproj'];
     if ~exist(fixtureDir, 'dir')
         mkdir(fixtureDir);
@@ -2145,9 +2145,9 @@ function i_captureRequiredPanel(app, outDir, caseIdx, stepIdx, captureOpts, pane
     if isempty(target) || ~isvalid(target)
         error('AutoTest:PanelCaptureTargetMissing', 'Panel capture target missing: %s', char(panelName));
     end
-    % v-fixM2: 저장/스케일/exportapp fallback 로직을 i_captureFigure 로 일원화.
-    %          단, CAP() 는 명시적 panel-존재 assertion 이라 dedup skip 시 false fail
-    %          위험이 있으므로 panelOpts.deduplicate=false 로 강제 비활성.
+    % v-fixM2: unify save/scale/exportapp fallback logic into i_captureFigure.
+    %          However CAP() is an explicit panel-existence assertion, so a dedup skip risks
+    %          a false fail - force panelOpts.deduplicate=false to disable it.
     panelOpts = captureOpts;
     panelOpts.deduplicate = false;
     captureTarget = i_captureFigureTarget(app, target);
@@ -2192,7 +2192,7 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
         case {'main', 'dashboard'}
             target = app.UIFigure;
         case {'editdialog', 'projecteditor'}
-            % v-fix3: private property 직접 접근 제거 — hook 반환 handle 사용
+            % v-fix3: removed direct private-property access - use the hook-returned handle
             target = app.testHook('openEditDialog');
         case {'videocontrol', 'avicontrol'}
             target = app.UI(fIdx).vidControlDialog;
@@ -2201,7 +2201,7 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
                 target = app.UI(fIdx).vidControlDialog;
             end
         case {'videoviewer', 'videoplayer'}
-            % v-fix12: 명시적 capture 시에만 viewer open. 없으면 hook 시도 후 미가용 시 main fallback.
+            % v-fix12: open the viewer only on explicit capture. If absent, try the hook then main fallback if unavailable.
             target = app.UI(fIdx).vidViewerDialog;
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 try
@@ -2210,13 +2210,13 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
                 end
                 target = app.UI(fIdx).vidViewerDialog;
             end
-            % v-fix10: main figure fallback 제거 — viewer 미가용 시 false PASS 방지
+            % v-fix10: removed main figure fallback - prevents false PASS when the viewer is unavailable
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 error('AutoTest:VideoViewerCaptureTargetMissing', ...
                     'Video viewer capture target is missing for flight %d', fIdx);
             end
         case {'flightplay', 'flightplaycontrol'}
-            % v-fix11: panel 단독 캡처 (main figure 덮어쓰기 제거)
+            % v-fix11: panel-only capture (removed main figure overwrite)
             try
                 target = app.UI(fIdx).flightPlayControlPanel;
             catch
@@ -2229,7 +2229,7 @@ function target = i_findPanelCaptureTarget(app, panelName, fIdx)
                 catch
                 end
             end
-            % v-fix2: main figure fallback 제거 — panel 미가용 시 false PASS 방지
+            % v-fix2: removed main figure fallback - prevents false PASS when the panel is unavailable
             if isempty(target) || ~isvalid(target) || ~i_isHandleVisible(target)
                 error('AutoTest:FlightPlayCaptureTargetMissing', ...
                     'FlightPlay control capture target is missing for flight %d', fIdx);
@@ -2267,11 +2267,11 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
     if ~i_shouldCapture(captureOpts, reason)
         return;
     end
-    % v5-H2: 재생 timer 활성 중 getframe 은 R2025a hang 유발 (case97).
-    % 일반 step 캡처는 상태 왜곡 없이 skip(+콘솔 기록), 'fail' 진단 캡처만 정지 후 진행.
+    % v5-H2: getframe while a play timer is active causes an R2025a hang (case97).
+    % normal step capture is skipped without state distortion (+console log); only 'fail' diagnostic capture stops then proceeds.
     try
         st = app.testHook('getTestState');
-        % v-fixL4: false(1,2) 마스크 + find — n=2 한정이라 무해하지만 더 관용적.
+        % v-fixL4: false(1,2) mask + find - harmless since limited to n=2 but more idiomatic.
         activeMask = false(1, 2);
         for fp = 1:2
             if numel(st.boards) >= fp && isfield(st.boards(fp), 'flightPlay') ...
@@ -2293,23 +2293,23 @@ function [captured, status] = i_capture(app, outDir, caseIdx, stepIdx, captureOp
             end
         end
     catch ME_activeFp
-        % v-fixM6: app ring buffer 에도 흔적 — getTestState / flightPlay 필드 schema
-        %          오류가 silent 로 사라지지 않도록.
+        % v-fixM6: leave a trace in the app ring buffer too - so getTestState / flightPlay field schema
+        %          errors do not vanish silently.
         try
             app.logCaught(ME_activeFp, 'runner:i_capture:flightPlayActiveProbe');
         catch
             % Continue capture fallback without masking the probe result.
         end
     end
-    % main figure (suffix 없음 — legacy 파일명 호환)
+    % main figure (no suffix - legacy file-name compatibility)
     mainFile = fullfile(outDir, sprintf('case%02d_step%02d.png', caseIdx, stepIdx));
     [captured, status] = i_captureFigure(app.UIFigure, mainFile, captureOpts);
     mainDuplicate = strcmp(status, 'duplicate');
-    % v-fix3: 열린 외부 dashboard dialog 도 함께 캡처. main dedup 여부와 무관 —
-    % main 동일 상태에서 새 dialog 가 열린 경우 (EditDialog/SyncSearch 등) 누락 방지.
-    % v-fixH3: 실패 시 stderr 에 1줄 경고. silent swallow 제거 — 어떤 dialog 가
-    %          어떤 이유로 캡처 실패했는지 audit. (i_capture 는 progressFile 핸들이
-    %          없어 stderr 로 한정 — 필요 시 caller 가 stderr 를 progress 로 redirect.)
+    % v-fix3: also capture open external dashboard dialogs. Independent of main dedup -
+    % prevents misses when a new dialog opened while main was unchanged (EditDialog/SyncSearch etc.).
+    % v-fixH3: on failure, one-line warning to stderr. Removes silent swallow - audits which dialog
+    %          failed to capture and why. (i_capture has no progressFile handle so it is
+    %          stderr-only - caller may redirect stderr to progress if needed.)
     extras = i_collectOpenDialogs(app);
     for e = 1:size(extras, 1)
         tag = char(extras{e, 2});
@@ -2341,12 +2341,12 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
         if captureOpts.scale < 1
             img = i_resizeImageNearest(img, captureOpts.scale);
         end
-        % v-noteL6: dedup 는 capture 비용 (getframe + scale + signature) 자체를
-        %           줄이지 않는다 — 디스크 저장(imwrite) 과 markdown 인라인을
-        %           skip 하여 결과물 크기/리뷰 노이즈만 절약한다.
-        % v-fixH2: signature source 가 다른 경로 (getframe vs exportapp+imread) 끼리
-        %          비교되면 같은 화면도 다른 sig 로 인식되어 dedup 비결정 — 키에 경로
-        %          tag(|gf / |ea) 를 붙여 namespace 분리, 동일 source 내에서만 비교.
+        % v-noteL6: dedup does not reduce the capture cost (getframe + scale + signature) itself
+        %           - it skips disk save(imwrite) and markdown inline, saving only output size/review noise.
+        %
+        % v-fixH2: when the signature source differs across paths (getframe vs exportapp+imread),
+        %          the same screen gets a different sig and dedup becomes nondeterministic - add a path
+        %          tag(|gf / |ea) to the key for namespace separation, comparing only within the same source.
         if isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
             sig = i_captureImageSignature(img);
             if i_captureDuplicate([i_captureTargetKey(figh) '|gf'], sig, false)
@@ -2369,7 +2369,7 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
             return;
         end
     catch ME_gf
-        % #3: 1차 경로(getframe/imwrite) 실패 사유를 stderr 에 남기고 exportapp fallback 진행
+        % #3: leave the 1st-path(getframe/imwrite) failure reason on stderr and proceed to exportapp fallback
         fprintf(2, '  [capture] getframe/imwrite failed (%s), trying exportapp: %s\n', ...
             i_captureTargetKey(figh), ME_gf.message);
     end
@@ -2381,10 +2381,10 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
             % Capture result already written; draw flush is non-critical.
         end
         ok = isfile(file);
-        % v-fixM5: exportapp fallback 경로도 dedup 적용 — 저장된 PNG 를 imread 로
-        %          다시 읽어 signature 비교. fallback 끼리 dup 인식 가능.
-        % v-fixH2: getframe 경로와 source 가 달라 cross-비교는 의미 없음 → '|ea' tag 로
-        %          namespace 분리. 같은 figh 가 두 경로 모두를 거쳐도 키 충돌 없음.
+        % v-fixM5: apply dedup on the exportapp fallback path too - read back the saved PNG with imread
+        %          and compare signatures. fallbacks can recognize a dup among themselves.
+        % v-fixH2: the getframe path has a different source so cross-comparison is meaningless -> '|ea' tag
+        %          for namespace separation. No key collision even if the same figh goes through both paths.
         if ok && isfield(captureOpts, 'deduplicate') && captureOpts.deduplicate
             try
                 img2 = imread(file);
@@ -2409,11 +2409,11 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
 end
 
 function key = i_captureTargetKey(figh)
-    % v-fixM: class + Tag + Name 조합 — Name/Title 미설정 dialog 들이
-    %         모두 'figure' 키로 충돌해 서로 dedup 비교 대상이 되던 문제 차단.
-    % v-fixM4: 핸들 식별자(Number 또는 double 변환) 도 추가 — class+Tag+Name 가
-    %          모두 동일한 두 figure 가 실제로는 다른 핸들이면 dedup map 에서 분리.
-    %          uifigure 등 double() 실패 핸들은 catch → 기존 키로 fallback.
+    % v-fixM: class + Tag + Name combination - blocks the problem where dialogs without Name/Title
+    %         all collided on the 'figure' key and became dedup comparison targets of each other.
+    % v-fixM4: also add a handle identifier(Number or double conversion) - if two figures with the
+    %          same class+Tag+Name are actually different handles, separate them in the dedup map.
+    %          handles where double() fails (uifigure etc.) catch -> fallback to the existing key.
     parts = {'figure', '', '', ''};
     try
         parts{1} = char(class(figh));
@@ -2446,10 +2446,10 @@ function key = i_captureTargetKey(figh)
 end
 
 function sig = i_captureImageSignature(img)
-    % v-fixL7: JVM 미가용 환경(headless 등) 대비 두 단계 — 1차 MD5(java),
-    %          실패 시 stride 샘플링 통계로 fallback. fallback 은 충돌률이
-    %          높으니 운영용보다 가벼운 자가검증 목적으로만 신뢰.
-    FALLBACK_TARGET_SAMPLES = 80;  % 한 변당 약 80 픽셀까지 다운샘플
+    % v-fixL7: two stages for JVM-unavailable envs (headless etc.) - 1st MD5(java),
+    %          on failure fallback to stride-sampling statistics. The fallback has a high
+    %          collision rate, so trust it only for lightweight self-check, not production.
+    FALLBACK_TARGET_SAMPLES = 80;  % downsample to about 80 pixels per side
     try
         md = java.security.MessageDigest.getInstance('MD5');
         md.update(uint8(img(:)));
@@ -2485,10 +2485,10 @@ function duplicate = i_captureDuplicate(key, sig, reset)
 end
 
 function i_tempProjectFileRegistry(mode, path)
-    % v-fixM4: G-EDIT-09 등 testHook setProjectFilePath 로 사용된 임시 .fdproj
-    %          경로 등록 + runner 종료 시 일괄 삭제. 각 case 는 fresh app 으로
-    %          시작하므로 app 측 ProjectFilePath 복원은 불필요 — 디스크에 남는
-    %          orphan 파일 정리만 책임진다.
+    % v-fixM4: temp .fdproj paths used via testHook setProjectFilePath in G-EDIT-09 etc.
+    %          register the path + bulk-delete when the runner ends. Each case starts with a
+    %          fresh app, so the app-side ProjectFilePath restore is unnecessary - this only
+    %          takes responsibility for cleaning orphan files left on disk.
     persistent registry
     if isempty(registry), registry = {}; end
     switch lower(char(mode))
@@ -2517,20 +2517,20 @@ function i_tempProjectFileRegistry(mode, path)
 end
 
 function i_captureDuplicateReset()
-    % v-fixM: runner 진입부에서 dedup signature persistent 상태를 명시 초기화.
-    %         persistent 은 함수 스코프이므로 auto_test_runner 의 로컬 i_captureDuplicate
-    %         persistent 만 해당. auto_test_runner_under_user 는 dedup helper 를
-    %         호출하지 않아 별도 reset 불필요 (스코프 자체가 분리).
+    % v-fixM: explicitly reset the dedup signature persistent state at runner entry.
+    %         persistent is function-scoped, so this only covers auto_test_runner's local
+    %         i_captureDuplicate persistent. auto_test_runner_under_user does not call the dedup
+    %         helper, so no separate reset is needed (scope is itself separated).
     i_captureDuplicate('', '', true);
     i_captureDuplicateFile('reset', '');
 end
 
 function out = i_captureDuplicateFile(mode, filePath)
-    % v-fixM/L8: dedup 으로 저장 skip 된 PNG 경로를 persistent set 에 기록 +
-    %            outDir 의 duplicates.log 에 append 하여 단일 audit 채널로 통합.
-    %            i_captureMarkdown 은 set 을 조회해 "(duplicate skipped)" 마크업 결정.
-    % v-fixM5: reset 후 첫 'add' 호출에서 duplicates.log 를 'w' 로 truncate +
-    %          timestamp 헤더 1줄. 다음 run 의 stale 라인 누적 차단.
+    % v-fixM/L8: record PNG paths skipped by dedup into a persistent set +
+    %            append to outDir's duplicates.log to unify into a single audit channel.
+    %            i_captureMarkdown queries the set to decide the "(duplicate skipped)" markup.
+    % v-fixM5: on the first 'add' after reset, truncate duplicates.log with 'w' +
+    %          a 1-line timestamp header. Blocks stale-line accumulation across runs.
     persistent dupSet needTruncate
     out = false;
     if isempty(dupSet)
@@ -2570,14 +2570,14 @@ function out = i_captureDuplicateFile(mode, filePath)
 end
 
 function dlgs = i_collectOpenDialogs(app)
-    % v-fix2: private property 직접 접근 제거 — app hook 으로 visible dialog {handle, tag} 수집
+    % v-fix2: removed direct private-property access - collect visible dialog {handle, tag} via the app hook
     try
         dlgs = app.testHook('getOpenDialogHandlesForTest');
         if ~iscell(dlgs) || size(dlgs, 2) ~= 2
             dlgs = cell(0, 2);
         end
     catch ME_dlg
-        % v-fixM6: ring buffer 에도 흔적 (hook 실패가 silent 로 cell(0,2) 만 반환되던 것)
+        % v-fixM6: leave a trace in the ring buffer too (hook failure used to return only cell(0,2) silently)
         try
             app.logCaught(ME_dlg, 'runner:i_collectOpenDialogs');
         catch
@@ -2625,9 +2625,9 @@ end
 % =========================================================================
 function i_initProgressMd(progressFile, opts, nCases, caseOrder)
     if nargin < 4, caseOrder = []; end
-    % v-fixM2/M7: persistent fid 핸들러로 일원화 — chunk 진입마다 'init' (truncate)
-    %             로 새 파일 열고, 이후 i_appendProgressMd 가 동일 fid 를 재사용.
-    %             runner onCleanup 이 'close' 호출 → fopen/fclose 수천 회 → 1 회/chunk.
+    % v-fixM2/M7: unify with a persistent fid handler - 'init' (truncate) opens a new file at
+    %             each chunk entry, then i_appendProgressMd reuses the same fid.
+    %             runner onCleanup calls 'close' -> thousands of fopen/fclose -> once per chunk.
     fid = i_progressMdHandle('init', progressFile);
     if fid < 0, return; end
     try
@@ -2648,7 +2648,7 @@ function i_initProgressMd(progressFile, opts, nCases, caseOrder)
         fprintf(fid, '|---|---:|---:|---|---|\n');
     catch
     end
-    % fclose 는 i_progressMdHandle('close', '') 한 곳에서만 — onCleanup 보장.
+    % fclose only in i_progressMdHandle('close', '') - guaranteed by onCleanup.
 end
 
 function s = i_vecToStr(v)
@@ -2657,8 +2657,8 @@ function s = i_vecToStr(v)
 end
 
 function order = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, skipList, caseList)
-    % 실행 순서 벡터 구축. CaseList 지정 시 우선, 아니면 Start/End/Order.
-    % Skip 적용 + 중복 제거 (순서 유지) + 1..nCases 범위 clamp.
+    % Build the run-order vector. CaseList takes priority, else Start/End/Order.
+    % Apply Skip + dedup (keep order) + clamp to the 1..nCases range.
     if ~isempty(caseList)
         order = round(caseList(:)');
     else
@@ -2677,7 +2677,7 @@ function order = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, skipList, cas
         end
     end
     % clamp + valid range
-    % C3: 범위 밖 항목은 자동 제거(clamp)되지만, 사용자 가시화를 위해 경고.
+    % C3: out-of-range items are auto-removed(clamp), but warn for user visibility.
     outOfRange = order(order < 1 | order > nCases);
     if ~isempty(outOfRange)
         warning('auto_test_runner:CaseOrderOutOfRange', ...
@@ -2688,15 +2688,15 @@ function order = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, skipList, cas
     if ~isempty(skipList)
         order = order(~ismember(order, round(skipList(:)')));
     end
-    % 중복 제거 (순서 보존)
+    % dedup (preserve order)
     [~, ui] = unique(order, 'stable');
     order = order(ui);
 end
 
 function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
     if nargin < 5 || isempty(detail), detail = ''; end
-    % v-fixM2: persistent fid 재사용 (init 직후엔 'w' fid 가 그대로 살아 있고,
-    %          chunk 사이 호출이면 'a' 로 lazy reopen). path 변경 시 자동 close+reopen.
+    % v-fixM2: reuse persistent fid (right after init the 'w' fid is still alive, and
+    %          between chunks it lazy-reopens with 'a'). Auto close+reopen on path change.
     fid = i_progressMdHandle('append', progressFile);
     if fid < 0, return; end
     try
@@ -2705,19 +2705,19 @@ function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
             caseIdx, stepIdx, i_mdEscape(status), i_mdEscape(detail));
     catch
     end
-    % #2: 진단상 중요한 이벤트는 즉시 디스크 반영(close → 다음 append 자동 재오픈).
-    % 평상시 step append 는 빠른 persistent-fid 경로 유지. 하드 크래시 resilience 회복.
+    % #2: flush diagnostically important events to disk immediately (close -> auto reopen on next append).
+    % normal step append keeps the fast persistent-fid path. Restores hard-crash resilience.
     if any(strcmp(status, {'FAIL', 'EXCEPTION', 'SETUP_FAIL', 'CAPTURE_FAIL', 'CHUNK_FINISHED'}))
         i_progressMdHandle('close', '');
     end
 end
 
 function fid = i_progressMdHandle(mode, progressFile)
-    % v-fixM2/M7: progress.md 용 persistent fid 핸들러. fopen/fclose 매 append 마다
-    %             수행하던 비용 제거. 'init' = truncate('w'), 'append' = ensure-open('a'
-    %             또는 init 직후 'w' 재사용), 'close' = 닫고 상태 클리어.
-    %             persistent 은 함수 스코프 — auto_test_runner 진입부의 onCleanup 으로
-    %             종료 시 'close' 보장.
+    % v-fixM2/M7: persistent fid handler for progress.md. Removes the per-append fopen/fclose
+    %             cost. 'init' = truncate('w'), 'append' = ensure-open('a'
+    %             or reuse the 'w' right after init), 'close' = close and clear state.
+    %             persistent is function-scoped - guaranteed 'close' on exit via the
+    %             onCleanup at auto_test_runner entry.
     persistent currentFid currentPath
     if isempty(currentFid), currentFid = -1; end
     if isempty(currentPath), currentPath = ''; end
@@ -2814,7 +2814,7 @@ function i_writeCaseMd(outDir, idx, tc, r)
         fprintf(fid, '\n## Failure Detail\n```\n%s\n```\n', r.error);
     end
     if isfield(r, 'issues') && ~isempty(r.issues)
-        % A3: 검증 불일치 항목 항목별(bullet) 출력
+        % A3: per-item(bullet) output of validation mismatch items
         fprintf(fid, '\n## Validation Issues\n');
         lines = strsplit(char(r.issues), sprintf('\n'));
         for k = 1:numel(lines)
@@ -2840,8 +2840,8 @@ function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
     else
         parts{end + 1} = '(not captured)'; %#ok<AGROW>
     end
-    % v-fixM1: 동 step 의 외부 dialog 캡처 (caseXX_stepYY_TAG.png) 도 함께 인라인.
-    %          dedup 으로 disk 에 없는 파일은 자연히 누락. <br> 로 셀 내 줄바꿈.
+    % v-fixM1: also inline the same step's external dialog captures (caseXX_stepYY_TAG.png).
+    %          files not on disk due to dedup are naturally omitted. <br> for in-cell line break.
     suffixGlob = sprintf('case%02d_step%02d_*.png', caseIdx, stepIdx);
     extras = dir(fullfile(outDir, suffixGlob));
     for k = 1:numel(extras)
@@ -2851,7 +2851,7 @@ function txt = i_captureMarkdown(outDir, caseIdx, stepIdx)
 end
 
 function i_writeIndexMd(outDir, results, indexFile, progressFile)
-    % v-chunk: chunk 별 index 파일. indexFile/progressFile 미지정 시 legacy 'index.md'/'progress.md'.
+    % v-chunk: per-chunk index file. When indexFile/progressFile omitted, legacy 'index.md'/'progress.md'.
     if nargin < 3 || isempty(indexFile)
         fname = fullfile(outDir, 'index.md');
     else
@@ -2961,10 +2961,10 @@ function cases = i_buildCaseMatrix()
     PRE = @(kind, lbl)         struct('fn','openProjectFixtureInEditDialog','args',{{kind}},      'label',lbl, 'row',NaN);
     VCD = @(fIdx, lbl)         struct('fn','toggleVideoControlDialog',       'args',{{fIdx}},     'label',lbl, 'row',NaN);
     GTF = @(fIdx, fr, lbl)     struct('fn','goToFrame',                     'args',{{fIdx, fr}}, 'label',lbl, 'row',NaN);
-    % v-fixH4: CAP 은 i_findPanelCaptureTarget 가 dialog/viewer 를 자동 open 하는
-    %          side effect 가 있어 직후 i_validateState 가 가시성 delta 로 false FAIL
-    %          가능 — 'skipValidateState' 플래그로 검증 면제 (캡처 존재 보장은
-    %          i_captureRequiredPanel 가 throw 로 직접 수행).
+    % v-fixH4: CAP has a side effect where i_findPanelCaptureTarget auto-opens the dialog/viewer,
+    %          so right after, i_validateState can false FAIL on a visibility delta
+    %          - exempt via the 'skipValidateState' flag (capture existence is still guaranteed by
+    %          i_captureRequiredPanel throwing directly).
     CAP = @(name, fIdx, lbl)   struct('fn','captureRequiredPanel',          'args',{{name, fIdx}}, 'label',lbl, 'row',NaN, 'skipValidateState', true);
 
     mk = @(g, t, tgt, exp, acts) struct('group', g, 'title', t, ...
@@ -2974,7 +2974,7 @@ function cases = i_buildCaseMatrix()
     cases = struct('group',{}, 'title',{}, 'target',{}, 'expected',{}, 'actions',{}, ...
                    'requireAvi',{}, 'forbidAvi',{}, 'skipReason',{});
 
-    %% Group A — 보드 off 없음 (5)
+    %% Group A - no board off (5)
     cases(end + 1) = mk('A','A01 기본 로드','','baseline 캡처', {});
     cases(end + 1) = mk('A','A02 보드1 자세 off','','보드1 자세 숨김', ...
         {P(1,'attitude','보드1 자세 off')});
@@ -2985,7 +2985,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('A','A05 보드1 자세+지도+비디오 모두 off','','3개 동시 숨김, H 1x 흡수', ...
         {P(1,'attitude','자세 off'), P(1,'mapOnly','지도/고도 off'), P(1,'video','비디오 off')});
 
-    %% Group B — 보드1 off 시나리오 (15)
+    %% Group B - board1 off scenarios (15)
     cases(end + 1) = mk('B','B01 보드1 off→on','','왕복 정상', ...
         {BV(1,'보드1 off'), BV(1,'보드1 on')});
     cases(end + 1) = mk('B','B02 보드1 off + 보드2 자세 off → on','mid-off 영속성','보드2 자세 off 유지', ...
@@ -3017,7 +3017,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('B','B15 보드1 off + applyTimeChange','드래그 결과 동기','source 시간 + off-summary 추종', ...
         {BV(1,'보드1 off'), ATC(2, 50, 'applyTimeChange(2,50)'), ATC(2, 200, 'applyTimeChange(2,200)')});
 
-    %% Group C — 보드2 off (B 대칭) (15)
+    %% Group C - board2 off (B mirror) (15)
     cases(end + 1) = mk('C','C01 보드2 off→on','','왕복 정상', ...
         {BV(2,'보드2 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('C','C02 보드2 off + 보드1 자세 off → on','mid-off 영속성','보드1 자세 off 유지', ...
@@ -3049,7 +3049,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('C','C15 보드2 off + applyTimeChange','드래그 결과 동기','source 시간 변화', ...
         {BV(2,'보드2 off'), ATC(1, 50, 'applyTimeChange(1,50)'), ATC(1, 200, 'applyTimeChange(1,200)')});
 
-    %% Group D — 전이 / mutual exclusion (10)
+    %% Group D - transitions / mutual exclusion (10)
     cases(end + 1) = mk('D','D01 보드1 off/on → 보드2 off/on','','순차 토글', ...
         {BV(1,'보드1 off'), BV(1,'보드1 on'), BV(2,'보드2 off'), BV(2,'보드2 on')});
     cases(end + 1) = mk('D','D02 보드1 off 중 보드2 off 호출','mutual exclusion','no-op', ...
@@ -3071,7 +3071,7 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('D','D10 보드1 off 후 off-summary 버튼 가시성','4014bf9 회귀','+빈 탭 추가 보임', ...
         {BV(1,'보드1 off'), BOA(1,'+빈 탭 추가 (보여야 함)')});
 
-    %% Group E — 별표 드래그 결과 (5)
+    %% Group E - star marker drag result (5)
     cases(end + 1) = mk('E','E01 일반 모드 보드1 시간 변화','별표 드래그 결과','marker/spinner 동기', ...
         {ATC(1, 30, 'applyTimeChange(1,30)'), ATC(1, 100, 'applyTimeChange(1,100)')});
     cases(end + 1) = mk('E','E02 보드1 off + applyTimeChange','off-summary 동기','marker 추종', ...
@@ -3140,7 +3140,7 @@ function cases = i_buildCaseMatrix()
         'repeated apply', 'preset+drag cycle stable, no progressive drift', ...
         {LP('layout-vsplit','vsplit'), CDS(1,3,40,'drag1'), LP('layout-grid','grid'), ...
          CDS(1,3,-40,'drag2'), LP('layout-vsplit','vsplit again'), CDS(1,3,30,'drag3')});
-    % v3-audit F: G-LAYOUT-16~25 — 5 panel-hide × 2 board-off × 2 layout-preset 조합
+    % v3-audit F: G-LAYOUT-16~25 - 5 panel-hide x 2 board-off x 2 layout-preset combinations
     cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-16 attitude hide + upper board off', ...
         'combo: attitude off + upper off', 'arrangement valid in board-off with hidden attitude', ...
         {P(2,'attitude','flight2 attitude off'), BV(1,'upper board off'), BV(1,'upper board on')});
@@ -3172,7 +3172,7 @@ function cases = i_buildCaseMatrix()
         'combo: hsplit/grid round trip', 'normal restoration preserves visibility', ...
         {LP('layout-hsplit','hsplit'), LP('layout-grid','grid'), LP('layout-hsplit','hsplit again'), ...
          LP('layout-reset','reset to default')});
-    % v-final P8: board-off 활성 시 source 보드 패널 토글이 정상 작동하고 board-on 복귀 후 보존되는지
+    % v-final P8: verify source-board panel toggle works during board-off and is preserved after board-on
     cases(end + 1) = mk('G-LAYOUT','G-LAYOUT-26 source-board attitude toggle during board-off', ...
         'panel toggle during board-off persists after board-on', 'v-final P8', ...
         {BV(1,'upper board off'), P(2,'attitude','source flight2 attitude toggle'), ...
@@ -3186,7 +3186,7 @@ function cases = i_buildCaseMatrix()
         {BV(1,'upper board off'), P(2,'altOnly','source flight2 altOnly toggle'), ...
          BV(1,'upper board on')});
 
-    % v-runner: G-EDIT — EditDialog 6 탭 자동 회귀
+    % v-runner: G-EDIT - EditDialog 6-tab auto regression
     cases(end + 1) = mk('G-EDIT','G-EDIT-01 open + close EditDialog', ...
         'dialog lifecycle', 'open/close 정상', ...
         {OED('open EditDialog'), CED('close EditDialog')});
@@ -3217,9 +3217,9 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('G-EDIT','G-EDIT-08 Apply pending dialog changes', ...
         'apply pending', 'applyPendingDialogChanges 호출', ...
         {OED('open'), APD('apply pending'), CED('close')});
-    % v-fixG: ProjectFilePath 를 사전 세팅해 uiputfile 모달을 우회 — 임시 .fdproj 경로 사용.
-    % v-fixM4: 임시 파일을 runner-level registry 에 등록 → runner 종료 시 onCleanup
-    %          이 일괄 삭제. case throw 로 SPP('') 가 누락돼도 잔존 방지.
+    % v-fixG: preset ProjectFilePath to bypass the uiputfile modal - use a temp .fdproj path.
+    % v-fixM4: register the temp file in the runner-level registry -> onCleanup bulk-deletes
+    %          when the runner ends. Prevents leftovers even if SPP('') is skipped due to a case throw.
     gEdit09SavePath = [tempname() '.fdproj'];
     i_tempProjectFileRegistry('add', gEdit09SavePath);
     cases(end + 1) = mk('G-EDIT','G-EDIT-09 project save through EditDialog', ...
@@ -3262,7 +3262,7 @@ function cases = i_buildCaseMatrix()
         'play timer', 'timer can start and stop without leaking active state', ...
         {FPT(1,'open'), FPCYC(1,'play start-stop cycle')});
 
-    % H-SYNC-SEARCH: 동기시간 찾기 anchor → setFlightDataSync 경로
+    % H-SYNC-SEARCH: sync-time search anchor -> setFlightDataSync path
     cases(end + 1) = mk('H-SYNC-SEARCH','H-SYNC-SEARCH-01 anchor T1/T2 지정 후 동기 적용', ...
         'sync anchor apply', 'T1/T2 지정 → applyPendingSyncAnchor → SyncState.IsSynced', ...
         {SSAM(1, 0, 'TestCol', 1, 0, 'T1=0 + meta'), SSMETA(1, 'TestCol', 1, 0, 'verify meta f1'), ...
@@ -3345,11 +3345,11 @@ function cases = i_buildCaseMatrix()
             'video control sync', 'video control frame and dashboard video state stay aligned', ...
             {BVR('reset board-off'), SVS(fIdx, 1, 0, 30, 50, 'enable video sync'), VCD(fIdx, 'open video control'), GTF(fIdx, targetFrame, 'go to frame'), VCD(fIdx, 'close video control')});
     end
-    % [#2] dual video control sync 독립성 — 양 보드 동시 sync 후 한쪽 goToFrame 시
-    % 반대 보드의 video frame/currentIndex 불변(cross-talk 없음)을 기존 검증으로 단언.
-    % (GTF 가 대상 보드만 videoFrameExpected/ currentIndex(=NaN) 갱신, 반대 보드는
-    %  baseline 고정 → i_validateState 의 frame anchor + currentIndex 비교가 독립성 검사.)
-    % 'video control' 포함 제목 → 후단 규칙에서 requireAvi=true 자동 설정.
+    % [#2] dual video control sync independence - after syncing both boards, a goToFrame on one
+    % asserts the other board's video frame/currentIndex stay unchanged (no cross-talk) via existing checks.
+    % (GTF updates only the target board's videoFrameExpected/currentIndex(=NaN); the other board stays
+    %  baseline -> i_validateState's frame anchor + currentIndex comparison is the independence check.)
+    % title containing 'video control' -> requireAvi=true auto-set by the trailing rule.
     cases(end + 1) = mk('J-PANEL-SYNC', 'J-PANEL-SYNC-31 dual video control sync independence (move F1)', ...
         'dual video sync', 'goToFrame on F1 leaves F2 video frame and data index unchanged', ...
         {BVR('reset board-off'), SVS(1, 1, 0, 30, 50, 'sync F1'), SVS(2, 1, 0, 30, 50, 'sync F2'), ...
@@ -3383,9 +3383,9 @@ function cases = i_buildCaseMatrix()
                 contains(cases(k).title, 'video_sync_with_avi')
             cases(k).requireAvi = true;
         elseif contains(lower(cases(k).title), 'videoviewer') || contains(lower(cases(k).title), 'video viewer')
-            cases(k).requireAvi = true;   % v-fix12: video viewer capture 는 AVI 필요
+            cases(k).requireAvi = true;   % v-fix12: video viewer capture needs AVI
         elseif contains(cases(k).title, 'H-FLIGHT-PLAY')
-            % v5-I: row timer 검증 — AVI 불필요. LoadAvi='always' 에서도 로드 금지 (R2025a hang 리소스 절감)
+            % v5-I: row timer verification - no AVI needed. Do not load even under LoadAvi='always' (save R2025a hang resources)
             cases(k).forbidAvi = true;
         end
     end
