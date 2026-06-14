@@ -2366,7 +2366,10 @@ function [ok, status] = i_captureFigure(figh, file, captureOpts)
             status = 'saved';
             return;
         end
-    catch
+    catch ME_gf
+        % #3: 1차 경로(getframe/imwrite) 실패 사유를 stderr 에 남기고 exportapp fallback 진행
+        fprintf(2, '  [capture] getframe/imwrite failed (%s), trying exportapp: %s\n', ...
+            i_captureTargetKey(figh), ME_gf.message);
     end
     try
         exportapp(figh, file);
