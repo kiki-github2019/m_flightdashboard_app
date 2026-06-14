@@ -877,7 +877,7 @@
                 s.selectedRow = double(app.Models(fIdx).selectedRow);
                 if s.dataLoaded && isfield(app.Models(fIdx).mappedCols, 'Time')
                     timeCol = app.Models(fIdx).mappedCols.Time;
-                    idx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                    idx = app.clampedCurrentIndex(fIdx);
                     s.currentTime = double(app.Models(fIdx).rawData.(timeCol)(idx));
                 end
                 if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
@@ -7646,7 +7646,7 @@
                         app.applyPlotHeightInPlace(fIdx, t, p, app.EDPlotHeight.Value);
                         app.PlotConfigState = cfg;
                         try
-                            currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                            currIdx = app.clampedCurrentIndex(fIdx);
                             timeCol = app.Models(fIdx).mappedCols.Time;
                             currTime = app.Models(fIdx).rawData.(timeCol)(currIdx);
                             app.updatePlotTimeLines(fIdx, currIdx, currTime);
@@ -8241,7 +8241,7 @@
                     % v-fix5: 새 데이터 로드 시 stale 선택 상태 무효화
                     app.invalidateInfoTableSelection(fIdx);
                 else
-                    currIdx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
+                    currIdx = app.clampedCurrentIndex(fIdx);
                 end
 
                 app.UI(fIdx).spinner.Limits = [times(1), times(end)];
@@ -8503,6 +8503,12 @@
             catch ME
                 app.logCaught(ME, 'ensureAltitudeMarkerCallbacks');
             end
+        end
+
+        function idx = clampedCurrentIndex(app, fIdx)
+            % currentIndex 를 [1, rawData 행수] 로 clamp (rawData 비면 1).
+            % 읽기 전용·무부작용 — 반복되던 동일 표현의 1:1 추출(동작 불변).
+            idx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
         end
 
         function ui = createFlightPlayControlPanel(app, parent, fIdx, t)
@@ -11143,7 +11149,7 @@
                 currIdx = 1;
                 currTime = 0;
                 if ~isempty(app.Models(sourceIdx).rawData)
-                    currIdx = max(1, min(app.Models(sourceIdx).currentIndex, height(app.Models(sourceIdx).rawData)));
+                    currIdx = app.clampedCurrentIndex(sourceIdx);
                     timeCol = app.Models(sourceIdx).mappedCols.Time;
                     timeData = app.Models(sourceIdx).rawData.(timeCol);
                     currTime = timeData(currIdx);
@@ -11292,7 +11298,7 @@
             if nargin < 3, sourceIdx = app.getBoardOffSourceIdx(fIdx); end
             try
                 if isempty(app.Models(sourceIdx).rawData), return; end
-                currIdx = max(1, min(app.Models(sourceIdx).currentIndex, height(app.Models(sourceIdx).rawData)));
+                currIdx = app.clampedCurrentIndex(sourceIdx);
                 timeCol = app.Models(sourceIdx).mappedCols.Time;
                 times = app.Models(sourceIdx).rawData.(timeCol);
                 currTime = times(currIdx);
