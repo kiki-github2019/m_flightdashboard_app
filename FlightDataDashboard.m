@@ -1,80 +1,80 @@
 ﻿classdef FlightDataDashboard < matlab.apps.AppBase
     % =========================================================================
-    % 비행 데이터 리뷰 대시보드 - V3.22 (리팩토링: 모듈 분해 + 캐시 자료구조 개선)
-    % 설명:
-    %   [V3.22 변경사항]
-    %   - #1 ErrorLog ring buffer (silent catch도 사후 조사 가능)
-    %        + dumpErrorLog(n, filterTag) 헬퍼 메서드
-    %   - #2 cacheGetFrame을 lastUse 카운터 기반 O(1) lookup으로 전환
-    %        (cell 배열 reference shuffle 제거 → 큰 프레임 lookup 시 GC 압력 감소)
-    %        cacheStoreFrame은 in-place 갱신 + lastUse 동기 관리
-    %        evictByScore에 lastUse 인자 추가 → score = (hits * recency) / bytes
-    %   - #3 loadAviFile을 6개 헬퍼로 분해:
+    % Flight data review dashboard - V3.22 (refactor: module decomposition + cache data-structure improvement)
+    % Description:
+    %   [V3.22 changes]
+    %   - #1 ErrorLog ring buffer (silent catch also post-mortem-inspectable)
+    %        + dumpErrorLog(n, filterTag) helper method
+    %   - #2 switch cacheGetFrame to lastUse-counter-based O(1) lookup
+    %        (remove cell-array reference shuffle -> less GC pressure on large-frame lookup)
+    %        cacheStoreFrame does in-place update + lastUse sync management
+    %        evictByScore gains a lastUse arg -> score = (hits * recency) / bytes
+    %   - #3 decompose loadAviFile into 6 helpers:
     %        confirmVideoReplace / invalidateFrameCache / computeStartTimeFromFlightData
     %        cleanupVideoResources / openVideoReader / applyVideoLoadedUI
     %        computeTotalFrames / loadFirstFrame
-    %   - #4 매직 넘버 상수화: ASYNC_WORKER_COUNT, WORKER_VR_CACHE_SLOTS,
+    %   - #4 magic-number constants: ASYNC_WORKER_COUNT, WORKER_VR_CACHE_SLOTS,
     %        MAX_SEQ_READ_STEP, MAX_PENDING_ITERS
-    %   - #5 UIGroup alias: 평면 UI struct를 attitude/map/video/plots/controls/data
-    %        로 그룹화. 기존 평면 필드는 그대로 유지(100% 호환), 신규 코드는 그룹 사용
+    %   - #5 UIGroup alias: group the flat UI struct into attitude/map/video/plots/controls/data
+    %        Existing flat fields are kept as-is (100% compatible); new code uses groups
     %   - #6 Static wrapper: workerDecodeFrame / workerCleanupCache
-    %        → 향후 +flightdash 패키지 마이그레이션 옵션 확보
-    %   - #7 createLayout 분해: buildHeaderBar 추출 + 비행경로 루프 섹션 가이드 추가
+    %        -> secures a future +flightdash package migration option
+    %   - #7 decompose createLayout: extract buildHeaderBar + add flight-path loop section guides
     %
     %   [Layout Improvement L1~L4 Applied - 2026-06-06]
     %   - board-off 4-row bodyGrid, 4px splitters, map/altitude independent toggles
     %   - responsive attitude gauge reflow, layout preset picker, draggable splitters
     %
-    %   [V3.21 #1-A] Generation counter (AsyncGen): 매 startAsyncDecode 호출 시
-    %     증가, future에 myGen 캡처 → onAsyncDecodeComplete에서 비교하여 stale
-    %     결과 폐기. 같은 frame이라도 generation mismatch면 무시 → race 차단.
-    %   [V3.21 #3-A] 3계층 분리:
-    %     Layer 1 requestFrame: 진입점 + 캐시 lookup + sync/async 전략 선택
-    %     Layer 2 decodeFrameSync / startAsyncDecode: 디코딩 (전략 패턴)
-    %     Layer 3 displayFrame: 표시 + 캐시 store (write-through 단일 출구)
-    %     기존 updateVideoFrameByFrameNo는 requestFrame로 위임 (호환).
+    %   [V3.21 #1-A] Generation counter (AsyncGen): increments on each startAsyncDecode call,
+    %     captures myGen on the future -> compared in onAsyncDecodeComplete to discard stale
+    %     results. Even for the same frame, a generation mismatch is ignored -> blocks races.
+    %   [V3.21 #3-A] 3-layer separation:
+    %     Layer 1 requestFrame: entry point + cache lookup + sync/async strategy selection
+    %     Layer 2 decodeFrameSync / startAsyncDecode: decoding (strategy pattern)
+    %     Layer 3 displayFrame: display + cache store (write-through single exit)
+    %     The existing updateVideoFrameByFrameNo delegates to requestFrame (compat).
     %   [V3.21 #2-A] persistent VideoReader in worker:
-    %     asyncDecodeFramePersistent 외부 함수에서 persistent 변수로 VR 재사용
-    %     → 호출당 ~50ms→3ms로 단축. 파일 변경 시에만 VR 재생성.
-    %   [V3.20 유지] 명시적 리소스 정리, 동기화 로그 prefix 표준화.
-    %   [V3.19 유지] 비동기 디코딩, adaptive prefetch, 가중 LRU.
-    %   [V3.18 유지] cache lookup clamp, Pending 완전 소진, hard limit 1.0.
-    %   [V3.17 유지] InGoToFrame coalescing, IsDecoding 가드.
+    %     asyncDecodeFramePersistent external function reuses the VR via a persistent var
+    %     -> ~50ms->3ms per call. Recreates VR only when the file changes.
+    %   [V3.20 kept] explicit resource cleanup, standardized sync-log prefix.
+    %   [V3.19 kept] async decoding, adaptive prefetch, weighted LRU.
+    %   [V3.18 kept] cache lookup clamp, full Pending drain, hard limit 1.0.
+    %   [V3.17 kept] InGoToFrame coalescing, IsDecoding guard.
     % =========================================================================
 
     % ---------------------------------------------------------------------
-    % 상수 (매직 넘버 제거)
+    % Constants (magic-number removal)
     % ---------------------------------------------------------------------
     properties (Constant, Access = private)
         MAX_TABS          = 10
         MAX_PLOTS_PER_TAB = 12
-        PLOT_ROW_HEIGHT   = 150     % H영역 내 각 플롯 패널 높이(px)
+        PLOT_ROW_HEIGHT   = 150     % per-plot panel height inside the H area (px)
         LAYOUT_SPLITTER_THICKNESS = 4
-        MOCK_STEP_COUNT   = 200     % 모의 데이터 스텝 수
-        VIDEO_THROTTLE_S  = 0.05    % 비디오 프레임 갱신 쓰로틀 간격(초)
-        SLIDER_THROTTLE_S = 0.03    % [V3.15 항목 1] 슬라이더 갱신 최소 간격(초) - 33fps 상한
-        VIDEO_DIALOG_FOLLOW_S = 0.18 % [#5] Video dialog follower 폴링 주기(초)
-        MAX_CACHE_FRAMES  = 200     % [V3.14] 절대 상한 (DynamicCacheLimit는 이 값 이하로만 적용)
-        MIN_CACHE_FRAMES  = 5       % [V3.14] 절대 하한
+        MOCK_STEP_COUNT   = 200     % mock data step count
+        VIDEO_THROTTLE_S  = 0.05    % video frame update throttle interval (s)
+        SLIDER_THROTTLE_S = 0.03    % [V3.15 item 1] slider update min interval (s) - 33fps cap
+        VIDEO_DIALOG_FOLLOW_S = 0.18 % [#5] Video dialog follower poll period (s)
+        MAX_CACHE_FRAMES  = 200     % [V3.14] absolute upper bound (DynamicCacheLimit applies only at or below this)
+        MIN_CACHE_FRAMES  = 5       % [V3.14] absolute lower bound
         REQ_KEYS          = {'Time', 'Roll', 'Pitch', 'Heading', 'Alt', 'Lat', 'Lon'}
-        % [V3.22 #4] 매직 넘버 상수화
-        ASYNC_WORKER_COUNT    = 2    % parallel pool worker 수 (process pool)
-        WORKER_VR_CACHE_SLOTS = 4    % worker persistent VideoReader LRU 슬롯 수
-        MAX_SEQ_READ_STEP     = 4    % 순차 readFrame 최대 step (이상이면 random seek)
-        MAX_PENDING_ITERS     = 10   % goToFrame Pending 소진 루프 최대 반복
+        % [V3.22 #4] magic-number constants
+        ASYNC_WORKER_COUNT    = 2    % parallel pool worker count (process pool)
+        WORKER_VR_CACHE_SLOTS = 4    % worker persistent VideoReader LRU slot count
+        MAX_SEQ_READ_STEP     = 4    % max step for sequential readFrame (random seek beyond this)
+        MAX_PENDING_ITERS     = 10   % goToFrame Pending-drain loop max iterations
     end
 
     properties (Access = public)
         UIFigure
         UI
-        UIGroup           % [V3.22 #5] UI를 attitude/map/video/plots/controls/data로 그룹화한 alias
+        UIGroup           % [V3.22 #5] alias grouping UI into attitude/map/video/plots/controls/data
         SyncInput
         SyncBtn
 
         Models
         SyncState
         VideoState
-        VideoSyncState    % [V3.12] 비디오-비행데이터 동기화 정보 (배열 [1x2])
+        VideoSyncState    % [V3.12] video-flightdata sync info (array [1x2])
         WindowMinBtn
         WindowMaxBtn
         BoardToggleButtons
@@ -84,29 +84,29 @@
         CoastlineData
         FixedAreaBounds
 
-        DebugMode         = false   % [V3.14 항목 6] true 시 zoom/pan off 등 로그 출력
+        DebugMode         = false   % [V3.14 item 6] when true, log zoom/pan off etc.
         State             = 'IDLE'  % [V3.17 (8)] 'IDLE' | 'DRAGGING' | 'UPDATING' | 'DECODING'
-        UseAsyncDecode    = false   % [V3.19 (1)] 비동기 디코딩 활성화 (Parallel Toolbox 필요)
+        UseAsyncDecode    = false   % [V3.19 (1)] enable async decoding (requires Parallel Toolbox)
     end
 
     properties (Access = private)
-        LastVideoUpdate     = {uint64(0), uint64(0)}  % [PATCH] tic 핸들(채널별)
-        IsUpdating          = [false, false] % 재귀 방지 플래그
-        IsDraggingMarker    = false         % 마커 드래그 상태 플래그
-        DraggedMarker       = []            % 현재 드래그 중인 그래픽 객체 핸들
-        IsProgrammaticXLim  = [false, false] % [V3.11 A] 책장 넘기기 등 프로그래밍 XLim 변경 시 리스너 차단
-        DraggedFIdx         = 0             % [V3.11 B] 드래그 중인 fIdx
-        DraggedFromVideo    = false         % [V3.12] 비디오 Frame 마커에서 드래그 시작 여부
-        VideoThrottleDyn    = 0.05          % [V3.12] (V3.13에서 미사용, 보존)
-        LastDragTime        = {uint64(0), uint64(0)}  % [PATCH] 채널별 tic 핸들
-        LastDisplayedFrame  = [0, 0]        % [PATCH] 실제로 화면에 표시된 frame (display path 만)
-        LastDecodedFrame    = [0, 0]        % [Stabilization P1] 마지막 decode/read 결과 frame (seq readFrame 휴리스틱 전용)
-        LastRequestedFrame  = [NaN, NaN]    % [Stabilization P1] 가장 최근에 요청된 frame (사용자 기준)
-        PendingVideoFrame   = [NaN, NaN]    % [Stabilization P1] 디코딩 중 들어온 latest video frame request
-        PendingVideoMode    = {'', ''}      % [Stabilization P1] 위 frame 요청의 source mode
-        IsDeleting          = false         % [Stabilization P2] delete/close 재진입 가드
-        HISplitterFIdx      = 0             % [PATCH UX-3] H/I 경계 드래그 중인 채널
-        IsDraggingSplitter  = false         % [PATCH UX-3b] splitter 드래그 상태 플래그
+        LastVideoUpdate     = {uint64(0), uint64(0)}  % [PATCH] tic handles (per channel)
+        IsUpdating          = [false, false] % recursion-prevention flag
+        IsDraggingMarker    = false         % marker drag state flag
+        DraggedMarker       = []            % graphics handle currently being dragged
+        IsProgrammaticXLim  = [false, false] % [V3.11 A] block listener on programmatic XLim change (page turning etc.)
+        DraggedFIdx         = 0             % [V3.11 B] fIdx being dragged
+        DraggedFromVideo    = false         % [V3.12] whether drag started from the video frame marker
+        VideoThrottleDyn    = 0.05          % [V3.12] (unused since V3.13, kept)
+        LastDragTime        = {uint64(0), uint64(0)}  % [PATCH] per-channel tic handles
+        LastDisplayedFrame  = [0, 0]        % [PATCH] frame actually shown on screen (display path only)
+        LastDecodedFrame    = [0, 0]        % [Stabilization P1] last decode/read result frame (seq readFrame heuristic only)
+        LastRequestedFrame  = [NaN, NaN]    % [Stabilization P1] most recently requested frame (user basis)
+        PendingVideoFrame   = [NaN, NaN]    % [Stabilization P1] latest video frame request arriving during decode
+        PendingVideoMode    = {'', ''}      % [Stabilization P1] source mode of the above frame request
+        IsDeleting          = false         % [Stabilization P2] delete/close re-entry guard
+        HISplitterFIdx      = 0             % [PATCH UX-3] channel dragging the H/I boundary
+        IsDraggingSplitter  = false         % [PATCH UX-3b] splitter drag state flag
         BodyRowSplitter     = []            % [Layout] upper/lower board row splitter
         IsDraggingRowSplitter = false       % [Layout] row splitter drag state
         BodyRowSplitRatio   = 0.5           % [Layout] top board ratio in normal mode
@@ -116,47 +116,47 @@
         DraggedColumnSplitterInfo = struct('fIdx', 0, 'leftCol', 0, 'rightCol', 0)
         ColumnSplitterStartPoint = [0, 0]
         ColumnSplitterStartWidths = {}
-        UserColumnWidths = {struct(), struct()}   % [v4-R3] adjustable fixed-width struct fIdx 별 (attitudeWidth/mapAltWidth/infoWidth). plot/splitter/hidden 안 저장.
-        FrameCache          = {{}, {}}      % [V3.13 C-1] 비행경로별 프레임 캐시
-        FrameCacheKeys      = {[], []}      % [V3.13 C-1] 비행경로별 캐시 키 순서 (LRU)
-        DynamicCacheLimit   = [50, 50]      % [V3.14 항목 3] 비행경로별 동적 계산된 최대 캐시 프레임 수
-        CacheBudgetMB       = 100           % [v-fix6] 비행경로당 캐시 메모리 예산(MB) 기본 100 - GUI에서 조정
-        LastSliderUpdate    = {uint64(0), uint64(0)}  % [PATCH] tic 핸들(채널별)
-        LastDragTableUpdate = [uint64(0), uint64(0)]  % [Perf] dataTable throttle (드래그 중)
-        InGoToFrame         = [false, false] % [V3.16] goToFrame 재진입 차단 플래그
-        PendingFrame        = [NaN, NaN]     % [V3.17 (1)(9)] 처리 중 들어온 최신 frame 요청
-        PendingMode         = {'', ''}        % [V3.17 (1)(9)] 처리 중 들어온 최신 mode
-        InCascade           = false          % [V3.17 (4)(11)] cascade 재귀 가드 (인스턴스 속성)
-        InBoardToggle       = false          % [bug#4] toggleBoardVisibility 재진입 가드
-        IsDecoding          = [false, false] % [V3.17 (7)] 디코딩 진행 중 가드
-        CacheBytesUsed      = [0, 0]         % [V3.17 (6)] 비행경로별 실제 사용 메모리(bytes)
-        FrameCacheHits      = {[], []}        % [V3.19 (3)] 각 frame의 액세스 횟수 (가중 LRU)
-        FrameCacheLastUse   = {[], []}        % [V3.22 #2] 각 frame의 마지막 사용 tic (uint64) - LRU 기준
-        FrameCacheUseCounter = uint64(0)      % [V3.22 #2] 단조 증가 사용 카운터 (tic 대체)
-        AsyncPool           = []              % [V3.19 (1)] parallel pool 핸들
-        AsyncFutures        = {[], []}        % [V3.19 (1)] 진행 중 parfeval future
-        AsyncTargetFrame    = [NaN, NaN]      % [V3.19 (1)] 비동기 디코딩 중인 frame No
-        AsyncGen            = [0, 0]          % [V3.21 #1-A] generation counter (race 차단)
-        VideoFilePath       = {'', ''}        % [V3.19 (1)] worker가 자체 VideoReader 생성용
-        CurrentVideoFrame   = {[], []}        % 표시 해상도 변경 시 재렌더링할 원본 최신 프레임
-        VideoDialogFollowTimer = []           % Video Player 이동 시 AVI 제어 dialog를 따라 움직이는 poll timer
-        VideoDialogLastViewerPos = {[], []}   % 마지막 Video Player 위치(채널별)
+        UserColumnWidths = {struct(), struct()}   % [v4-R3] adjustable fixed-width struct per fIdx (attitudeWidth/mapAltWidth/infoWidth). plot/splitter/hidden not stored.
+        FrameCache          = {{}, {}}      % [V3.13 C-1] per-flight-path frame cache
+        FrameCacheKeys      = {[], []}      % [V3.13 C-1] per-flight-path cache key order (LRU)
+        DynamicCacheLimit   = [50, 50]      % [V3.14 item 3] per-flight-path dynamically computed max cache frame count
+        CacheBudgetMB       = 100           % [v-fix6] per-flight-path cache memory budget (MB) default 100 - adjustable in GUI
+        LastSliderUpdate    = {uint64(0), uint64(0)}  % [PATCH] tic handles (per channel)
+        LastDragTableUpdate = [uint64(0), uint64(0)]  % [Perf] dataTable throttle (during drag)
+        InGoToFrame         = [false, false] % [V3.16] goToFrame re-entry guard flag
+        PendingFrame        = [NaN, NaN]     % [V3.17 (1)(9)] latest frame request arriving during processing
+        PendingMode         = {'', ''}        % [V3.17 (1)(9)] latest mode arriving during processing
+        InCascade           = false          % [V3.17 (4)(11)] cascade recursion guard (instance property)
+        InBoardToggle       = false          % [bug#4] toggleBoardVisibility re-entry guard
+        IsDecoding          = [false, false] % [V3.17 (7)] decoding-in-progress guard
+        CacheBytesUsed      = [0, 0]         % [V3.17 (6)] per-flight-path actual memory used (bytes)
+        FrameCacheHits      = {[], []}        % [V3.19 (3)] access count per frame (weighted LRU)
+        FrameCacheLastUse   = {[], []}        % [V3.22 #2] last-use tic per frame (uint64) - LRU basis
+        FrameCacheUseCounter = uint64(0)      % [V3.22 #2] monotonic-increasing use counter (tic replacement)
+        AsyncPool           = []              % [V3.19 (1)] parallel pool handle
+        AsyncFutures        = {[], []}        % [V3.19 (1)] in-flight parfeval future
+        AsyncTargetFrame    = [NaN, NaN]      % [V3.19 (1)] frame No being async-decoded
+        AsyncGen            = [0, 0]          % [V3.21 #1-A] generation counter (race blocking)
+        VideoFilePath       = {'', ''}        % [V3.19 (1)] for the worker to create its own VideoReader
+        CurrentVideoFrame   = {[], []}        % latest original frame to re-render when display resolution changes
+        VideoDialogFollowTimer = []           % poll timer that moves the AVI control dialog along when the Video Player moves
+        VideoDialogLastViewerPos = {[], []}   % last Video Player position (per channel)
         FlightPlayTimer      = {[], []}        % flight data row playback timers
         FlightPlayActive     = [false, false]
-        FlightPlayFps        = 20    % [#8] 변경 시 FlightPlayTimer 재시작(stop→start)해야 Period 반영
-        PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...   % [Sync Search] 동기 기준 후보
+        FlightPlayFps        = 20    % [#8] changing this requires a FlightPlayTimer restart (stop->start) for Period to apply
+        PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...   % [Sync Search] sync-basis candidate
             'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN)
-        SyncSearchDialogs    = {[], []}        % [Sync Search] 검색 dialog handle (lifecycle 추적)
-        LastInfoTableSelectionValid = [false, false]   % [Sync Search] 실제 행 선택 발생 여부
-        NormalWindowPosition = []             % 마지막 일반 창 위치(최대화 복원용)
-        IsRestoringWindow   = false           % 복원 중 SizeChanged 저장 방지
-        IsWindowManuallyMaximized = false     % WindowState 미지원 버전 fallback
-        DragVelocity        = [0, 0]          % [V3.19 (2)] frames/sec (부호: 방향)
-        DragVelocitySamples = {[], []}        % [V3.19 (2)] 최근 샘플 (이동평균용)
-        % [V3.22 #1] silent catch도 사후 조사 가능하도록 ring buffer 보관
-        % - stack은 cell-wrap으로 저장 (struct array 차원 불일치 회피)
+        SyncSearchDialogs    = {[], []}        % [Sync Search] search dialog handle (lifecycle tracking)
+        LastInfoTableSelectionValid = [false, false]   % [Sync Search] whether an actual row selection happened
+        NormalWindowPosition = []             % last normal window position (for maximize restore)
+        IsRestoringWindow   = false           % prevent SizeChanged save during restore
+        IsWindowManuallyMaximized = false     % fallback for versions without WindowState support
+        DragVelocity        = [0, 0]          % [V3.19 (2)] frames/sec (sign: direction)
+        DragVelocitySamples = {[], []}        % [V3.19 (2)] recent samples (for moving average)
+        % [V3.22 #1] keep in ring buffer so silent catch is also post-mortem-inspectable
+        % - stack stored cell-wrapped (avoid struct-array dimension mismatch)
         ErrorLog            = struct('time', {}, 'tag', {}, 'identifier', {}, 'message', {}, 'stack', {})
-        ErrorLogCapacity    = 200             % [V3.22 #1] ring buffer 최대 크기
+        ErrorLogCapacity    = 200             % [V3.22 #1] ring buffer max size
 
         % [Phase 1] Project state + edit dialog plumbing
         ProjectState         = []              % cached struct mirroring .fdproj
@@ -175,9 +175,9 @@
         AutosaveIntervalSec  = 30              % snapshot every N seconds while dirty
         ProjectFileVersion   = 1               % current .fdproj schema version
         BoardOffState        = [false, false]  % true when the corresponding flight board is replaced by summary view
-        BoardPanelVisibleSnapshot = {struct(), struct()} % board-off 진입 전 PanelVisible/ColumnWidth 복원 스냅샷
-        BodyGrid             = []              % [L1 C-1] handle to bodyGrid (RowHeight 동적 변경용)
-        BoardOffSourceRatio  = 1.0             % [v4-R1] off 시 source 100% (summary 폐기). active 보드 단독 표시. (clamp 0.5~1.0)
+        BoardPanelVisibleSnapshot = {struct(), struct()} % PanelVisible/ColumnWidth restore snapshot before board-off entry
+        BodyGrid             = []              % [L1 C-1] handle to bodyGrid (for dynamic RowHeight change)
+        BoardOffSourceRatio  = 1.0             % [v4-R1] off: source 100% (summary dropped). active board shown alone. (clamp 0.5~1.0)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
 
@@ -210,7 +210,7 @@
         EDPlotFlightDD       = []
         EDPlotTree           = []
         EDPlotLinkCB         = []
-        % [F-01] Plot Manager 속성 패널 핸들
+        % [F-01] Plot Manager property panel handle
         EDPlotNameEdit       = []
         EDPlotYColDD         = []
         EDPlotYLabelEdit     = []
@@ -231,21 +231,21 @@
 
     methods (Access = public)
         % ---------------------------------------------------------------------
-        % 생성자 및 초기화
+        % Constructor and initialization
         % ---------------------------------------------------------------------
         function app = FlightDataDashboard()
             app.Models = [app.createEmptyModel(), app.createEmptyModel()];
             app.SyncState = struct('IsSynced', false, 'SyncT1', 0, 'SyncT2', 0);
             app.VideoState = struct('videoReader', {[], []}, 'videoStartTime', {0, 0}, 'vidImageHandle', {[], []});
-            % [V3.12] VideoSyncState 초기화: 두 비행경로별 동기화 정보
+            % [V3.12] VideoSyncState init: per-flight-path sync info
             app.VideoSyncState = struct( ...
-                'IsSynced',     {false, false}, ...     % 동기 설정 완료 여부
-                'AnchorFrame',  {0, 0}, ...             % 동기 기준 프레임 번호
-                'AnchorTime',   {0, 0}, ...             % 동기 기준 비행시간(초)
-                'VideoFps',     {70, 70}, ...           % 영상 Hz (기본 70)
-                'DataFps',      {50, 50}, ...           % 비행데이터 Hz (기본 50)
-                'TotalFrames',  {0, 0}, ...             % 영상 총 프레임 수
-                'CurrentFrame', {1, 1});                % 현재 프레임 위치
+                'IsSynced',     {false, false}, ...     % whether sync setup is complete
+                'AnchorFrame',  {0, 0}, ...             % sync-basis frame number
+                'AnchorTime',   {0, 0}, ...             % sync-basis flight time (s)
+                'VideoFps',     {70, 70}, ...           % video Hz (default 70)
+                'DataFps',      {50, 50}, ...           % flight-data Hz (default 50)
+                'TotalFrames',  {0, 0}, ...             % video total frame count
+                'CurrentFrame', {1, 1});                % current frame position
             app.CoastlineData = [];
             app.FixedAreaBounds = [];
 
@@ -263,7 +263,7 @@
 
             % [Stabilization P1] Do NOT close other instances by name.
             % Multi-instance is supported; single-instance behaviour must be opt-in at the launcher level.
-            % (was: close(findobj('Type', 'figure', 'Name', '비행 데이터 리뷰 대시보드 (Dual)')); )
+            % (was: close(findobj('Type', 'figure', 'Name', 'Flight Data Review Dashboard (Dual)')); )
             app.NormalWindowPosition = app.getInitialWindowPosition();
             app.UIFigure = uifigure('Name', '비행 데이터 리뷰 대시보드 (Dual)', ...
                                     'Units', 'pixels', ...
@@ -286,7 +286,7 @@
             end
 
             app.createLayout();
-            app.applyLightTheme(app.UIFigure);  % v4-Theme: 전체 light 통일
+            app.applyLightTheme(app.UIFigure);  % v4-Theme: unify entire window to light
             try
                 app.UIFigure.SizeChangedFcn = @(~,~) app.onFigureSizeChanged();
             catch ME_silent
@@ -301,7 +301,7 @@
         end
 
         function delete(app)
-            % [V3.20 (5)] 명시적 리소스 정리: VideoReader, AsyncPool, futures
+            % [V3.20 (5)] explicit resource cleanup: VideoReader, AsyncPool, futures
             % [Stabilization P2] re-entry guard so partial cleanup cannot run twice
             if app.IsDeleting, return; end
             app.IsDeleting = true;
@@ -309,9 +309,9 @@
             app.IsDraggingRowSplitter = false;
             app.IsDraggingColumnSplitter = false;
             app.stopVideoDialogFollowTimer();
-            % [bug#3] IsDeleting 직후 모든 타이머를 우선 stop — 이후 핸들 삭제/큐 drain
-            % 과정에서 콜백이 재발화하는 창 차단(#1/#2 가드와 이중 안전). 핸들 delete 는
-            % 뒤(L4xx, per-fIdx)에서 수행하며 이미 stop 된 상태라 idempotent.
+            % [bug#3] stop all timers first right after IsDeleting -> blocks the window where a
+            %          callback re-fires during later handle delete / queue drain (#1/#2 guards = double safety). handle delete
+            %          is done later (L4xx, per-fIdx) and is idempotent since already stopped.
             try
                 for tIdx = 1:numel(app.FlightPlayTimer)
                     tmr = app.FlightPlayTimer{tIdx};
@@ -348,7 +348,7 @@
                         app.logCaught(ME, 'delete:flight-play-timer');
                     end
                     try
-                        % v-fix3: Sync Search dialog 정리
+                        % v-fix3: Sync Search dialog cleanup
                         if numel(app.SyncSearchDialogs) >= fIdx && ~isempty(app.SyncSearchDialogs{fIdx}) ...
                                 && isvalid(app.SyncSearchDialogs{fIdx})
                             delete(app.SyncSearchDialogs{fIdx});
@@ -377,7 +377,7 @@
                     catch ME
                         app.logCaught(ME, 'delete:vid-control-dialog');
                     end
-                    % VideoReader 정리
+                    % VideoReader cleanup
                     try
                         if ~isempty(app.VideoState(fIdx).videoReader) && ...
                            isvalid(app.VideoState(fIdx).videoReader)
@@ -386,40 +386,40 @@
                     catch ME
                         app.logCaught(ME, 'delete:video-reader');
                     end
-                    % 진행 중 비동기 future 취소
+                    % cancel in-flight async futures
                     try
                         if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
                             cancel(app.AsyncFutures{fIdx});
                         end
                     catch ME
-                        % [Medium 2] 정확한 subsystem 태그 — cleanup 경로
+                        % [Medium 2] precise subsystem tag - cleanup path
                         app.logCaught(ME, 'delete:future-cancel');
                     end
                 end
-                % 캐시 비우기 (메모리 즉시 해제)
+                % clear cache (free memory immediately)
                 app.FrameCache = {{}, {}};
                 app.FrameCacheKeys = {[], []};
                 app.FrameCacheHits = {[], []};
-                app.FrameCacheLastUse = {[], []};   % [V3.22 #2] LRU 카운터 리셋
+                app.FrameCacheLastUse = {[], []};   % [V3.22 #2] reset LRU counter
                 app.FrameCacheUseCounter = uint64(0);
                 app.CacheBytesUsed = [0, 0];
                 app.AsyncGen = [0, 0];   % [V3.21 #1-A] generation reset
-                app.LastDisplayedFrame = [0, 0];   % [PATCH] 조기반환 키 리셋
+                app.LastDisplayedFrame = [0, 0];   % [PATCH] reset early-return key
             catch ME
                 app.logCaught(ME, 'delete:cache-reset');
             end
 
-            % [PATCH / V3.22 #6] 워커 persistent VR 명시 해제 → 파일락 즉시 반환
+            % [PATCH / V3.22 #6] explicitly release worker persistent VR -> return file lock immediately
             try
                 if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
                     parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
                 else
-                    % [A1] pool 무효 시 클라이언트 측 persistent 캐시 직접 정리(이중 안전망)
+                    % [A1] on invalid pool, directly clean the client-side persistent cache (double safety)
                     cleanupAsyncDecodeCache();
                 end
             catch ME
                 app.logCaught(ME, 'delete:worker-cache-cleanup');
-                % [A1] parfevalOnAll 예외 시에도 클라이언트 측 정리 보장
+                % [A1] also guarantee client-side cleanup on parfevalOnAll exception
                 try
                     cleanupAsyncDecodeCache();
                 catch
@@ -540,7 +540,7 @@
                             error('FlightDataDashboard:UnknownPanelToggle', ...
                                   'Unknown panel toggle: %s', char(pnlName));
                     end
-                    % v2-B: btn 핸들 없으면 togglePanel 직접 호출 (info/dataView 헤더 버튼 제거됨)
+                    % v2-B: if no btn handle, call togglePanel directly (info/dataView header buttons removed)
                     if isempty(btn) || ~isvalid(btn)
                         app.togglePanel(fIdx, routeName);
                     else
@@ -581,7 +581,7 @@
                 case 'startFlightPlay',               app.startFlightPlay(varargin{:});
                 case 'stopFlightPlay',                app.stopFlightPlay(varargin{:});
                 case 'isFlightPlayTimerAlive'
-                    % v5-J: timer handle 존재 + Running 상태 (stop/cleanup 검증용)
+                    % v5-J: timer handle exists + Running state (for stop/cleanup verification)
                     fk = varargin{1};
                     alive = false;
                     try
@@ -602,7 +602,7 @@
                     varargout{1} = app.computeSyncSearchRows(app.Models(fIdx).rawData.(yCol), ...
                         app.Models(fIdx).rawData.(tCol), target);
                 case 'setPendingSyncAnchor'
-                    % optional 3~5번째 인자: Source/Index/Value metadata (UI 경로와 동일 보존)
+                    % optional 3rd~5th args: Source/Index/Value metadata (preserved same as the UI path)
                     fk = varargin{1}; tv = varargin{2};
                     src = ''; idx = NaN; val = NaN;
                     if numel(varargin) >= 3, src = varargin{3}; end
@@ -624,7 +624,7 @@
                 case 'getOpenDialogHandlesForTest',   varargout{1} = app.getOpenDialogHandlesForTest();
                 case 'computeSyncSearchRowsRaw',      varargout{1} = app.computeSyncSearchRows(varargin{:});
                 case 'getSelectedInfoValueForTest'
-                    % v-fix6: 선택 항목의 현재 index 실제 값 (exact target 확보)
+                    % v-fix6: actual current index value of the selected item (secures the exact target)
                     fk = varargin{1};
                     try
                         yCol = app.Models(fk).displayMeta(app.Models(fk).selectedRow).header;
@@ -635,7 +635,7 @@
                     end
                     varargout{1} = val;
                 case 'getInfoTableMenuTexts'
-                    % v-fix9: 정상/board-off 정보테이블 context menu 항목 텍스트 수집
+                    % v-fix9: collect normal/board-off info-table context-menu item texts
                     fIdx = varargin{1};
                     tbl = [];
                     if numel(varargin) >= 2 && strcmpi(char(varargin{2}), 'boardoff')
@@ -659,7 +659,7 @@
                 case 'loadProjectFile',               varargout{1} = app.loadProjectFile(varargin{:});
                 case 'autoLoadProjectFromFile',       app.autoLoadProjectFromFile(varargin{:});
                 case 'editDialogOpenProjectFromPath'
-                    % v-fixD: production editDialogAutoLoad 와 동일한 방어 패턴
+                    % v-fixD: same defensive pattern as production editDialogAutoLoad
                     try
                         app.autoLoadProjectFromFile(varargin{1});
                     catch ME
@@ -688,19 +688,19 @@
                     fIdx = varargin{1}; row = varargin{2};
                     app.Models(fIdx).selectedRow = row;
                     if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
-                        app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: 테스트 선택도 valid 처리
+                        app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: treat a test selection as valid too
                     end
                 case 'clearPendingSyncAnchor',        app.clearPendingSyncAnchor([]);
-                % v-runner: EditDialog 자동 테스트 dispatch
+                % v-runner: EditDialog auto-test dispatch
                 case 'openEditDialog',                app.openEditDialog(); if nargout, varargout{1} = app.EditDialog; end
                 case 'closeEditDialog',               app.closeEditDialog();
                 case 'applyPendingDialogChanges',     app.applyPendingDialogChanges();
                 case 'editDialogSaveProject',         app.editDialogSaveProject();
                 case 'editDialogSaveProjectAs',       app.editDialogSaveProjectAs();
                 case 'setProjectFilePath'
-                    % v-fixG: 자동 러너가 비모달 editDialogSaveProject 경로를 타게 하려고
-                    %         ProjectFilePath 를 사전 세팅/초기화하는 테스트 전용 setter.
-                    % v-fixM4: varargout{1} = 이전 값. 호출측이 복원에 사용 가능.
+                    % v-fixG: test-only setter that presets/clears ProjectFilePath so the auto-runner
+                    %         takes the non-modal editDialogSaveProject path.
+                    % v-fixM4: varargout{1} = previous value. Caller can use it for restore.
                     if nargout >= 1, varargout{1} = char(app.ProjectFilePath); end
                     if isempty(varargin) || isempty(varargin{1})
                         app.ProjectFilePath = '';
@@ -993,8 +993,8 @@
                 if isfield(app.UI(fIdx), 'boardOffPanel') && ~isempty(app.UI(fIdx).boardOffPanel) ...
                         && isvalid(app.UI(fIdx).boardOffPanel)
                     s.boardOffPanelVisible = app.isUiVisible(app.UI(fIdx).boardOffPanel);
-                    % v3-fix: 새 board-off policy 에서 boardOffPanel 은 비-primary (hidden).
-                    % hidden/non-primary 시 무거운 findall 스캔 skip (case 48 hard-crash 방지).
+                    % v3-fix: under the new board-off policy, boardOffPanel is non-primary (hidden).
+                    % when hidden/non-primary, skip the heavy findall scan (prevents case 48 hard-crash).
                     if s.boardOffPanelVisible
                         allKids = findall(app.UI(fIdx).boardOffPanel);
                         for iKid = 1:numel(allKids)
@@ -1012,7 +1012,7 @@
                         end
                     end
                 end
-                % v3-fix: boardOffPanel 이 hidden 이면 하위 스캔 전부 skip (Online crash 방지)
+                % v3-fix: if boardOffPanel is hidden, skip all sub-scans (prevents Online crash)
                 if ~s.boardOffPanelVisible
                     return;
                 end
@@ -1232,15 +1232,15 @@
     end
 
     % =========================================================================
-    % 시간 변경 단일 진입점 (동기화/업데이트/재귀방지를 한 곳에서 처리)
+    % single entry point for time change (handles sync/update/recursion-prevention in one place)
     % =========================================================================
     methods (Access = private)
         function applyTimeChange(app, fIdx, index)
-            % [C2] 우선순위: 데이터-side 시간 변경이 진입점. VideoSyncState(fIdx).IsSynced
-            % 이면 updateDashboard 가 영상 frame 을 따라 이동(데이터→영상). 반대로 영상
-            % drag(DraggedFromVideo) 중에는 processFrameInternal 이 데이터를 이동(영상→데이터)
-            % 하며 이 함수의 재진입은 IsUpdating 가드로 차단된다. 즉 동시 활성 시
-            % "마지막 사용자 입력 source" 가 우선이고, 반대 방향 동기는 가드로 1방향만 수행.
+            % [C2] priority: data-side time change is the entry point. If VideoSyncState(fIdx).IsSynced,
+            % updateDashboard moves the video frame to follow (data->video). Conversely during video
+            % drag(DraggedFromVideo), processFrameInternal moves the data (video->data),
+            % and this function's re-entry is blocked by the IsUpdating guard. So when both are active,
+            % the "last user input source" wins, and the reverse-direction sync runs one-way via the guard.
             if app.IsUpdating(fIdx), return; end
             if isempty(app.Models(fIdx).rawData), return; end
 
@@ -1248,14 +1248,14 @@
             currTime = app.Models(fIdx).rawData.(timeCol)(index);
             app.Models(fIdx).currentIndex = index;
 
-            % --- 해당 경로 뷰 갱신 ---
+            % --- refresh the relevant flight-path view ---
             app.IsUpdating(fIdx) = true;
             try
                 app.updateDashboard(fIdx, index);
                 if abs(app.UI(fIdx).spinner.Value - currTime) > eps
                     app.UI(fIdx).spinner.Value = currTime;
                 end
-                % v-sync: AVI 동기 활성 시 video frame 동기 이동 (case49 fix)
+                % v-sync: when AVI sync is active, move the video frame in sync (case49 fix)
                 try
                     vss = app.VideoSyncState(fIdx);
                     if vss.IsSynced && vss.TotalFrames > 0 && ~app.InGoToFrame(fIdx)
@@ -1272,7 +1272,7 @@
             end
             app.IsUpdating(fIdx) = false;
 
-            % --- 동기화: 경로 1 변경 시 경로 2도 연동 ---
+            % --- sync: when path 1 changes, path 2 follows too ---
             if app.SyncState.IsSynced && fIdx == 1 && ~isempty(app.Models(2).rawData)
                 targetT2 = app.SyncState.SyncT2 + (currTime - app.SyncState.SyncT1);
 
@@ -1287,7 +1287,7 @@
     end
 
     % =========================================================================
-    % Callback-accessible methods: 파일 로드 및 메인 로직
+    % Callback-accessible methods: file load and main logic
     % =========================================================================
     methods (Access = public)
         function handleFlightFile(app, fIdx)
@@ -1307,7 +1307,7 @@
             end
             if isequal(filename, 0), return; end
 
-            % [V3.12] 기존 비디오 동기 설정이 있으면 사용자 확인 후 해제
+            % [V3.12] if an existing video sync setup exists, release it after user confirm
             if app.VideoSyncState(fIdx).IsSynced
                 sel = uiconfirm(app.UIFigure, ...
                     '새 비행데이터를 로드하면 기존 비디오-비행데이터 동기 설정이 해제됩니다. 계속하시겠습니까?', ...
@@ -1320,8 +1320,8 @@
             d = uiprogressdlg(app.UIFigure, 'Title', '데이터 로딩 중', ...
                 'Message', sprintf('비행경로 %d 데이터를 파싱하고 있습니다...', fIdx), ...
                 'Indeterminate', 'on');
-            % [Major 6] uiprogressdlg cleanup 을 autoLoadProjectFromFile 과 동일한 패턴으로
-            % onCleanup + safeClose 로 일관화 → 어떤 분기에서 return/throw 해도 dialog 잔류 없음.
+            % [Major 6] unify uiprogressdlg cleanup with the same pattern as autoLoadProjectFromFile
+            % onCleanup + safeClose -> no dialog leftover no matter which branch returns/throws.
             cleanupDlg = onCleanup(@() app.safeClose(d));
             try
                 fullpath = fullfile(pathname, filename);
@@ -1337,7 +1337,7 @@
                     app.VideoState(fIdx).videoStartTime = app.Models(fIdx).rawData.(timeCol)(1);
                 end
 
-                % [V3.12] 비행데이터 Hz 자동 계산 후 입력란 갱신
+                % [V3.12] auto-compute flight-data Hz then refresh the input field
                 try
                     times = app.Models(fIdx).rawData.(timeCol);
                     if length(times) > 1
@@ -1357,26 +1357,26 @@
                 end
                 app.setupDataUI(fIdx);
 
-                % [수정 2] 비행 데이터 파싱 후, 이미 영상이 열려있다면 Video FPS 강제 재계산
+                % [fix 2] after parsing flight data, if video is already open, force-recompute Video FPS
                 if app.VideoSyncState(fIdx).TotalFrames > 0
                     times = app.Models(fIdx).rawData.(timeCol);
                     maxTime = max(times);
                     if maxTime > 0
                         newFps = app.VideoSyncState(fIdx).TotalFrames / maxTime;
-                        app.VideoSyncState(fIdx).VideoFps = newFps; % 소수점 정밀도 저장
+                        app.VideoSyncState(fIdx).VideoFps = newFps; % store decimal precision
 
                         if isfield(app.UI(fIdx), 'vidVideoFpsInput') && ~isempty(app.UI(fIdx).vidVideoFpsInput) && any(isvalid(app.UI(fIdx).vidVideoFpsInput))
                             app.UI(fIdx).vidVideoFpsInput.Value = round(newFps);
                         end
-                        % 재계산된 FPS를 바탕으로 슬라이더 위의 총 시간 텍스트 즉시 갱신
+                        % immediately refresh the total-time text above the slider based on the recomputed FPS
                         app.updateVdubFrameLabel(fIdx, app.VideoSyncState(fIdx).CurrentFrame);
                     end
                 end
 
                 app.UI(fIdx).fileNameLabel.Text = filename;
-                % [Major 6] dialog cleanup 은 onCleanup 가 담당 — 명시 close 제거
+                % [Major 6] dialog cleanup is handled by onCleanup - removed explicit close
             catch e
-                % [V3.20 (3)] 상세 에러 로그
+                % [V3.20 (3)] detailed error log
                 if app.DebugMode
                     fprintf('[Flight] parse failed: %s\n  %s\n  stack: %s\n', ...
                         filename, e.message, e.identifier);
@@ -1428,7 +1428,7 @@
             if ~isempty(event.Indices)
                 app.Models(fIdx).selectedRow = event.Indices(1, 1);
                 if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
-                    app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: 실제 선택 발생 기록
+                    app.LastInfoTableSelectionValid(fIdx) = true;   % v-fix: record that an actual selection happened
                 end
             end
         end
@@ -1580,12 +1580,12 @@
         end
 
         function togglePanel(app, fIdx, pnlName)
-            % 패널 표시/숨김 토글 (픽셀 고정 기반 리사이징)
-            % [L1 B-1] 'mapOnly' / 'altOnly' 두 키로 분리. 'map' 은 backward-compat alias.
+            % panel show/hide toggle (pixel-fixed resizing)
+            % [L1 B-1] split into 'mapOnly' / 'altOnly' keys. 'map' is a backward-compat alias.
             app.CurrentLayoutPreset = 'custom';
             app.updateLayoutPresetButtons();
             if strcmp(pnlName, 'map')
-                % 양쪽 모두 켜져 있으면 모두 끄고, 둘 다 꺼져 있으면 모두 켬 (legacy 1-shot 동작 유지).
+                % if both on, turn both off; if both off, turn both on (keep legacy 1-shot behavior).
                 anyOn = app.UI(fIdx).PanelVisible.mapOnly || app.UI(fIdx).PanelVisible.altOnly;
                 target = ~anyOn;
                 app.UI(fIdx).PanelVisible.mapOnly = target;
@@ -1613,7 +1613,7 @@
                     app.UI(fIdx).btnAtt.Text = '자세 ▸';
                 end
             elseif strcmp(pnlName, 'mapOnly') || strcmp(pnlName, 'altOnly')
-                % [L1 B-1] 지도/고도 독립 토글 — 헤더 컬럼은 둘 중 하나라도 visible 이면 표시
+                % [L1 B-1] independent map/altitude toggle - header column shows if either is visible
                 app.applyMapAltVisibility(fIdx);
                 anyVisible = app.UI(fIdx).PanelVisible.mapOnly || app.UI(fIdx).PanelVisible.altOnly;
                 if anyVisible
@@ -1623,7 +1623,7 @@
                     widths{2} = 0;
                 end
             elseif strcmp(pnlName, 'video')
-                % v5-A: board-off 중 auto-open 금지는 setVideoViewerVisible 내부 guard 가 처리
+                % v5-A: the auto-open-during-board-off block is handled by the guard inside setVideoViewerVisible
                 app.setVideoViewerVisible(fIdx, newState, false);
                 widths{5} = 0;
                 widths{6} = 0;
@@ -1636,7 +1636,7 @@
         end
 
         function applyMapAltVisibility(app, fIdx)
-            % v2-C: board-off active source 에서는 horizontal orientation 사용.
+            % v2-C: use horizontal orientation on a board-off active source.
             try
                 activeOff = find(app.BoardOffState, 1);
                 isHorizontal = ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff);
@@ -1647,7 +1647,7 @@
                 end
                 pv = app.UI(fIdx).PanelVisible;
                 mapOn = pv.mapOnly;  altOn = pv.altOnly;
-                % btn 라벨 갱신
+                % refresh btn label
                 if isfield(app.UI(fIdx), 'btnMap') && ~isempty(app.UI(fIdx).btnMap) && isvalid(app.UI(fIdx).btnMap)
                     app.UI(fIdx).btnMap.Text = ternary(mapOn, '지도 ▾', '지도 ▸');
                 end
@@ -1660,7 +1660,7 @@
         end
 
         function setMapAltArrangement(app, fIdx, orientation)
-            % v2-C1: Map/Altitude vertical(default) 또는 horizontal(board-off) 배치.
+            % v2-C1: Map/Altitude vertical(default) or horizontal(board-off) layout.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 pv = app.UI(fIdx).PanelVisible;
@@ -1694,7 +1694,7 @@
                         end
                     end
                 elseif strcmp(orientation, 'horizontal') && (mapOn || altOn)
-                    % 단독 가시 → fill
+                    % visible alone -> fill
                     g.RowHeight = {'1x'};
                     g.ColumnWidth = {'1x'};
                     if mapOn && hasMap
@@ -1766,7 +1766,7 @@
         end
 
         % ---------------------------------------------------------------------
-        % 비디오 및 동기화
+        % video and sync
         % ---------------------------------------------------------------------
         function tf = areBothFlightDataLoaded(app)
             try
@@ -1779,13 +1779,13 @@
         end
 
         function color = getFlightTableBgColor(app, fIdx) %#ok<INUSD>
-            % v3 P14: 비행 식별색 → subtle accent 만 사용. dataTable 본체는 white (theme).
+            % v3 P14: flight identity color -> use subtle accent only. dataTable body stays white (theme).
             t = app.getLightTheme();
             color = t.tableRowBgA;
         end
 
         function color = getFlightIdentityAccent(~, fIdx)
-            % v3 P14: 비행별 식별 accent (border / header tint 용도).
+            % v3 P14: per-flight identity accent (for border / header tint).
             if fIdx == 2
                 color = [0.31 0.27 0.90];
             else
@@ -1863,17 +1863,17 @@
             idx1 = app.findClosestIndexByTime(app.Models(1).rawData.(timeCol1), t1);
             app.applyTimeChange(1, idx1);
 
-            % [V3.20 (2)] 동기화 디버그 로그 (SyncState - 두 비행데이터 시간축 매핑)
+            % [V3.20 (2)] sync debug log (SyncState - mapping between the two flight-data time axes)
             if app.DebugMode
                 fprintf('[FlightSync] enabled: T1=%.3fs ↔ T2=%.3fs (offset=%.3fs)\n', ...
                     t1, t2, t2 - t1);
             end
         end
 
-        % [V3.22 #3] loadAviFile 분해 - 오케스트레이터 + 6단계 헬퍼
-        % 단계: 1) 사용자 확인 → 2) 캐시 무효화 → 3) 기존 자원 정리
-        %       4) VR 생성 → 5) TotalFrames + UI 동기화 → 6) 첫 프레임 로드
-        % 각 단계는 실패 시 명확한 종료 조건을 가지며 책임이 한정됨
+        % [V3.22 #3] loadAviFile decomposition - orchestrator + 6-step helpers
+        % steps: 1) user confirm -> 2) cache invalidate -> 3) cleanup existing resources
+        %       4) create VR -> 5) TotalFrames + UI sync -> 6) load first frame
+        % each step has a clear exit condition on failure and a limited responsibility
         function loadAviFile(app, fIdx)
             % [User entry] file picker wrapper. For programmatic loads
             % (project auto-load, file replacement, export reopen) call
@@ -1905,7 +1905,7 @@
             % [P1] snapshot sync state before any reset/invalidate so we can restore it.
             syncSnapshot = app.VideoSyncState(fIdx);
 
-            % [High #2] same-path detection — preserveSync reopen 시 AsyncGen 미증가.
+            % [High #2] same-path detection - do not bump AsyncGen on preserveSync reopen.
             samePath = false;
             try
                 if numel(app.VideoFilePath) >= fIdx
@@ -1924,12 +1924,12 @@
                 app.resetVideoSync(fIdx);
             end
 
-            % [High #2] preserveSync + 동일 경로 재오픈인 경우 AsyncGen 유지.
+            % [High #2] keep AsyncGen when preserveSync + same-path reopen.
             app.invalidateFrameCache(fIdx, ~(opts.preserveSync && samePath));
 
-            % [High #4] AVI 경로가 실제로 바뀐 경우 워커 persistent VR 캐시 해제.
-            % 같은 path 재오픈은 슬롯 재사용이 효율적이므로 건너뜀.
-            % 비정상 종료 시 잔존 file lock 도 다음 로드 직전에 비움.
+            % [High #4] release the worker persistent VR cache when the AVI path actually changed.
+            % a same-path reopen skips this since slot reuse is more efficient.
+            % also clears any leftover file lock on abnormal exit, just before the next load.
             if ~samePath
                 try
                     if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
@@ -1984,9 +1984,9 @@
             ok = true;
         end
 
-        % --------- loadAviFile 헬퍼들 (V3.22 #3) ---------
+        % --------- loadAviFile helpers (V3.22 #3) ---------
 
-        % [V3.22 #3-1] 기존 동기 설정이 있을 때 사용자 확인 다이얼로그
+        % [V3.22 #3-1] user-confirm dialog when an existing sync setup exists
         function ok = confirmVideoReplace(app, fIdx)
             ok = true;
             if app.VideoSyncState(fIdx).IsSynced
@@ -1999,10 +1999,10 @@
             end
         end
 
-        % [V3.22 #3-2] 프레임 캐시 비우기 (LastUse/Hits 포함)
+        % [V3.22 #3-2] clear frame cache (including LastUse/Hits)
         function invalidateFrameCache(app, fIdx, bumpAsyncGen)
-            % [High #2] bumpAsyncGen 기본 true. preserveSync 재오픈처럼 동일 AVI 를
-            % 다시 여는 흐름에서는 호출자가 false 를 전달해 stale-rejection 과잉 발동을 피한다.
+            % [High #2] bumpAsyncGen defaults true. In flows that reopen the same AVI (like preserveSync
+            % reopen), the caller passes false to avoid over-triggering stale-rejection.
             if nargin < 3, bumpAsyncGen = true; end
             app.FrameCache{fIdx}        = {};
             app.FrameCacheKeys{fIdx}    = [];
@@ -2022,7 +2022,7 @@
             end
         end
 
-        % [V3.22 #3-3] 비행데이터 첫 시간 추출 (시작 오프셋용)
+        % [V3.22 #3-3] extract flight-data first time (for start offset)
         function startTime = computeStartTimeFromFlightData(app, fIdx)
             startTime = 0;
             if ~isempty(app.Models(fIdx).rawData) && isfield(app.Models(fIdx).mappedCols, 'Time')
@@ -2033,7 +2033,7 @@
             end
         end
 
-        % [V3.22 #3-4] 기존 VideoReader / 비동기 future 명시적 정리
+        % [V3.22 #3-4] explicit cleanup of existing VideoReader / async future
         function cleanupVideoResources(app, fIdx)
             try
                 if ~isempty(app.VideoState(fIdx).videoReader) && ...
@@ -2053,7 +2053,7 @@
             end
         end
 
-        % [V3.22 #3-5] VideoReader 생성 (실패 시 errordlg + [] 반환)
+        % [V3.22 #3-5] create VideoReader (on failure: errordlg + return [])
         function vr = openVideoReader(app, fIdx, fullPath, fname)
             try
                 vr = VideoReader(fullPath);
@@ -2077,7 +2077,7 @@
             end
         end
 
-        % [V3.22 #3-6] TotalFrames 산정 + 관련 UI 위젯/스피너/슬라이더 동기화
+        % [V3.22 #3-6] compute TotalFrames + sync related UI widgets/spinner/slider
         function applyVideoLoadedUI(app, fIdx, vr)
             % [Major 2] core state (TotalFrames / VideoFps / CurrentFrame / cache size)
             % MUST succeed before any UI sub-step runs. Otherwise UI would show values
@@ -2094,12 +2094,12 @@
                     times = app.Models(fIdx).rawData.(timeCol);
                     maxTime = max(times);
                     if maxTime > 0
-                        actualFps = totalFrames / maxTime; % 정확한 소수점 FPS 계산
+                        actualFps = totalFrames / maxTime; % precise decimal FPS computation
                     else
                         actualFps = 15;
                     end
                 else
-                    % 비행 데이터가 아직 없으면 기본 15 FPS
+                    % if no flight data yet, default 15 FPS
                     actualFps = 15;
                     try
                         if isprop(vr, 'FrameRate') && ~isempty(vr.FrameRate) && vr.FrameRate > 0
@@ -2179,7 +2179,7 @@
             end
         end
 
-        % [V3.22 #3-7] TotalFrames 계산 (NumFrames 우선, 폴백: Duration*FrameRate)
+        % [V3.22 #3-7] compute TotalFrames (prefer NumFrames, fallback: Duration*FrameRate)
         function totalFrames = computeTotalFrames(app, fIdx, vr)
             totalFrames = 0;
             try
@@ -2194,7 +2194,7 @@
                 totalFrames = floor(vr.Duration * vr.FrameRate);
             end
 
-            % VFR/MP4 의심 시 경고
+            % warn on suspected VFR/MP4
             try
                 if vr.FrameRate > 0
                     estFrames = floor(vr.Duration * vr.FrameRate);
@@ -2210,7 +2210,7 @@
             end
         end
 
-        % [V3.22 #3-8] 첫 프레임을 정확히 디코딩하여 표시 + 캐시 저장
+        % [V3.22 #3-8] decode the first frame precisely to display + store in cache
         function loadFirstFrame(app, fIdx)
             firstFrame = [];
             try
@@ -2232,9 +2232,9 @@
             end
         end
 
-        % [V3.12 2.1] 영상 가로:세로 비율에 따라 비디오 패널 너비 동적 조정
+        % [V3.12 2.1] dynamically adjust video panel width by the video aspect ratio
         function adjustVideoPanelWidth(app, fIdx)
-            % v4-R2: dialog 자동 표시 제거. resize 시 display size 만 조정.
+            % v4-R2: removed dialog auto-show. On resize, adjust only the display size.
             try
                 app.setVideoDisplaySize(fIdx);
             catch ME_silent
@@ -2242,7 +2242,7 @@
             end
         end
 
-        % [V3.14 항목 3] 동적 캐시 크기 계산: 해상도 + 사용자 예산 기반
+        % [V3.14 item 3] dynamic cache size computation: resolution + user budget based
         function adjustCacheSize(app, fIdx)
             try
                 vr = app.VideoState(fIdx).videoReader;
@@ -2251,18 +2251,18 @@
                     return;
                 end
 
-                % 한 프레임당 메모리 사용량 (RGB uint8 기준)
+                % memory per frame (RGB uint8 basis)
                 bytesPerFrame = vr.Width * vr.Height * 3;
                 if bytesPerFrame <= 0
                     app.DynamicCacheLimit(fIdx) = app.MAX_CACHE_FRAMES;
                     return;
                 end
 
-                % 사용자 예산 기반 최대 프레임 수 계산
+                % compute max frame count from the user budget
                 budgetBytes = app.CacheBudgetMB * 1024 * 1024;
                 maxFrames = floor(budgetBytes / bytesPerFrame);
 
-                % 절대 상한/하한 적용
+                % apply absolute upper/lower bounds
                 maxFrames = max(app.MIN_CACHE_FRAMES, min(maxFrames, app.MAX_CACHE_FRAMES));
                 app.DynamicCacheLimit(fIdx) = maxFrames;
 
@@ -2271,7 +2271,7 @@
                         fIdx, vr.Width, vr.Height, app.CacheBudgetMB, maxFrames);
                 end
 
-                % 현재 캐시가 한도 초과 시 가중 evict (V3.22 #2)
+                % if the current cache exceeds the limit, weighted evict (V3.22 #2)
                 if length(app.FrameCacheKeys{fIdx}) > maxFrames
                     keys    = app.FrameCacheKeys{fIdx};
                     cache   = app.FrameCache{fIdx};
@@ -2292,15 +2292,15 @@
             end
         end
 
-        % [V3.14 항목 3] 사용자가 GUI에서 캐시 예산 변경 시 호출
-        % [V3.15 항목 3-1] isVideoReady 가드로 영상 미로드 경로의 불필요 호출 차단
+        % [V3.14 item 3] called when the user changes the cache budget in the GUI
+        % [V3.15 item 3-1] isVideoReady guard blocks unnecessary calls on the video-not-loaded path
         function setCacheBudget(app, budgetMB)
             try
                 if budgetMB <= 0, return; end
                 app.CacheBudgetMB = budgetMB;
-                % 두 비행경로 중 영상이 로드된 경로만 캐시 한도 재계산
+                % recompute cache limit only for the path whose video is loaded (of the two)
                 for fIdx = 1:2
-                    if app.isVideoReady(fIdx)   % [V3.15 항목 3-1] 가드
+                    if app.isVideoReady(fIdx)   % [V3.15 item 3-1] guard
                         app.adjustCacheSize(fIdx);
                     end
                 end
@@ -2312,7 +2312,7 @@
             end
         end
 
-        % [V3.15 항목 5-3] DebugMode GUI 체크박스 콜백
+        % [V3.15 item 5-3] DebugMode GUI checkbox callback
         function toggleDebugMode(app, val)
             try
                 app.DebugMode = logical(val);
@@ -2322,9 +2322,9 @@
             end
         end
 
-        % [V3.14 항목 5] VideoReader 유효성 검사 헬퍼 (일관성 있는 가드)
-        % [Medium #6] TotalFrames > 0 도 함께 확인 — applyVideoLoadedUI core 실패 시
-        % vr 은 valid 지만 TotalFrames=0 인 half-loaded 상태가 가능하므로 false 반환.
+        % [V3.14 item 5] VideoReader validity-check helper (consistent guard)
+        % [Medium #6] also check TotalFrames > 0 - on applyVideoLoadedUI core failure
+        % vr can be valid but a half-loaded state with TotalFrames=0 is possible, so return false.
         function tf = isVideoReady(app, fIdx)
             tf = false;
             try
@@ -2339,7 +2339,7 @@
             end
         end
 
-        % [V3.14 VirtualDub UI] Frame 슬라이더 범위 갱신 (영상 로드 시)
+        % [V3.14 VirtualDub UI] update Frame slider range (when video loaded)
         function updateVdubSliderRange(app, fIdx)
             try
                 if isfield(app.UI(fIdx), 'vidVdubSlider') && ~isempty(app.UI(fIdx).vidVdubSlider) ...
@@ -2350,7 +2350,7 @@
                     sld.Value = 1;
                     ticks = round(linspace(1, maxF, 5));
                     sld.MajorTicks = ticks;
-                    sld.MajorTickLabels = arrayfun(@num2str, ticks, 'UniformOutput', false); % 지수 표기 방지
+                    sld.MajorTickLabels = arrayfun(@num2str, ticks, 'UniformOutput', false); % prevent exponential notation
                     sld.MinorTicks = [];
                 end
             catch ME_silent
@@ -2358,8 +2358,8 @@
             end
         end
 
-        % [V3.14 VirtualDub UI] Frame N / Total (HH:MM:SS.mmm) 라벨 갱신
-        % [V3.15 항목 5-1] milliseconds 정확도 개선 (floor + 0.5) + 캐리오버
+        % [V3.14 VirtualDub UI] update Frame N / Total (HH:MM:SS.mmm) label
+        % [V3.15 item 5-1] improve milliseconds accuracy (floor + 0.5) + carryover
         function updateVdubFrameLabel(app, fIdx, frameNo)
             try
                 if ~isfield(app.UI(fIdx), 'vidVdubLabel') || isempty(app.UI(fIdx).vidVdubLabel) ...
@@ -2375,9 +2375,9 @@
                 mm = floor(mod(tSec, 3600) / 60);
                 ss = floor(mod(tSec, 60));
 
-                % [V3.15 항목 5-1] floor + 0.5 방식으로 부동소수점 오차 보정
+                % [V3.15 item 5-1] correct floating-point error via floor + 0.5
                 ms = floor(mod(tSec, 1) * 1000 + 0.5);
-                % 반올림으로 1000이 되면 초 단위로 캐리오버
+                % if rounding makes it 1000, carry over to the seconds unit
                 if ms >= 1000
                     ms = 0; ss = ss + 1;
                     if ss >= 60, ss = 0; mm = mm + 1; end
@@ -2391,16 +2391,16 @@
             end
         end
 
-        % [V3.15 항목 2 / V3.16 / V3.17 (1)(9)] goToFrame() - 단일 공식 진입점
-        % - V3.16: InGoToFrame 재진입 가드 + onCleanup
-        % - V3.17 (1)(9): coalescing - 처리 중 새 요청은 PendingFrame에 저장 후
-        %                 현재 처리 완료 시 자동 흡수 (최신 frame 누락 방지)
-        % - V3.17 (8): State = 'UPDATING' 표시
+        % [V3.15 item 2 / V3.16 / V3.17 (1)(9)] goToFrame() - single formal entry point
+        % - V3.16: InGoToFrame re-entry guard + onCleanup
+        % - V3.17 (1)(9): coalescing - a new request during processing is stored in PendingFrame, then
+        %                 auto-absorbed when current processing completes (prevents losing the latest frame)
+        % - V3.17 (8): show State = 'UPDATING'
         function goToFrame(app, fIdx, frameNo, mode)
             if nargin < 4, mode = 'final'; end
 
-            % [V3.17 (1)(9)] 처리 중이면 최신 요청을 Pending에 저장 후 종료
-            % 현재 처리 완료 직전 coalescing 루프에서 자동 처리됨
+            % [V3.17 (1)(9)] if processing, store the latest request in Pending and exit
+            % auto-handled in the coalescing loop just before current processing completes
             if app.InGoToFrame(fIdx)
                 app.PendingFrame(fIdx) = frameNo;
                 app.PendingMode{fIdx}  = mode;
@@ -2411,12 +2411,12 @@
             app.State = 'UPDATING';
             cleanupObj = onCleanup(@() app.clearGoToFrameFlag(fIdx));
 
-            % 핵심 처리 루프 (coalescing 지원)
+            % core processing loop (coalescing support)
             app.processFrameInternal(fIdx, frameNo, mode);
 
-            % [V3.17 (1)(9) / V3.18 (3) / V3.22 #4] Pending 완전 소진 루프
-            % - break 대신 continue로 누적된 모든 Pending 처리
-            % - MAX_PENDING_ITERS 안전망으로 무한 루프 방지
+            % [V3.17 (1)(9) / V3.18 (3) / V3.22 #4] full Pending-drain loop
+            % - continue instead of break to process all accumulated Pending
+            % - MAX_PENDING_ITERS safety net prevents infinite loop
             maxIter = app.MAX_PENDING_ITERS;
             iter = 0;
             while ~isnan(app.PendingFrame(fIdx)) && iter < maxIter
@@ -2425,7 +2425,7 @@
                 app.PendingFrame(fIdx) = NaN;
                 app.PendingMode{fIdx}  = '';
                 iter = iter + 1;
-                % 같은 frame이라도 break 대신 continue → 다음 Pending 누적분 처리
+                % continue instead of break even for the same frame -> process the next accumulated Pending
                 if pf == app.VideoSyncState(fIdx).CurrentFrame
                     continue;
                 end
@@ -2435,23 +2435,23 @@
                 fprintf('[goToFrame] Pending loop hit max iterations (fIdx=%d)\n', fIdx);
             end
 
-            % [V3.17 (5)] goToFrame 종료 시 단일 drawnow (drag/final 모두)
+            % [V3.17 (5)] single drawnow at goToFrame exit (both drag/final)
             drawnow limitrate;
         end
 
-        % [V3.17 (1)(9)] goToFrame의 핵심 처리 로직 (재진입 가드 우회 - coalescing 전용)
+        % [V3.17 (1)(9)] goToFrame core processing logic (bypasses re-entry guard - coalescing only)
         function processFrameInternal(app, fIdx, frameNo, mode)
             if isempty(mode), mode = 'final'; end
 
-            % 1. 범위 검증 + clamp
+            % 1. range check + clamp
             totalF = app.VideoSyncState(fIdx).TotalFrames;
             if totalF < 1, return; end
             frameNo = round(frameNo);
             frameNo = max(1, min(frameNo, totalF));
 
-            % 2. 변경 없으면 — drag 는 그대로 종료, final+IsSynced 는 data 측
-            %    정합만 한번 점검 (frame 동일해도 spinner/currentIndex 가 외부
-            %    조작으로 drift 했을 수 있음. v-fixM3).
+            % 2. if unchanged - drag just exits, final+IsSynced does a one-time data-side
+            %    consistency check (even if frame is the same, spinner/currentIndex may have
+            %    drifted from external manipulation. v-fixM3).
             if app.VideoSyncState(fIdx).CurrentFrame == frameNo
                 if strcmp(mode, 'final') ...
                         && app.VideoSyncState(fIdx).IsSynced ...
@@ -2463,27 +2463,27 @@
             end
             app.VideoSyncState(fIdx).CurrentFrame = frameNo;
 
-            % 3. 모든 표시 요소 일괄 동기화
+            % 3. sync all display elements at once
             app.syncFrameMarkersAndLabel(fIdx, frameNo);
 
-            % 4. 영상 갱신 (mode에 따라 source 선택)
+            % 4. update video (select source by mode)
             if strcmp(mode, 'drag')
                 app.updateVideoFrameByFrameNo(fIdx, frameNo, 'drag');
             else
                 app.updateVideoFrameByFrameNo(fIdx, frameNo, 'sync');
             end
 
-            % 5. 동기 모드일 때 비행데이터 측도 갱신
+            % 5. in sync mode, update the flight-data side too
             if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
                 app.syncDataSideToFrame(fIdx, frameNo, mode);
             end
             app.refreshBoardOffSummaryPanel(fIdx);
         end
 
-        % v-fixM3: processFrameInternal 의 data-side 동기화 블록을 분리.
-        %   - 일반 경로: video frame 변경 직후 호출 (drag/final 모두).
-        %   - same-frame final 경로: video frame 동일해도 currentIndex/spinner
-        %     stale 가능성에 대해 idempotent 정합 (drag 는 호출되지 않음).
+        % v-fixM3: split out the data-side sync block of processFrameInternal.
+        %   - normal path: called right after a video frame change (both drag/final).
+        %   - same-frame final path: even if the video frame is unchanged, idempotently
+        %     reconcile currentIndex/spinner stale possibility (drag is not called).
         function syncDataSideToFrame(app, fIdx, frameNo, mode)
             try
                 targetTime = app.frameToTime(fIdx, frameNo);
@@ -2526,28 +2526,28 @@
             end
         end
 
-        % [V3.15 항목 1] 슬라이더 드래그 중 콜백 (ValueChangingFcn)
-        % - throttle 0.03s(33fps) 적용으로 디코딩 큐 적체 방지
-        % - 'drag' 모드로 goToFrame 호출 → 경량 갱신만 수행
+        % [V3.15 item 1] slider drag-in-progress callback (ValueChangingFcn)
+        % - 0.03s(33fps) throttle prevents decode-queue buildup
+        % - call goToFrame in 'drag' mode -> lightweight update only
         function onVdubSliderChanging(app, fIdx, evtValue)
-            % 슬라이더 throttle: 너무 자주 호출되면 무시
+            % slider throttle: ignore if called too frequently
             if app.throttleHit('LastSliderUpdate', fIdx, app.SLIDER_THROTTLE_S), return; end
 
-            % [V3.19 (2)] 드래그 속도 측정 (adaptive prefetch용)
+            % [V3.19 (2)] measure drag velocity (for adaptive prefetch)
             app.updateDragVelocity(fIdx, round(evtValue));
 
             app.goToFrame(fIdx, evtValue, 'drag');
         end
 
-        % [V3.15 항목 1] 슬라이더 드래그 종료 시 콜백 (ValueChangedFcn)
-        % - 'final' 모드로 goToFrame 호출 → 전체 패널 1회 동기화 보장
-        % - [V3.16] 같은 frame이라도 drag 모드 종료 직후일 수 있으므로 updateDashboard 강제
+        % [V3.15 item 1] slider drag-end callback (ValueChangedFcn)
+        % - call goToFrame in 'final' mode -> guarantees one full panel sync
+        % - [V3.16] even for the same frame it may be right after drag mode, so force updateDashboard
         function onVdubSliderChanged(app, fIdx, src)
             try
                 target = round(src.Value);
                 if app.VideoSyncState(fIdx).CurrentFrame == target
-                    % drag 모드는 updateMarkersOnly만 호출 → 테이블/게이지 stale 가능
-                    % final 모드 1회 강제 호출로 전체 동기화 보장
+                    % drag mode calls only updateMarkersOnly -> table/gauge can be stale
+                    % one forced final-mode call guarantees full sync
                     if app.VideoSyncState(fIdx).IsSynced && ~isempty(app.Models(fIdx).rawData)
                         app.syncDataSideToFrame(fIdx, target, 'final');
                         app.refreshBoardOffSummaryPanel(fIdx);
@@ -2556,20 +2556,20 @@
                     return;
                 end
                 app.goToFrame(fIdx, src.Value, 'final');
-                % [V3.19 (2)] 슬라이더 드래그 종료 시 adaptive prefetch
+                % [V3.19 (2)] adaptive prefetch at slider drag-end
                 app.prefetchAdjacentFrames(fIdx);
             catch ME_silent
                 app.logCaught(ME_silent, 'onVdubSliderChanged');
             end
         end
 
-        % [V3.16 / V3.17 (8)] goToFrame 재진입 플래그 해제 (onCleanup 콜백)
+        % [V3.16 / V3.17 (8)] release goToFrame re-entry flag (onCleanup callback)
         function clearGoToFrameFlag(app, fIdx)
             app.InGoToFrame(fIdx) = false;
             if ~any(app.InGoToFrame), app.State = 'IDLE'; end
         end
 
-        % [V3.17 (7)] 디코딩 진행 중 플래그 해제 (onCleanup 콜백)
+        % [V3.17 (7)] release decoding-in-progress flag (onCleanup callback)
         function clearDecodingFlag(app, fIdx)
             app.IsDecoding(fIdx) = false;
             % [Stabilization P1] Drain the latest queued user request, if any.
@@ -2580,8 +2580,8 @@
             end
         end
 
-        % [V3.17 (2)] 캐시 존재 여부만 확인 (LRU 갱신 안 함)
-        % [V3.18 (1)] lookup clamp 일관성
+        % [V3.17 (2)] only check cache existence (no LRU update)
+        % [V3.18 (1)] lookup clamp consistency
         function tf = hasCachedFrame(app, fIdx, frameNo)
             try
                 totalF = app.VideoSyncState(fIdx).TotalFrames;
@@ -2594,11 +2594,11 @@
             end
         end
 
-        % [V3.19 (2)] 드래그 속도 추적 (지수 이동평균)
+        % [V3.19 (2)] track drag velocity (exponential moving average)
         function updateDragVelocity(app, fIdx, newFrame)
             try
                 if app.LastDragTime{fIdx} == 0, app.LastDragTime{fIdx} = tic; end
-                nowT = toc(app.LastDragTime{fIdx});   % [PATCH] 채널별 상대초
+                nowT = toc(app.LastDragTime{fIdx});   % [PATCH] per-channel relative seconds
                 samples = app.DragVelocitySamples{fIdx};
 
                 if isempty(samples)
@@ -2608,7 +2608,7 @@
                     dt = nowT - last.time;
                     if dt > 0.001
                         instantV = (newFrame - last.frame) / dt;
-                        % 지수 이동평균 (alpha=0.3)
+                        % exponential moving average (alpha=0.3)
                         app.DragVelocity(fIdx) = 0.7 * app.DragVelocity(fIdx) + 0.3 * instantV;
                     end
                     samples(end+1) = struct('time', nowT, 'frame', newFrame);
@@ -2620,9 +2620,9 @@
             end
         end
 
-        % [PATCH] tic/toc 기반 throttle 헬퍼 - 만료 시 false 반환 + 핸들 갱신
+        % [PATCH] tic/toc-based throttle helper - returns false on expiry + refreshes handle
         function hit = throttleHit(app, slotName, fIdx, limitS)
-            % #4: hit(throttled) 경로는 cell 전체 복사 없이 직접 인덱싱으로 읽기.
+            % #4: the hit(throttled) path reads via direct indexing without copying the whole cell.
             t0 = app.(slotName){fIdx};
             if t0 ~= 0 && toc(t0) < limitS
                 hit = true; return;
@@ -2633,12 +2633,12 @@
             hit = false;
         end
 
-        % [PATCH] DebugMode 게이팅 catch 로깅 헬퍼 (핫패스 안전)
+        % [PATCH] DebugMode-gated catch logging helper (hot-path safe)
         function logCaught(app, ME, tag)
-            % [V3.22 #1] silent/non-silent 모두 ring buffer에 보관
-            % - DebugMode일 때만 콘솔 출력 (silent 태그는 콘솔 출력 생략)
-            % - ring buffer는 항상 유지 → app.dumpErrorLog()로 사후 조사
-            % [Medium] delete 진행 중에는 콘솔만 억제하고, ring buffer 태그는 보존한다.
+            % [V3.22 #1] keep both silent/non-silent in the ring buffer
+            % - console output only when DebugMode (silent tag skips console output)
+            % - ring buffer always kept -> post-mortem via app.dumpErrorLog()
+            % [Medium] during delete, suppress only the console; preserve the ring-buffer tag.
             try
                 appValid = ~isempty(app) && isvalid(app);
             catch
@@ -2654,7 +2654,7 @@
                 suppressConsole = true;
             end
             try
-                % stack은 길이가 다른 struct array일 수 있어 cell로 wrap → 차원 불일치 회피
+                % stack may be a struct array of differing length, so cell-wrap -> avoid dimension mismatch
                 stackCell = {[]};
                 try
                     stackCell = {ME.stack};
@@ -2690,9 +2690,9 @@
                     end
                 end
             catch
-                % ring buffer 자체가 실패해도 절대 throw 안 함.
-                % [C6] stack 포함 entry append 가 실패했어도 최소 정보(tag/message)는
-                % 보존 시도 — stack=[] 로 비워 dimension 충돌 회피. ({[]} = 스칼라 struct)
+                % never throw even if the ring buffer itself fails.
+                % [C6] even if the stack-including entry append failed, try to preserve minimal info(tag/message)
+                % - clear stack to [] to avoid dimension conflict. ({[]} = scalar struct)
                 try
                     minEntry = struct('time', datetime('now'), 'tag', tagText, ...
                         'identifier', identifierText, 'message', messageText, 'stack', {[]});
@@ -2722,10 +2722,10 @@
             end
         end
 
-        % [V3.22 #1] 사후 조사용: 누적된 에러 로그 콘솔 출력
-        % 사용 예: app.dumpErrorLog()         → 전체 출력
-        %         app.dumpErrorLog(20)        → 최근 20건
-        %         app.dumpErrorLog(20, 'Async') → 최근 20건 중 'Async' 포함 태그만
+        % [V3.22 #1] for post-mortem: print the accumulated error log to console
+        % usage: app.dumpErrorLog()         -> print all
+        %         app.dumpErrorLog(20)        -> latest 20
+        %         app.dumpErrorLog(20, 'Async') -> of latest 20, only tags containing 'Async'
         function dumpErrorLog(app, n, filterTag)
             if isempty(app.ErrorLog)
                 fprintf('[ErrorLog] (empty)\n'); return;
@@ -2754,11 +2754,11 @@
             end
         end
 
-        % [V3.19 (1) / V3.20 (5-2)] 비동기 디코딩 시작
-        % - thread pool 우선 (직렬화 비용 0), 미지원 시 process pool 폴백
-        % - 둘 다 실패하면 UseAsyncDecode=false로 자동 폴백 (재시도 안 함)
-        % [PATCH Async 1.1] thread pool 사용 금지 - persistent VR이 워커 간 공유되어
-        %                   race condition 발생. process pool은 워커별 독립 메모리.
+        % [V3.19 (1) / V3.20 (5-2)] start async decoding
+        % - prefer thread pool (zero serialization cost), fallback to process pool if unsupported
+        % - if both fail, auto-fallback to UseAsyncDecode=false (no retry)
+        % [PATCH Async 1.1] do not use thread pool - persistent VR shared across workers
+        %                   causes a race condition. process pool has per-worker independent memory.
         % [Static fix] Async path intentionally does NOT set IsDecoding.
         % IsDecoding/PendingVideoFrame are sync-decode coalescing state.
         % AsyncFutures/AsyncTargetFrame/AsyncGen are async in-flight state:
@@ -2767,10 +2767,10 @@
         function ok = startAsyncDecode(app, fIdx, frameNo)
             ok = false;
             try
-                % parallel pool 준비 (없으면 지연 생성)
+                % prepare parallel pool (lazy-create if absent)
                 if isempty(app.AsyncPool) || ~isvalid(app.AsyncPool)
                     poolOk = false;
-                    % [PATCH] 기존 pool 재사용 가능하면 사용 (단, threads는 거부)
+                    % [PATCH] reuse existing pool if possible (but reject threads)
                     try
                         existing = gcp('nocreate');
                         if ~isempty(existing) && isvalid(existing)
@@ -2788,7 +2788,7 @@
                         app.logCaught(ME, 'Async:gcp');
                     end
 
-                    % process pool 신규 생성
+                    % create a new process pool
                     if ~poolOk
                         try
                             app.AsyncPool = parpool('local', app.ASYNC_WORKER_COUNT);
@@ -2803,7 +2803,7 @@
                         end
                     end
 
-                    % 실패: 영구 비활성화
+                    % failure: disable permanently
                     if ~poolOk
                         app.UseAsyncDecode = false;
                         if app.DebugMode
@@ -2813,11 +2813,11 @@
                     end
                 end
 
-                % [V3.21 #1-A] generation counter 증가 - 신규 요청 발행
+                % [V3.21 #1-A] increment generation counter - issue a new request
                 app.AsyncGen(fIdx) = app.AsyncGen(fIdx) + 1;
                 myGen = app.AsyncGen(fIdx);
 
-                % 이전 future 취소 (구식 결과 폐기)
+                % cancel previous future (discard stale result)
                 try
                     if ~isempty(app.AsyncFutures{fIdx}) && isvalid(app.AsyncFutures{fIdx})
                         cancel(app.AsyncFutures{fIdx});
@@ -2829,8 +2829,8 @@
                 fps = app.VideoSyncState(fIdx).VideoFps;
                 filePath = app.VideoFilePath{fIdx};
 
-                % [V3.21 #2-A / V3.22 #4 / V3.22 #6] persistent VR worker 함수 사용
-                % static wrapper를 통해 향후 +flightdash 패키지 마이그레이션 가능
+                % [V3.21 #2-A / V3.22 #4 / V3.22 #6] use the persistent VR worker function
+                % via the static wrapper to allow a future +flightdash package migration
                 fut = parfeval(app.AsyncPool, @FlightDataDashboard.workerDecodeFrame, 1, ...
                     filePath, frameNo, fps, app.WORKER_VR_CACHE_SLOTS);
                 app.AsyncFutures{fIdx} = fut;
@@ -2854,9 +2854,9 @@
             end
         end
 
-        % [V3.19 (1) / V3.21 #1-A / V3.21 #3-A] 비동기 디코딩 완료 콜백 (main thread)
-        % - generation 비교로 stale 결과 차단
-        % - displayFrame 단일 출구 통과 (write-through)
+        % [V3.19 (1) / V3.21 #1-A / V3.21 #3-A] async decode complete callback (main thread)
+        % - block stale results via generation comparison
+        % - pass through the displayFrame single exit (write-through)
         function onAsyncDecodeComplete(app, fIdx, frameNo, gen, img)
             % [Stabilization P0] Strong stale-frame rejection.
             % Display ONLY if every condition still holds at completion time.
@@ -2981,28 +2981,28 @@
             end
         end
 
-        % [V3.18 (4) / V3.19 (2)] adaptive prefetch: 드래그 속도/방향 기반 prefetch 범위
+        % [V3.18 (4) / V3.19 (2)] adaptive prefetch: prefetch range based on drag velocity/direction
         function prefetchAdjacentFrames(app, fIdx)
             try
                 if ~app.isVideoReady(fIdx), return; end
                 cur = app.VideoSyncState(fIdx).CurrentFrame;
                 total = app.VideoSyncState(fIdx).TotalFrames;
 
-                v = app.DragVelocity(fIdx);   % frames/sec (부호 = 방향)
+                v = app.DragVelocity(fIdx);   % frames/sec (sign = direction)
                 speed = abs(v);
 
-                % [V3.19 (2)] 속도 기반 prefetch 범위
+                % [V3.19 (2)] velocity-based prefetch range
                 if speed < 30
-                    offsets = [-3:-1, 1:3];        % 느림: 균등 양방향
+                    offsets = [-3:-1, 1:3];        % slow: even both directions
                 elseif speed < 100
                     if v > 0
-                        offsets = [-2, -1, 1:7];   % 정방향 우세
+                        offsets = [-2, -1, 1:7];   % forward dominant
                     else
-                        offsets = [-7:-1, 1, 2];   % 역방향 우세
+                        offsets = [-7:-1, 1, 2];   % backward dominant
                     end
                 else
                     if v > 0
-                        offsets = 1:12;            % 빠름: 진행방향만 깊게
+                        offsets = 1:12;            % fast: deep only in the travel direction
                     else
                         offsets = -12:-1;
                     end
@@ -3012,7 +3012,7 @@
                     fprintf('[Prefetch] fIdx=%d, v=%.1f f/s, %d offsets\n', fIdx, v, length(offsets));
                 end
 
-                % 다음 드래그용 reset
+                % reset for the next drag
                 app.DragVelocity(fIdx) = 0;
                 app.DragVelocitySamples{fIdx} = [];
 
@@ -3071,8 +3071,8 @@
             end
         end
 
-        % [V3.14 VirtualDub UI] ◄◄ ◄ ► ►► 네비게이션 버튼 콜백
-        % [V3.15 항목 2] goToFrame 단일 진입점 사용
+        % [V3.14 VirtualDub UI] navigation button callback (prev-prev / prev / next / next-next)
+        % [V3.15 item 2] use the goToFrame single entry point
         function onVdubNav(app, fIdx, action)
             try
                 if ~app.isVideoReady(fIdx), return; end
@@ -3081,7 +3081,7 @@
                 if total < 1, return; end
 
                 switch action
-                    % v-fix4: ±1 / ±10 / ±20 frame 이동 (legacy first/last 별칭 유지)
+                    % v-fix4: +-1 / +-10 / +-20 frame move (keep legacy first/last aliases)
                     case 'back20',         newFrame = max(1, cur - 20);
                     case {'back10','first'}, newFrame = max(1, cur - 10);
                     case 'prev',           newFrame = max(1, cur - 1);
@@ -3098,12 +3098,12 @@
             end
         end
 
-        % [V3.14 VirtualDub UI] Frame 마커/슬라이더/라벨 일괄 동기화 헬퍼
+        % [V3.14 VirtualDub UI] helper to sync Frame marker/slider/label at once
         function syncFrameMarkersAndLabel(app, fIdx, frameNo)
             try
-                % [수정] 사용하지 않는 옛날 마커 갱신 코드는 완전히 삭제하여 에러 원천 차단
+                % [fix] fully delete the old unused marker-update code to eliminate errors at the source
 
-                % 1. 슬라이더 위치 갱신
+                % 1. update slider position
                 if isfield(app.UI(fIdx), 'vidVdubSlider') && ~isempty(app.UI(fIdx).vidVdubSlider) ...
                         && isvalid(app.UI(fIdx).vidVdubSlider)
                     if abs(app.UI(fIdx).vidVdubSlider.Value - frameNo) > 0.5
@@ -3111,7 +3111,7 @@
                     end
                 end
 
-                % 2. 라벨 텍스트 갱신 (에러 없이 안전하게 도달)
+                % 2. update label text (reaches safely without error)
                 app.updateVdubFrameLabel(fIdx, frameNo);
 
             catch ME_silent
@@ -3119,7 +3119,7 @@
             end
         end
 
-        % [V3.12] 비디오 동기 상태 초기화
+        % [V3.12] init video sync state
         function resetVideoSync(app, fIdx)
             app.VideoSyncState(fIdx).IsSynced = false;
             app.VideoSyncState(fIdx).AnchorFrame = 0;
@@ -3138,15 +3138,15 @@
             end
         end
 
-        % [V3.12 2.2.3] 동기 버튼 콜백 - 입력값 검증 및 동기 설정
+        % [V3.12 2.2.3] sync button callback - input validation and sync setup
         function applyVideoSync(app, fIdx)
-            % 동기 해제 모드
+            % sync-release mode
             if app.VideoSyncState(fIdx).IsSynced
                 app.resetVideoSync(fIdx);
                 return;
             end
 
-            % 1. 영상/데이터 로드 검증
+            % 1. validate video/data loaded
             if isempty(app.VideoState(fIdx).videoReader)
                 errordlg('먼저 AVI 파일을 로드하세요.', '동기 오류'); return;
             end
@@ -3154,11 +3154,11 @@
                 errordlg('먼저 비행데이터(CSV)를 로드하세요.', '동기 오류'); return;
             end
 
-            % 2. 입력값 추출
+            % 2. extract input values
             frameNo = app.UI(fIdx).vidSyncFrameInput.Value;
             timeVal = app.UI(fIdx).vidSyncTimeInput.Value;
 
-            % 3. 범위 검증
+            % 3. range check
             totalFrames = app.VideoSyncState(fIdx).TotalFrames;
             timeCol = app.Models(fIdx).mappedCols.Time;
             times = app.Models(fIdx).rawData.(timeCol);
@@ -3170,49 +3170,49 @@
                 errordlg(sprintf('Time(s)는 %.3f ~ %.3f 범위여야 합니다.', times(1), times(end)), '범위 오류'); return;
             end
 
-            % 4. Hz 값 갱신
+            % 4. update Hz values
             vfpsUI = app.UI(fIdx).vidVideoFpsInput.Value;
             dfps = app.UI(fIdx).vidDataFpsInput.Value;
             if vfpsUI < 1 || dfps < 1
                 errordlg('Hz 값은 1 이상이어야 합니다.', '입력 오류'); return;
             end
 
-            % [수정 3] 소수점 정밀도 유실 방지 로직
-            % 내부의 정확한 소수점 FPS를 반올림한 값과 현재 UI 스피너의 값이 같다면,
-            % 사용자가 스피너를 수동 조작하지 않은 것으로 간주하여 정확한 내부 소수점 FPS를 유지함.
+            % [fix 3] logic to prevent decimal-precision loss
+            % if the rounded internal decimal FPS equals the current UI spinner value,
+            % treat it as the user not having manually changed the spinner, and keep the precise internal decimal FPS.
             if round(app.VideoSyncState(fIdx).VideoFps) == vfpsUI
-                % do nothing (소수점 정밀도 유지)
+                % do nothing (keep decimal precision)
             else
-                app.VideoSyncState(fIdx).VideoFps = vfpsUI; % 사용자가 스피너를 바꾼 경우에만 갱신
+                app.VideoSyncState(fIdx).VideoFps = vfpsUI; % update only when the user changed the spinner
             end
 
             app.VideoSyncState(fIdx).DataFps = dfps;
 
-            % 5. 동기 정보 저장
+            % 5. store sync info
             app.VideoSyncState(fIdx).IsSynced = true;
             app.VideoSyncState(fIdx).AnchorFrame = frameNo;
             app.VideoSyncState(fIdx).AnchorTime = timeVal;
 
-            % 6. UI 피드백
+            % 6. UI feedback
             app.UI(fIdx).vidSyncBtn.Text = '동기 해제';
             app.UI(fIdx).vidSyncBtn.BackgroundColor = [0.8 0.2 0.2];
             app.UI(fIdx).vidSyncStatus.Text = sprintf('동기 완료 (F%d ↔ %.3fs)', frameNo, timeVal);
             app.UI(fIdx).vidSyncStatus.FontColor = [0.06 0.65 0.50];
 
-            % [V3.14 항목 4 / V3.17 (6) / V3.19 (3) / V3.22 #2] 동기 재설정 시 캐시 무효화
+            % [V3.14 item 4 / V3.17 (6) / V3.19 (3) / V3.22 #2] invalidate cache on sync reset
             app.FrameCache{fIdx} = {};
             app.FrameCacheKeys{fIdx} = [];
             app.FrameCacheHits{fIdx} = [];
             app.FrameCacheLastUse{fIdx} = [];
             app.CacheBytesUsed(fIdx) = 0;
-            app.LastDisplayedFrame(fIdx) = 0;   % [PATCH] 조기반환 키 리셋
+            app.LastDisplayedFrame(fIdx) = 0;   % [PATCH] reset early-return key
             if app.DebugMode
                 fprintf('[VideoSync] fIdx=%d, anchor F%d ↔ %.3fs, vfps=%d, dfps=%d, cache cleared\n', ...
                     fIdx, frameNo, timeVal, vfpsUI, dfps);
             end
         end
 
-        % [V3.12 2.2.3.1] Hz 입력 ± 화살표 버튼 콜백 (1Hz 단위)
+        % [V3.12 2.2.3.1] Hz input +/- arrow button callback (1Hz steps)
         function adjustHzValue(app, fIdx, target, delta)
             try
                 if strcmp(target, 'video')
@@ -3225,7 +3225,7 @@
                 if newVal > 1000, newVal = 1000; end
                 fld.Value = newVal;
 
-                % 즉시 VideoSyncState에도 반영 (동기 설정 전이라도)
+                % reflect into VideoSyncState immediately (even before sync setup)
                 if strcmp(target, 'video')
                     app.VideoSyncState(fIdx).VideoFps = newVal;
                 else
@@ -3236,7 +3236,7 @@
             end
         end
 
-        % [V3.12 2.2.3.1] Hz 직접 입력 시 콜백 (스피너 ValueChangedFcn)
+        % [V3.12 2.2.3.1] Hz direct-input callback (spinner ValueChangedFcn)
         function onHzInputChanged(app, fIdx, target, newVal)
             try
                 if newVal < 1, newVal = 1; end
@@ -3251,7 +3251,7 @@
             end
         end
 
-        % [V3.12 2.2.3] Frame No → Time 매핑 (앵커 기반 선형)
+        % [V3.12 2.2.3] Frame No -> Time mapping (anchor-based linear)
         function timeVal = frameToTime(app, fIdx, frameNo)
             s = app.VideoSyncState(fIdx);
             if s.VideoFps <= 0
@@ -3260,22 +3260,22 @@
             timeVal = s.AnchorTime + (frameNo - s.AnchorFrame) / s.VideoFps;
         end
 
-        % [V3.12 2.2.3] Time → Frame No 매핑
+        % [V3.12 2.2.3] Time -> Frame No mapping
         function frameNo = timeToFrame(app, fIdx, timeVal)
             s = app.VideoSyncState(fIdx);
             frameNo = round(s.AnchorFrame + (timeVal - s.AnchorTime) * s.VideoFps);
             frameNo = max(1, min(frameNo, s.TotalFrames));
         end
 
-        % [V3.13 C-1] 프레임 캐시 조회 (LRU)
-        % [V3.18 (1)] lookup도 clamp 적용 - store 키와 일관성 보장
+        % [V3.13 C-1] frame cache lookup (LRU)
+        % [V3.18 (1)] apply clamp to lookup too - consistent with the store key
         function img = cacheGetFrame(app, fIdx, frameNo)
-            % [V3.22 #2] LRU 갱신을 lastUse 카운터로만 처리
-            % 기존: cell 배열에서 삭제 후 끝에 재삽입 → 큰 프레임 reference shuffle
-            % 변경: lastUse 배열만 업데이트 → cache cell 자체는 그대로 유지
+            % [V3.22 #2] handle LRU update via lastUse counter only
+            % old: delete from cell array then re-insert at end -> large-frame reference shuffle
+            % new: update only the lastUse array -> the cache cell itself stays intact
             img = [];
             try
-                % [V3.18 (1)] 안전망: 호출처가 clamp 누락해도 보호
+                % [V3.18 (1)] safety net: protect even if the caller missed the clamp
                 totalF = app.VideoSyncState(fIdx).TotalFrames;
                 if totalF >= 1
                     frameNo = max(1, min(round(frameNo), totalF));
@@ -3288,17 +3288,17 @@
                 cache = app.FrameCache{fIdx};
                 img = cache{foundIdx};
 
-                % [V3.22 #2] 사용 카운터 단조 증가 + lastUse 갱신
+                % [V3.22 #2] monotonic-increasing use counter + lastUse update
                 app.FrameCacheUseCounter = app.FrameCacheUseCounter + 1;
                 lastUse = app.FrameCacheLastUse{fIdx};
-                % 길이 동기화 (방어적)
+                % length sync (defensive)
                 if numel(lastUse) < numel(keys)
                     lastUse(end+1:numel(keys)) = 0;
                 end
                 lastUse(foundIdx) = app.FrameCacheUseCounter;
                 app.FrameCacheLastUse{fIdx} = lastUse;
 
-                % [V3.19 (3)] 히트 카운터 갱신 (가중 LRU score용)
+                % [V3.19 (3)] update hit counter (for weighted LRU score)
                 hits = app.FrameCacheHits{fIdx};
                 if numel(hits) < numel(keys)
                     hits(end+1:numel(keys)) = 1;
@@ -3311,9 +3311,9 @@
             end
         end
 
-        % [V3.13 C-1 / V3.14 / V3.17 (6) / V3.19 (3) / V3.22 #2] 프레임 캐시 저장
-        % - 가중 LRU: score = (hits * lastUseRecency) / bytes
-        %   → 자주 + 최근에 액세스된 작은 frame 보호, 오래되고 큰 frame 우선 evict
+        % [V3.13 C-1 / V3.14 / V3.17 (6) / V3.19 (3) / V3.22 #2] frame cache store
+        % - weighted LRU: score = (hits * lastUseRecency) / bytes
+        %   -> protect frequently + recently accessed small frames, evict old large frames first
         function cacheStoreFrame(app, fIdx, frameNo, img)
             try
                 keys    = app.FrameCacheKeys{fIdx};
@@ -3321,27 +3321,27 @@
                 hits    = app.FrameCacheHits{fIdx};
                 lastUse = app.FrameCacheLastUse{fIdx};
 
-                % [PATCH] 길이 동기화 - 양방향 보정
+                % [PATCH] length sync - bidirectional correction
                 nKeys = numel(keys);
                 if numel(hits) < nKeys, hits(end+1:nKeys) = 1;
                 elseif numel(hits) > nKeys, hits = hits(1:nKeys); end
                 if numel(lastUse) < nKeys, lastUse(end+1:nKeys) = 0;
                 elseif numel(lastUse) > nKeys, lastUse = lastUse(1:nKeys); end
 
-                % 사용 카운터 단조 증가
+                % monotonic-increasing use counter
                 app.FrameCacheUseCounter = app.FrameCacheUseCounter + 1;
                 useNow = app.FrameCacheUseCounter;
 
-                % 이미 있으면 in-place 갱신 (cell 재배치 없음)
+                % if already present, in-place update (no cell rearrangement)
                 foundIdx = find(keys == frameNo, 1);
                 if ~isempty(foundIdx)
                     app.CacheBytesUsed(fIdx) = app.CacheBytesUsed(fIdx) - numel(cache{foundIdx});
                     cache{foundIdx}    = img;
                     lastUse(foundIdx)  = useNow;
-                    % hits는 그대로 누적 (덮어쓰기로 hit 카운트 리셋하지 않음)
+                    % keep accumulating hits (do not reset hit count on overwrite)
                     app.CacheBytesUsed(fIdx) = app.CacheBytesUsed(fIdx) + numel(img);
                 else
-                    % 신규 추가 (끝에 append)
+                    % new add (append at end)
                     keys(end+1)    = frameNo;
                     cache{end+1}   = img;
                     hits(end+1)    = 1;
@@ -3349,14 +3349,14 @@
                     app.CacheBytesUsed(fIdx) = app.CacheBytesUsed(fIdx) + numel(img);
                 end
 
-                % frame 수 한도 초과 시 가중 evict
+                % weighted evict when frame count exceeds the limit
                 limit = app.DynamicCacheLimit(fIdx);
                 if limit < app.MIN_CACHE_FRAMES, limit = app.MIN_CACHE_FRAMES; end
                 if limit > app.MAX_CACHE_FRAMES, limit = app.MAX_CACHE_FRAMES; end
 
                 [keys, cache, hits, lastUse] = app.evictByScore(fIdx, keys, cache, hits, lastUse, limit, false);
 
-                % [V3.18 (5)] 절대 메모리 hard limit
+                % [V3.18 (5)] absolute memory hard limit
                 hardLimitBytes = app.CacheBudgetMB * 1024 * 1024;
                 [keys, cache, hits, lastUse] = app.evictByScore(fIdx, keys, cache, hits, lastUse, hardLimitBytes, true);
 
@@ -3372,11 +3372,11 @@
             end
         end
 
-        % [V3.22 #2] 가중 LRU evict 통합 헬퍼 (frame수 한도 / bytes 한도 공용)
-        % - byBytes=false: limit는 frame 개수
-        % - byBytes=true : limit는 누적 바이트
+        % [V3.22 #2] unified weighted-LRU evict helper (shared for frame-count / bytes limits)
+        % - byBytes=false: limit is frame count
+        % - byBytes=true : limit is cumulative bytes
         % - score = (hits * recency) / bytes
-        %   recency: lastUse가 클수록(최근일수록) 보호. 가장 오래된 항목은 useCounter 차이로 차등화
+        %   recency: larger lastUse(more recent) is more protected. The oldest items differ by useCounter delta
         function [keys, cache, hits, lastUse] = evictByScore(app, fIdx, keys, cache, hits, lastUse, limit, byBytes)
             while length(keys) > 1
                 if byBytes
@@ -3385,15 +3385,15 @@
                     if length(keys) <= limit, break; end
                 end
                 bytesArr = cellfun(@numel, cache);
-                % recency 정규화: 최신 항목 기준 상대값 (0~1)
+                % recency normalization: relative to the newest item (0~1)
                 useNow = double(app.FrameCacheUseCounter);
                 if useNow <= 0, useNow = 1; end
                 recency = double(lastUse) ./ useNow;
-                recency = max(recency, 0.01);   % 0 보호
+                recency = max(recency, 0.01);   % protect 0
                 scores = (double(hits) .* recency) ./ max(double(bytesArr), 1);
 
-                % 최신(가장 마지막에 추가된) 항목은 보호하지 않고 score로만 평가하되,
-                % 안전을 위해 length(keys)-1까지에서만 victim 선택
+                % the newest (last-added) item is not protected and is evaluated by score only, but
+                % for safety pick the victim only up to length(keys)-1
                 [~, evictIdx] = min(scores(1:end-1));
                 app.CacheBytesUsed(fIdx) = app.CacheBytesUsed(fIdx) - bytesArr(evictIdx);
                 keys(evictIdx)    = [];
@@ -3404,61 +3404,61 @@
         end
 
         % =====================================================================
-        % [V3.21 #3-A] 3계층 분리 구조 - 책임 명확화
+        % [V3.21 #3-A] 3-layer separation structure - clear responsibility
         %
-        %   Layer 1: requestFrame  - 진입점 + 캐시 lookup + 전략 선택
-        %   Layer 2: decodeFrameSync - 동기 디코딩 (read or 폴백)
-        %            startAsyncDecode - 비동기 디코딩 (별도 메서드, 기존)
-        %   Layer 3: displayFrame  - 표시 + 캐시 store (단일 출구)
+        %   Layer 1: requestFrame  - entry point + cache lookup + strategy selection
+        %   Layer 2: decodeFrameSync - sync decoding (read or fallback)
+        %            startAsyncDecode - async decoding (separate method, existing)
+        %   Layer 3: displayFrame  - display + cache store (single exit)
         %
-        % 기존 updateVideoFrameByFrameNo는 호환을 위해 requestFrame로 위임.
+        % the existing updateVideoFrameByFrameNo delegates to requestFrame for compat.
         % =====================================================================
 
-        % [V3.21 #3-A Layer 1] Frame 요청 진입점
+        % [V3.21 #3-A Layer 1] Frame request entry point
         % source: 'drag' / 'autoplay' / 'sync' / 'force'
         function requestFrame(app, fIdx, frameNo, source)
             if nargin < 4, source = 'force'; end
 
-            % 유효성 검사
+            % validity check
             if ~app.isVideoReady(fIdx), return; end
 
-            % autoplay throttle 분기
+            % autoplay throttle branch
             if strcmp(source, 'autoplay')
                 if app.throttleHit('LastVideoUpdate', fIdx, app.VIDEO_THROTTLE_S), return; end
             end
 
-            % clamp (lookup/store 키 일관성)
+            % clamp (lookup/store key consistency)
             totalF = app.VideoSyncState(fIdx).TotalFrames;
             clampedFrame = max(1, min(round(frameNo), max(1, totalF)));
 
             % [Stabilization P1] Track the latest user-requested frame.
             app.LastRequestedFrame(fIdx) = clampedFrame;
 
-            % 동일 프레임 조기 반환 - 실제 표시된 frame 기준
+            % early return for the same frame - based on the actually displayed frame
             if app.LastDisplayedFrame(fIdx) == clampedFrame, return; end
 
-            % Layer 1: 캐시 lookup
+            % Layer 1: cache lookup
             cached = app.cacheGetFrame(fIdx, clampedFrame);
             if ~isempty(cached)
                 app.displayFrame(fIdx, clampedFrame, cached, true);  % cacheHit=true
                 return;
             end
 
-            % [Stabilization P1] 디코딩 진행 중이면 latest pending 만 보관 후 return.
-            % 디코드 완료 시 clearDecodingFlag/onAsyncDecodeComplete 가 drainPendingVideoRequest 를 호출.
+            % [Stabilization P1] if decoding, keep only the latest pending then return.
+            % on decode complete, clearDecodingFlag/onAsyncDecodeComplete calls drainPendingVideoRequest.
             if app.IsDecoding(fIdx)
                 app.PendingVideoFrame(fIdx) = clampedFrame;
                 app.PendingVideoMode{fIdx}  = source;
                 return;
             end
 
-            % [Stabilization P0] 'final' 진입은 진행 중 async 결과를 무효화한다
+            % [Stabilization P0] a 'final' entry invalidates the in-progress async result
             if strcmp(source, 'final')
                 app.AsyncGen(fIdx) = app.AsyncGen(fIdx) + 1;
                 app.AsyncTargetFrame(fIdx) = NaN;
             end
 
-            % 전략 선택: async vs sync
+            % strategy selection: async vs sync
             if app.UseAsyncDecode && strcmp(source, 'drag')
                 if app.startAsyncDecode(fIdx, clampedFrame)
                     return;
@@ -3466,7 +3466,7 @@
                 % Async unavailable/failure: continue through sync path once.
             end
 
-            % Layer 2: 동기 디코딩
+            % Layer 2: sync decoding
             app.IsDecoding(fIdx) = true;
             cleanup2 = onCleanup(@() app.clearDecodingFlag(fIdx));
 
@@ -3493,13 +3493,13 @@
             end
         end
 
-        % [V3.21 #3-A Layer 2] 동기 디코딩 (read or 폴백)
+        % [V3.21 #3-A Layer 2] sync decoding (read or fallback)
         function img = decodeFrameSync(app, fIdx, clampedFrame)
             img = [];
             vr = app.VideoState(fIdx).videoReader;
 
-            % [PATCH Async 1.2 / V3.22 #4] 작은 step 휴리스틱 - 직전 표시 프레임 근처면 readFrame 순차
-            % MP4 역방향 seek는 매우 비싸므로 전진 방향 작은 step만 readFrame 사용
+            % [PATCH Async 1.2 / V3.22 #4] small-step heuristic - readFrame sequentially if near the last shown frame
+            % MP4 backward seek is very expensive, so use readFrame only for small forward steps
             try
                 % [Stabilization P1] seq-read heuristic uses last DECODED frame (read position
                 % of the VideoReader), not last DISPLAYED frame.
@@ -3521,7 +3521,7 @@
             try
                 img = read(vr, clampedFrame);
             catch
-                % 폴백: CurrentTime + readFrame
+                % fallback: CurrentTime + readFrame
                 try
                     fps = app.VideoSyncState(fIdx).VideoFps;
                     if fps <= 0, fps = 70; end
@@ -3543,14 +3543,14 @@
             if ~isempty(img), app.LastDecodedFrame(fIdx) = clampedFrame; end
         end
 
-        % [V3.21 #3-A Layer 3] 단일 표시 출구 - 모든 디코딩 결과는 여기 통과
+        % [V3.21 #3-A Layer 3] single display exit - all decode results pass through here
         function displayFrame(app, fIdx, frameNo, img, isCacheHit)
             try
                 if ~app.isVideoReady(fIdx) || isempty(img), return; end
                 app.setVideoImageFrame(fIdx, img);
-                app.LastDisplayedFrame(fIdx) = frameNo;   % [PATCH] 조기반환 키
+                app.LastDisplayedFrame(fIdx) = frameNo;   % [PATCH] early-return key
 
-                % 캐시 store (히트 아닐 때만 - cache-first write-through)
+                % cache store (only when not a hit - cache-first write-through)
                 if ~isCacheHit
                     app.cacheStoreFrame(fIdx, frameNo, img);
                 end
@@ -3559,8 +3559,8 @@
             end
         end
 
-        % [V3.13 / V3.14 / V3.21 호환] 기존 updateVideoFrameByFrameNo는
-        % requestFrame로 위임 (외부 호출처 호환 유지)
+        % [V3.13 / V3.14 / V3.21 compat] the existing updateVideoFrameByFrameNo
+        % delegates to requestFrame (keeps external caller compatibility)
         function updateVideoFrameByFrameNo(app, fIdx, frameNo, source)
             if nargin < 4, source = 'force'; end
             app.requestFrame(fIdx, frameNo, source);
@@ -3600,10 +3600,10 @@
         end
 
         % ---------------------------------------------------------------------
-        % 마커 클릭 & 드래그 이벤트 전용 핸들러 (스턱 방어 강화)
+        % handler for marker click & drag events (hardened against stuck)
         % ---------------------------------------------------------------------
         function startPlotMarkerDrag(app, fIdx, ~, src, event)
-            % 마우스 왼쪽 버튼 클릭 시에만 실행 (우클릭 등 제외)
+            % run only on left mouse button click (exclude right-click etc.)
             if event.Button ~= 1, return; end
             if isempty(app.Models(fIdx).rawData), return; end
             if app.SyncState.IsSynced && fIdx == 2, return; end
@@ -3611,31 +3611,31 @@
                 return;
             end
 
-            % 드래그 상태 활성화 및 객체 HitTest 끄기
+            % activate drag state and turn off object HitTest
             app.IsDraggingMarker = true;
             app.DraggedMarker = src;
-            app.DraggedFIdx = fIdx;   % [V3.11 B] 드래그 종료 시 전체 동기화용
-            app.DraggedFromVideo = false;   % [V3.12] 비행데이터 측에서 시작
-            app.VideoThrottleDyn = 0.05;    % [V3.12] 동적 throttle 초기값 20fps
+            app.DraggedFIdx = fIdx;   % [V3.11 B] for full sync at drag end
+            app.DraggedFromVideo = false;   % [V3.12] started from the flight-data side
+            app.VideoThrottleDyn = 0.05;    % [V3.12] dynamic throttle initial value 20fps
             app.LastDragTime{fIdx} = tic;
             app.State = 'DRAGGING';   % [V3.17 (8)]
             src.HitTest = 'off';
 
-            % 드래그 중 Axes의 기본 조작(Pan/Zoom) 끄기 (마우스 뗌 씹힘 방지)
+            % turn off the axes' default operations (Pan/Zoom) during drag (prevents mouse-up being swallowed)
             try
                 ax = src.Parent;
                 if isvalid(ax) && isprop(ax, 'Interactions')
-                    app.DraggedMarker.UserData = ax.Interactions; % 기존 설정 백업
-                    ax.Interactions = []; % 드래그 중 내장 Pan 비활성화
+                    app.DraggedMarker.UserData = ax.Interactions; % back up existing settings
+                    ax.Interactions = []; % disable built-in Pan during drag
                 end
             catch ME
                 app.logCaught(ME, 'startPlotMarkerDrag:disable-interactions');
             end
 
-            % [V3.11 B] 드래그 중 XLim 리스너 일시 중단
+            % [V3.11 B] suspend the XLim listener during drag
             app.setXLimListenersEnabled(fIdx, false);
 
-            % [V3.11 C] 드래그 중 xline을 불투명(Alpha=1)으로 전환 → 렌더링 가속
+            % [V3.11 C] switch xline to opaque (Alpha=1) during drag -> faster rendering
             try
                 for tIdx = 1:length(app.UI(fIdx).timeLines)
                     tlArr = app.UI(fIdx).timeLines{tIdx};
@@ -3656,7 +3656,7 @@
             app.UIFigure.WindowButtonUpFcn = @(~,~) app.stopPlotMarkerDrag();
         end
 
-        % [V3.12 2.2.2] 비디오 Frame 마커 드래그 시작 핸들러
+        % [V3.12 2.2.2] video Frame marker drag-start handler
         function startVideoFrameDrag(app, fIdx, src, event)
             if event.Button ~= 1, return; end
             if isempty(app.VideoState(fIdx).videoReader), return; end
@@ -3664,7 +3664,7 @@
             app.IsDraggingMarker = true;
             app.DraggedMarker = src;
             app.DraggedFIdx = fIdx;
-            app.DraggedFromVideo = true;   % ⭐ 비디오 측에서 드래그 시작
+            app.DraggedFromVideo = true;   % * drag started from the video side
             app.VideoThrottleDyn = 0.05;
             app.LastDragTime{fIdx} = tic;
             app.State = 'DRAGGING';   % [V3.17 (8)]
@@ -3680,7 +3680,7 @@
                 app.logCaught(ME, 'startVideoFrameDrag:disable-interactions');
             end
 
-            % XLim 리스너 중단 (비행데이터와 동일 정책)
+            % suspend XLim listener (same policy as flight data)
             app.setXLimListenersEnabled(fIdx, false);
 
             app.UIFigure.WindowButtonMotionFcn = @(~,~) app.videoFrameDragMotion(fIdx);
@@ -3700,9 +3700,9 @@
                     return;
                 end
 
-                % [V3.13] V3.12 동적 throttle 호출 제거 - source 기반 절충 throttle 사용
+                % [V3.13] removed the V3.12 dynamic throttle call - use source-based compromise throttle
 
-                % [V3.11 C] 드래그 중에는 경량 경로로만 업데이트
+                % [V3.11 C] update via the lightweight path only during drag
                 targetTime = pt(1,1);
                 timeCol = app.Models(fIdx).mappedCols.Time;
                 times = app.Models(fIdx).rawData.(timeCol);
@@ -3718,9 +3718,9 @@
             end
         end
 
-        % [V3.12 2.2.2] 비디오 Frame 마커 드래그 모션 핸들러
-        % [V3.12 2.2.2] 비디오 Frame 마커 별표 드래그 모션 핸들러
-        % [V3.15 항목 2] goToFrame 단일 진입점 사용으로 리팩토링
+        % [V3.12 2.2.2] video Frame marker drag-motion handler
+        % [V3.12 2.2.2] video Frame marker star drag-motion handler
+        % [V3.15 item 2] refactored to use the goToFrame single entry point
         function videoFrameDragMotion(app, fIdx)
             if ~app.IsDraggingMarker, return; end
             try
@@ -3738,10 +3738,10 @@
                 totalFrames = app.VideoSyncState(fIdx).TotalFrames;
                 if totalFrames < 1, return; end
 
-                % [V3.19 (2)] 드래그 속도 측정 (adaptive prefetch용)
+                % [V3.19 (2)] measure drag velocity (for adaptive prefetch)
                 app.updateDragVelocity(fIdx, targetFrame);
 
-                % [V3.15 항목 2] 단일 진입점 통과 - 'drag' 모드로 경량 갱신
+                % [V3.15 item 2] pass through the single entry point - lightweight update in 'drag' mode
                 app.goToFrame(fIdx, targetFrame, 'drag');
                 drawnow limitrate;
             catch ME_silent
@@ -3749,9 +3749,9 @@
             end
         end
 
-        % [V3.12 영상 동적 throttle 계산]
-        % - 드래그 이동이 빠르면 throttle 간격을 늘려 영상 갱신 빈도를 줄임 (5fps까지)
-        % - 느리면 간격을 줄여 영상이 부드럽게 따라오게 함 (20fps까지)
+        % [V3.12 video dynamic throttle computation]
+        % - if drag moves fast, increase the throttle interval to reduce video update frequency (down to 5fps)
+        % - if slow, decrease the interval so the video follows smoothly (up to 20fps)
         function computeDynamicVideoThrottle(app)
             try
                 fIdx = app.DraggedFIdx;
@@ -3762,10 +3762,10 @@
 
                 if dt <= 0, return; end
 
-                % 이동 빈도가 60fps에 가까울수록(dt 작을수록) 영상은 적게 갱신
+                % the closer the move frequency is to 60fps (smaller dt), the less the video updates
                 % dt=0.016(60fps) → throttle 0.20 (5fps)
                 % dt=0.05 (20fps) → throttle 0.10 (10fps)
-                % dt=0.1+(10fps 이하) → throttle 0.05 (20fps)
+                % dt=0.1+(10fps or less) -> throttle 0.05 (20fps)
                 if dt < 0.025
                     target = 0.20;
                 elseif dt < 0.06
@@ -3774,14 +3774,14 @@
                     target = 0.05;
                 end
 
-                % 부드러운 전이 (지수 가중 이동평균)
+                % smooth transition (exponential weighted moving average)
                 app.VideoThrottleDyn = 0.7 * app.VideoThrottleDyn + 0.3 * target;
             catch ME_silent
                 app.logCaught(ME_silent, 'computeDynamicVideoThrottle');
             end
         end
 
-        % [PATCH UX-3] H↔I 패널 경계 splitter 드래그 핸들러
+        % [PATCH UX-3] H<->I panel boundary splitter drag handler
         function startHISplitterDrag(app, fIdx)
             try
                 if fIdx >= 1 && fIdx <= numel(app.UI) && isfield(app.UI(fIdx), 'dataGrid') ...
@@ -3812,7 +3812,7 @@
                 mouseX_in_grid = figPos(1) - gridPos(1);
                 newVideoW = gridW - mouseX_in_grid;
                 cw = dg.ColumnWidth;
-                % H패널('1x')과 비디오 패널의 최소 폭을 현재 창 크기에 맞춰 보장
+                % ensure the min widths of the H panel('1x') and video panel fit the current window size
                 fixedSum = 0;
                 for colIdx = [1 2 3 5]
                     if isnumeric(cw{colIdx})
@@ -3846,10 +3846,10 @@
         end
 
         function stopPlotMarkerDrag(app)
-            % 콜백 및 드래그 상태 완벽 초기화
+            % fully reset callbacks and drag state
             wasDraggingFIdx = app.DraggedFIdx;
             app.IsDraggingMarker = false;
-            app.State = 'IDLE';   % [V3.17 (8)] 드래그 종료 시 IDLE 복원
+            app.State = 'IDLE';   % [V3.17 (8)] restore IDLE at drag end
 
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
@@ -3863,7 +3863,7 @@
             try
                 if ~isempty(app.DraggedMarker) && isvalid(app.DraggedMarker)
                     app.DraggedMarker.HitTest = 'on';
-                    % 기존 Axes 상호작용(Pan/Zoom) 복원
+                    % restore the original Axes interactions (Pan/Zoom)
                     ax = app.DraggedMarker.Parent;
                     if isvalid(ax) && isprop(ax, 'Interactions') && ~isempty(app.DraggedMarker.UserData)
                         ax.Interactions = app.DraggedMarker.UserData;
@@ -3875,10 +3875,10 @@
 
             app.DraggedMarker = [];
             app.DraggedFIdx = 0;
-            app.DraggedFromVideo = false;   % [V3.12] 비디오 드래그 플래그 리셋
-            app.VideoThrottleDyn = 0.05;    % [V3.12] throttle 기본값 복원
+            app.DraggedFromVideo = false;   % [V3.12] reset the video drag flag
+            app.VideoThrottleDyn = 0.05;    % [V3.12] restore the default throttle value
 
-            % [V3.11 C] xline Alpha를 0.5로 복원
+            % [V3.11 C] restore xline Alpha to 0.5
             for fIdx = 1:2
                 try
                     for tIdx = 1:length(app.UI(fIdx).timeLines)
@@ -3897,17 +3897,17 @@
                 end
             end
 
-            % [V3.11 B] XLim 리스너 복원 (드래그 시작 시 중단했던 리스너 복구)
+            % [V3.11 B] restore XLim listeners (recover listeners suspended at drag start)
             if wasDraggingFIdx >= 1 && wasDraggingFIdx <= 2
                 app.setXLimListenersEnabled(wasDraggingFIdx, true);
             end
 
-            % [V3.11 C] 드래그 종료 시 전체 대시보드 1회 동기화
-            % (드래그 중 경량 경로로만 갱신했던 테이블/게이지/맵/비디오 최종 반영)
+            % [V3.11 C] one full dashboard sync at drag end
+            % (final reflection of table/gauge/map/video updated only via the lightweight path during drag)
             for fIdx = 1:2
                 if ~isempty(app.Models(fIdx).rawData)
                     idx = app.Models(fIdx).currentIndex;
-                    % [Major 4] IsUpdating 복원을 onCleanup 로 고정 (예외 경로에서도 복원 보장)
+                    % [Major 4] pin IsUpdating restore to onCleanup (restore guaranteed even on exception path)
                     prevUpdating = app.IsUpdating(fIdx);
                     app.IsUpdating(fIdx) = true;
                     cleanupUpdating = onCleanup(@() app.restoreIsUpdating(fIdx, prevUpdating));
@@ -3917,18 +3917,18 @@
                         warning('FlightDataDashboard:StopPlotMarkerDrag', ...
                             'stopPlotMarkerDrag 전체 동기화 오류: %s', e.message);
                     end
-                    clear cleanupUpdating  % 명시적 cleanup (다음 iteration 의 prevUpdating 캡처 안전화)
-                    % [V3.18 (4)] 드래그 종료 후 인접 frame 워밍업 (idle CPU 활용)
+                    clear cleanupUpdating  % explicit cleanup (makes the next iteration's prevUpdating capture safe)
+                    % [V3.18 (4)] warm up adjacent frames after drag end (use idle CPU)
                     app.prefetchAdjacentFrames(fIdx);
                 end
             end
         end
 
         % ---------------------------------------------------------------------
-        % [V3.11 B] XLim 리스너 일괄 제어 (드래그 중 중단/복원)
+        % [V3.11 B] batch-control XLim listeners (suspend/restore during drag)
         % ---------------------------------------------------------------------
         function setXLimListenersEnabled(app, fIdx, enabled)
-            % H 패널 내 모든 탭의 XLim 리스너 제어
+            % control XLim listeners of all tabs inside the H panel
             try
                 for tIdx = 1:length(app.UI(fIdx).xLimListeners)
                     listeners = app.UI(fIdx).xLimListeners{tIdx};
@@ -3943,7 +3943,7 @@
                 app.logCaught(ME, 'setXLimListenersEnabled:plot');
             end
 
-            % Altitude 패널 XLim 리스너 제어
+            % control the Altitude panel XLim listener
             try
                 if isfield(app.UI(fIdx), 'altXLimListener')
                     L = app.UI(fIdx).altXLimListener;
@@ -3957,11 +3957,11 @@
         end
 
         % ---------------------------------------------------------------------
-        % [V3.11 C / V3.12 확장] 경량 업데이트 경로 (드래그 중 전용)
-        % - V3.11: 마커/xline + 현재시간 라벨 + H 패널 책장 넘기기
-        % - V3.12 1.1: Map 비행경로 + 빨간 삼각형 실시간 갱신 추가
-        % - V3.12 2.2.3: 비디오 동기 설정 시 Frame 마커 갱신 + 영상 프레임 갱신
-        % - 현재 비행 정보/자세 숫자는 드래그 중에도 즉시 갱신
+        % [V3.11 C / V3.12 extension] lightweight update path (drag-only)
+        % - V3.11: marker/xline + current-time label + H panel page turning
+        % - V3.12 1.1: add Map flight-path + red-triangle real-time update
+        % - V3.12 2.2.3: when video sync is set, update the Frame marker + video frame
+        % - current flight info/attitude numbers update immediately even during drag
         % ---------------------------------------------------------------------
         function updateNumericPanelsOnly(app, fIdx, idx)
             try
@@ -4026,8 +4026,8 @@
         end
 
         function updateMarkersOnly(app, fIdx, idx)
-            % [V3.17 (4)(11)] persistent inCascade → InCascade 인스턴스 속성으로 이동
-            % [V3.17 (5)] drawnow를 외부(goToFrame)에서 처리하므로 자체 호출은 가드
+            % [V3.17 (4)(11)] moved persistent inCascade -> InCascade instance property
+            % [V3.17 (5)] drawnow is handled externally (goToFrame), so guard the self call
             isOuter = ~app.InCascade;
 
             app.Models(fIdx).currentIndex = idx;
@@ -4038,7 +4038,7 @@
                 altCol = app.Models(fIdx).mappedCols.Alt;
                 alts = app.Models(fIdx).rawData.(altCol);
 
-                % Altitude 패널 마커 + xline 갱신
+                % update Altitude panel marker + xline
                 if isfield(app.UI(fIdx), 'hAltMarker') && ~isempty(app.UI(fIdx).hAltMarker) && isvalid(app.UI(fIdx).hAltMarker)
                     set(app.UI(fIdx).hAltMarker, 'XData', currTime, 'YData', alts(idx));
                 end
@@ -4046,12 +4046,12 @@
                     app.UI(fIdx).timeLine.Value = currTime;
                 end
 
-                % 현재시간 라벨 (매우 가벼움)
+                % current-time label (very light)
                 if isfield(app.UI(fIdx), 'currentTimeLabel') && ~isempty(app.UI(fIdx).currentTimeLabel) && isvalid(app.UI(fIdx).currentTimeLabel)
                     app.UI(fIdx).currentTimeLabel.Text = sprintf('%.3f s', currTime);
                 end
 
-                % 스피너 갱신 (가벼움)
+                % spinner update (light)
                 if isfield(app.UI(fIdx), 'spinner') && ~isempty(app.UI(fIdx).spinner) && isvalid(app.UI(fIdx).spinner)
                     if abs(app.UI(fIdx).spinner.Value - currTime) > eps
                         app.UI(fIdx).spinner.Value = currTime;
@@ -4062,7 +4062,7 @@
                 app.logCaught(ME, 'clearCurrentTab:delete-children');
             end
 
-            % [V3.12 1.1] Map 비행경로 + 빨간 삼각형 실시간 갱신 (가벼움)
+            % [V3.12 1.1] Map flight-path + red-triangle real-time update (light)
             try
                 pathLon = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Lon);
                 pathLat = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Lat);
@@ -4084,40 +4084,40 @@
                 app.logCaught(ME, 'updateNumericPanelsOnly:map');
             end
 
-            % H 패널 책장 넘기기 + 마커 갱신 (개선안 A의 IsProgrammaticXLim 가드 작동)
+            % H panel page turning + marker update (the IsProgrammaticXLim guard of plan A works)
             try
                 app.updatePlotTimeLines(fIdx, idx, currTime);
             catch ME
                 app.logCaught(ME, 'hpanel-update');
             end
 
-            % [V3.12 2.2.3] 비디오 동기 설정 시 Frame 마커 + 영상 프레임 갱신
-            % (단, 비디오 측에서 시작된 드래그가 아닐 때만 - 무한 루프 방지)
-            % [PATCH UX-1] Sync 명시 활성화 + 비디오 ready 동시 충족 시에만 갱신
+            % [V3.12 2.2.3] when video sync is set, update the Frame marker + video frame
+            % (only when the drag did not start from the video side - prevents infinite loop)
+            % [PATCH UX-1] update only when Sync is explicitly active AND video is ready
             if app.VideoSyncState(fIdx).IsSynced && ~app.DraggedFromVideo ...
                     && app.isVideoReady(fIdx) && app.VideoSyncState(fIdx).AnchorFrame > 0
                 try
                     targetFrame = app.timeToFrame(fIdx, currTime);
                     app.VideoSyncState(fIdx).CurrentFrame = targetFrame;
 
-                    % [V3.14] Frame 마커 + xline + 슬라이더 + 라벨 일괄 동기화
+                    % [V3.14] sync Frame marker + xline + slider + label at once
                     app.syncFrameMarkersAndLabel(fIdx, targetFrame);
 
-                    % [V3.13 절충] 비행데이터 드래그 시 영상 갱신은 throttle 유지
+                    % [V3.13 compromise] keep throttling video update on flight-data drag
                     app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'autoplay');
                 catch ME
                     app.logCaught(ME, 'clearAllTabs:delete-tab');
                 end
             end
 
-            % 동기화 모드: 경로 1 드래그 시 경로 2도 경량 업데이트
+            % sync mode: when path 1 is dragged, lightweight-update path 2 too
             if app.SyncState.IsSynced && fIdx == 1 && ~isempty(app.Models(2).rawData)
                 targetT2 = app.SyncState.SyncT2 + (currTime - app.SyncState.SyncT1);
                 timeCol2 = app.Models(2).mappedCols.Time;
                 idx2 = app.findClosestIndexByTime(app.Models(2).rawData.(timeCol2), targetT2);
                 if ~isequal(app.Models(2).currentIndex, idx2)
-                    % [V3.17 (4)(11)] InCascade 인스턴스 속성으로 cascade 가드
-                    % [Major 3] onCleanup 만으로 복원 — 수동 복원 제거 (중복 호출 방지/의도 명확화)
+                    % [V3.17 (4)(11)] cascade guard via the InCascade instance property
+                    % [Major 3] restore via onCleanup only - removed manual restore (prevents double call / clarifies intent)
                     prevCascade = app.InCascade;
                     app.InCascade = true;
                     cleanupCascade = onCleanup(@() app.restoreInCascade(prevCascade));
@@ -4125,8 +4125,8 @@
                 end
             end
 
-            % [V3.17 (5)] cascade 외부 + goToFrame 미경유 시에만 drawnow
-            % goToFrame은 자체 종료 시 drawnow 호출하므로 중복 방지
+            % [V3.17 (5)] drawnow only when outside cascade + not via goToFrame
+            % goToFrame calls drawnow on its own exit, so avoid duplication
             if isOuter && ~any(app.InGoToFrame)
                 drawnow limitrate;
             end
@@ -4141,7 +4141,7 @@
         end
 
         function restoreInBoardToggle(app)
-            % [bug#4] toggleBoardVisibility 재진입 가드 해제(항상 false — 재진입은 차단됨).
+            % [bug#4] release the toggleBoardVisibility re-entry guard (always false - re-entry is blocked).
             try
                 app.InBoardToggle = false;
             catch ME
@@ -4161,8 +4161,8 @@
         end
 
         function idx = findClosestIndexByTime(app, timeArray, targetTime)
-            % PRECONDITION: timeArray 는 단조 증가(시간축) 전제 — 이진 탐색.
-            %               비정렬이면 결과 부정확(DebugMode 에서만 1회 경고).
+            % PRECONDITION: timeArray assumed monotonic increasing (time axis) - binary search.
+            %               if unsorted the result is inaccurate (warn once only in DebugMode).
             if isempty(timeArray), idx = 1; return; end
             if isnan(targetTime), idx = 1; return; end
             try
@@ -4207,9 +4207,9 @@
             tabIdx = find(app.UI(fIdx).plotTabs == currTab, 1);
             if isempty(tabIdx), return; end
 
-            % [기능 유지] H 패널 자동 화면 넘김 (Auto-Page Panning)
-            % 확대된 상태에서 마커가 화면 밖을 벗어나면 기존 확대 폭을 유지한 채 X축 이동
-            % [V3.11 A] XLim 변경 시 handlePlotXLimChange 리스너 무한 재귀 차단
+            % [feature kept] H panel auto page panning (Auto-Page Panning)
+            % when zoomed in and the marker leaves the screen, move the X axis keeping the existing zoom width
+            % [V3.11 A] block handlePlotXLimChange listener infinite recursion on XLim change
             if ~isempty(app.UI(fIdx).plotAxes{tabIdx})
                 firstAx = app.UI(fIdx).plotAxes{tabIdx}{1};
                 try
@@ -4227,7 +4227,7 @@
                                 newMax = newMax + xWidth;
                             end
                             prevProgrammatic = app.IsProgrammaticXLim(fIdx);
-                            app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
+                            app.IsProgrammaticXLim(fIdx) = true;   % listener guard ON
                             cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
                             app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
@@ -4239,7 +4239,7 @@
                                 newMin = newMin - xWidth;
                             end
                             prevProgrammatic = app.IsProgrammaticXLim(fIdx);
-                            app.IsProgrammaticXLim(fIdx) = true;   % 리스너 가드 ON
+                            app.IsProgrammaticXLim(fIdx) = true;   % listener guard ON
                             cleanupXLim = onCleanup(@() app.restoreProgrammaticXLim(fIdx, prevProgrammatic));
                             firstAx.XLim = [newMin, newMax];
                             app.IsProgrammaticXLim(fIdx) = prevProgrammatic;
@@ -4278,7 +4278,7 @@
         end
 
         % ---------------------------------------------------------------------
-        % H 영역 탭 및 다중 플롯 관리
+        % H area tab and multi-plot management
         % ---------------------------------------------------------------------
         function addPlotTab(app, fIdx)
             nTabs = length(app.UI(fIdx).plotTabs);
@@ -4394,14 +4394,14 @@
         end
 
         function handlePlotXLimChange(app, fIdx, ax)
-            % [V3.11 A] 프로그래밍적 XLim 변경(책장 넘기기 등)인 경우 리스너 무시
-            %           → 사용자가 드래그한 마커 위치가 중앙으로 강제 점프되는 현상 차단
+            % [V3.11 A] if it is a programmatic XLim change (page turning etc.), ignore the listener
+            %           -> blocks the dragged marker position from being force-jumped to center
             if app.IsProgrammaticXLim(fIdx), return; end
 
             % =======================================================
-            % [V3.8 보강] 툴바의 Zoom/Pan 모드를 프로그래밍적으로 강제 Off
-            % - 혹시 외부 API나 다른 경로를 통해 zoom/pan 모드가 켜졌을 경우
-            %   WindowButtonUp 이벤트 가로채기로 인한 마커 스턱 현상 원천 차단
+            % [V3.8 reinforcement] programmatically force the toolbar Zoom/Pan mode Off
+            % - in case zoom/pan mode was turned on via an external API or another path
+            %   block marker stuck at the source from WindowButtonUp event interception
             % =======================================================
             try
                 if ~isempty(app.UIFigure) && isvalid(app.UIFigure)
@@ -4415,13 +4415,13 @@
                 app.logCaught(ME, 'handlePlotXLimChange:force-interaction-off');
             end
 
-            % [버그 완벽 수정] 줌/팬 등에 의해 X축 범위가 변경되었을 때
-            % 혹시 남아있을지 모르는 드래그 상태를 안전하게 강제 초기화
+            % [bug fully fixed] when the X-axis range changed by zoom/pan etc.
+            % safely force-reset any drag state that might remain
             if app.IsDraggingMarker
                 app.stopPlotMarkerDrag();
             end
 
-            % [줌 동기화 핵심] 확대/이동 발생 시 중앙 시간 획득 후 대시보드 동기화
+            % [zoom-sync core] on zoom/move, get the center time then sync the dashboard
             if app.IsUpdating(fIdx), return; end
             try
                 if isempty(ax) || ~isvalid(ax), return; end
@@ -4436,7 +4436,7 @@
             times = app.Models(fIdx).rawData.(timeCol);
             idx = app.findClosestIndexByTime(times, centerTime);
 
-            % Y축 자동 스케일: 확대 시 마커가 Y축 밖으로 벗어나 사라지는 것을 완벽 방지
+            % Y-axis auto scale: fully prevents the marker disappearing off the Y axis when zoomed in
             ax.YLimMode = 'auto';
 
             if isequal(app.Models(fIdx).currentIndex, idx), return; end
@@ -4548,10 +4548,10 @@
             catch
             end
 
-            % [V3.10] H 패널 Tab 플롯 전용 커스텀 툴바 (Restore/ZoomIn/ZoomOut/Pan)
-            %         Map/Altitude/비디오/게이지 axes는 툴바 숨김 유지
-            %         휠 줌/드래그 팬 기본 상호작용도 함께 허용
-            %         스턱 방어는 handlePlotXLimChange의 zoom/pan off 로직이 담당
+            % [V3.10] custom toolbar for H panel Tab plots only (Restore/ZoomIn/ZoomOut/Pan)
+            %         Map/Altitude/video/gauge axes keep the toolbar hidden
+            %         also allow default wheel-zoom/drag-pan interactions
+            %         stuck defense is handled by handlePlotXLimChange's zoom/pan off logic
             ax.Interactions = [panInteraction, zoomInteraction];
             tb = axtoolbar(ax, {'restoreview', 'zoomin', 'zoomout', 'pan'});
             tb.Visible = 'on';
@@ -4585,7 +4585,7 @@
             currTime = tData(currIdx);
             currY = yData(currIdx);
 
-            % [개선안 3] 라인 두께(3.0) 및 반투명(0.5), 마커 크기(14) 대폭 확대
+            % [plan 3] greatly increase line width(3.0), translucency(0.5), and marker size(14)
             tl = xline(ax, currTime, 'r', 'LineWidth', 3.0, 'Alpha', 0.5, 'HitTest', 'on');
             mk = plot(ax, currTime, currY, 'p', 'MarkerFaceColor', [0.98 0.75 0.14], ...
                       'MarkerEdgeColor', [0.71 0.33 0.04], 'MarkerSize', 14, 'HitTest', 'on');
@@ -4668,8 +4668,8 @@
                 if isempty(plots(p).YLimMode)
                     plots(p).YLimMode = 'auto';
                 end
-                % [Review Medium #4] Order 는 항상 array index 로 재기록 — duplicate/
-                % delete 후 stale Order 가 sort/persist 시 충돌 일으키지 않도록.
+                % [Review Medium #4] Order is always rewritten as the array index - so stale Order after
+                % duplicate/delete does not conflict on sort/persist.
                 plots(p).Order = p;
             end
         end
@@ -5345,7 +5345,7 @@
                 return;
             end
 
-            % v-fix8: EditDialog 가 열려 있으면 그 위에 progress 표시 + 버튼 disable
+            % v-fix8: if the EditDialog is open, show progress on top of it + disable buttons
             progressParent = app.UIFigure;
             if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                 progressParent = app.EditDialog;
@@ -6227,7 +6227,7 @@
             end
 
             tED = app.getLightTheme();   % v-r2: window+outer light theme
-            % [step1] 신규 EditDialog build 전구간 보호 — 빌드 중 예외 시 partial figure 정리 후 rethrow
+            % [step1] protect the entire new-EditDialog build - on a build exception, clean the partial figure then rethrow
             try
             fig = uifigure('Name', '설정/프로젝트 편집기', ...
                            'Position', pos, 'Resize', 'on', ...
@@ -6339,8 +6339,8 @@
         end
 
         function setEditDialogStatus(app, state)
-            % [step2] EditDialog 상단 status 라벨 갱신(best-effort). 5상태:
-            %   준비/변경됨/적용됨/저장됨/오류. 라벨 미생성·무효 시 no-op. 메인 동작 무영향.
+            % [step2] update the EditDialog top status label (best-effort). 5 states:
+            %   ready/changed/applied/saved/error. no-op if the label is not created/invalid. no effect on main behavior.
             try
                 lbl = app.EditDialogStatusLbl;
                 if isempty(lbl) || ~isvalid(lbl) || ~isprop(lbl, 'Text'), return; end
@@ -6360,7 +6360,7 @@
 
         function refreshEditDialog(app)
             % Refresh status, paths, sync values, option drafts, plot tree if dialog open.
-            % [Review Medium #5] 모든 ED* 핸들 접근 전 ~isempty + isvalid 가드.
+            % [Review Medium #5] guard every ED* handle access with ~isempty + isvalid.
             try
                 if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
                 if ~isempty(app.EditDialogDirtyLbl) && isvalid(app.EditDialogDirtyLbl)
@@ -6379,7 +6379,7 @@
                         char(datetime(app.LastEditApplyTime, 'Format', 'HH:mm:ss')));
                 end
                 % Refresh per-tab content if the handles still exist.
-                % [Medium #5] 각 sub-refresh 호출도 독립 try/catch 로 cascading failure 차단.
+                % [Medium #5] each sub-refresh call also has its own try/catch to block cascading failure.
                 try
                     app.refreshProjectTab();
                 catch ME
@@ -6496,7 +6496,7 @@
         end
 
         function buildEditTabSync(app, parent)
-            % [F-03/F-04] Adds "현재 화면값 가져오기" buttons + offset preview label.
+            % [F-03/F-04] Adds "import current screen values" buttons + offset preview label.
             gl = uigridlayout(parent, [16 5]);
             gl.RowHeight = repmat({'fit'}, 1, 16);
             gl.ColumnWidth = {130, 100, 100, 100, 100};
@@ -6588,7 +6588,7 @@
             tabReq = uitab(tabs, 'Title', 'RequiredColumns');
             tabDsp = uitab(tabs, 'Title', 'DisplayColumns');
 
-            % v5-F: Data 가 table 이면 ColumnFormat 은 무시되고 경고 발생 — categorical 변수로 dropdown 제공
+            % v5-F: if Data is a table, ColumnFormat is ignored and warns - provide a dropdown via a categorical variable
             app.EDOptReqTable = uitable(tabReq, 'Data', table(), ...
                 'ColumnEditable', [false true], ...
                 'CellEditCallback', @(src, evt) app.onOptionDraftEdit('req', src, evt));
@@ -6601,7 +6601,7 @@
             app.EDOptDspTable.Position = [10 10 900 280];
 
             btnRow = uigridlayout(gl, [1 3]);
-            btnRow.Layout.Row = 4; btnRow.Layout.Column = [1 4];   % [D-05] 한 칸 위로 이동(reset 행 추가)
+            btnRow.Layout.Row = 4; btnRow.Layout.Column = [1 4];   % [D-05] move up one cell (add a reset row)
             btnRow.ColumnWidth = {'1x', 140, 160};
             uilabel(btnRow, 'Text', '');
             uibutton(btnRow, 'Text', '적용 (즉시 반영)', ...
@@ -6643,12 +6643,12 @@
 
             % Row 2: tree (left) + property panel (right)
             mid = uigridlayout(outer, [1 2]);
-            mid.BackgroundColor = tPm.surfaceBg;   % v3-C: 트리 주변 light
+            mid.BackgroundColor = tPm.surfaceBg;   % v3-C: light around the tree
             mid.RowHeight   = {'1x'};
             mid.ColumnWidth = {'1x', 320};
             mid.ColumnSpacing = 6;
 
-            % v3-C: uitree 를 light panel 로 감싸 black 배경 제거
+            % v3-C: wrap uitree in a light panel to remove the black background
             treeWrap = uipanel(mid, 'BorderType', 'line', 'BackgroundColor', tPm.treeBg, ...
                 'BorderColor', tPm.borderColor);
             treeWrapGrid = uigridlayout(treeWrap, [1 1], 'Padding', [2 2 2 2], 'BackgroundColor', tPm.treeBg);
@@ -6906,7 +6906,7 @@
                     end
                 end
                 if isvalid(app.EDOptReqTable)
-                    % v5-F: table Data + ColumnFormat 조합은 무시/경고 — categorical 로 dropdown 제공
+                    % v5-F: a table Data + ColumnFormat combo is ignored/warns - provide a dropdown via categorical
                     choices = [{''}, csvHeaders(:)'];
                     colVals = vals;
                     if numel(choices) >= 2
@@ -7029,15 +7029,15 @@
                 catch
                 end
                 app.safeRefreshEditDialog('editDialogSaveProject:refresh');   % v-fixE
-                app.setEditDialogStatus('저장됨');   % [step2] save 정상 → 저장됨
+                app.setEditDialogStatus('저장됨');   % [step2] save ok -> saved
             else
-                app.setEditDialogStatus('오류');     % [step2] save 실패 → 오류
+                app.setEditDialogStatus('오류');     % [step2] save failed -> error
             end
         end
 
         function editDialogSaveProjectAs(app)
             [fn, pn] = uiputfile({'*.fdproj', 'Project file'}, '저장할 project 파일');
-            if isequal(fn, 0), return; end   % 사용자 취소 → status 무변
+            if isequal(fn, 0), return; end   % user cancel -> status unchanged
             ok = app.saveProjectFile(fullfile(pn, fn));
             if ok
                 try
@@ -7045,9 +7045,9 @@
                 catch
                 end
                 app.safeRefreshEditDialog('editDialogSaveProjectAs:refresh');   % v-fixE
-                app.setEditDialogStatus('저장됨');   % [#1] Save As 정상 → 저장됨
+                app.setEditDialogStatus('저장됨');   % [#1] Save As ok -> saved
             else
-                app.setEditDialogStatus('오류');     % [#1] Save As 실패 → 오류
+                app.setEditDialogStatus('오류');     % [#1] Save As failed -> error
             end
         end
 
@@ -7055,7 +7055,7 @@
             [fn, pn] = uigetfile({'*.fdproj', 'Project file'}, '열 project 파일');
             if isequal(fn, 0), return; end
             try
-                app.autoLoadProjectFromFile(fullfile(pn, fn));   % v-fixE: load 예외 격리
+                app.autoLoadProjectFromFile(fullfile(pn, fn));   % v-fixE: isolate the load exception
             catch ME
                 try
                     app.logCaught(ME, 'editDialogOpenProject:autoLoad');
@@ -7070,7 +7070,7 @@
                 app.editDialogOpenProject(); return;
             end
             try
-                app.autoLoadProjectFromFile(app.ProjectFilePath);   % v-fix: load 예외가 refresh 로 전파되지 않도록 격리
+                app.autoLoadProjectFromFile(app.ProjectFilePath);   % v-fix: isolate so a load exception does not propagate to refresh
             catch ME
                 try
                     app.logCaught(ME, 'editDialogAutoLoad:autoLoad');
@@ -7081,7 +7081,7 @@
         end
 
         function safeRefreshEditDialog(app, tag)
-            % v-fixE: refreshEditDialog 안전 래퍼 (app/EditDialog 유효성 + IsDeleting guard)
+            % v-fixE: safe wrapper for refreshEditDialog (app/EditDialog validity + IsDeleting guard)
             if nargin < 2 || isempty(tag), tag = 'safeRefreshEditDialog'; end
             try
                 if isempty(app) || ~isvalid(app) || app.IsDeleting, return; end
@@ -7895,7 +7895,7 @@
         end
 
         function setEditDialogControlsEnabled(app, tf)
-            % v-fix8: EditDialog 내 모든 button/dropdown/field enable 토글
+            % v-fix8: toggle enable of all buttons/dropdowns/fields in the EditDialog
             try
                 if isempty(app.EditDialog) || ~isvalid(app.EditDialog), return; end
                 types = {'uibutton', 'uidropdown', 'uieditfield', 'uispinner', 'uicheckbox'};
@@ -7939,7 +7939,7 @@
     end
 
     % =========================================================================
-    % 데이터 파서 및 시각화 업데이트
+    % data parser and visualization update
     % =========================================================================
     methods (Access = private)
         function parseFlightData(app, fIdx, filepath)
@@ -8155,7 +8155,7 @@
             app.Models(fIdx).mappedCols  = mappedCols;
             app.Models(fIdx).displayMeta = displayMeta;
             app.Models(fIdx).selectedRow = 1;
-            app.invalidateInfoTableSelection(fIdx);   % v-fix: row 의미 변경 → 선택 무효화
+            app.invalidateInfoTableSelection(fIdx);   % v-fix: row meaning changed -> invalidate selection
             app.Models(fIdx).isMockData  = isMock;
             % Stash the resolved draft as the editor baseline.
             app.OptionDrafts{fIdx} = struct('sourcePath', char(draft.sourcePath), ...
@@ -8302,9 +8302,9 @@
         end
 
         function calculateBounds(app, fIdx)
-            % v-fix3: flight 별 독립 bounds. rawData 가 있으면 해당 flight 데이터만 기준.
-            % CoastlineData 는 rawData 없는 fallback 시에만 bounds 에 포함.
-            % FixedAreaBounds 도 rawData 없을 때만 적용 (강제 공통 bounds fallback).
+            % v-fix3: per-flight independent bounds. If rawData exists, base on that flight's data only.
+            % CoastlineData is included in bounds only in the no-rawData fallback.
+            % FixedAreaBounds applies only when there is no rawData (forced common-bounds fallback).
             minLat = 90; maxLat = -90; minLon = 180; maxLon = -180;
             minAlt = 99999; maxAlt = -99999; hasData = false;
             hasOwnData = ~isempty(app.Models(fIdx).rawData);
@@ -8359,7 +8359,7 @@
                 if dt <= 0, dt = 1; end
                 if resetIndex
                     currIdx = 1;
-                    % v-fix5: 새 데이터 로드 시 stale 선택 상태 무효화
+                    % v-fix5: invalidate stale selection state when new data is loaded
                     app.invalidateInfoTableSelection(fIdx);
                 else
                     currIdx = app.clampedCurrentIndex(fIdx);
@@ -8388,7 +8388,7 @@
             if isempty(app.Models(fIdx).rawData), return; end
             bnds = app.Models(fIdx).bounds;
 
-            % --- Map 설정 ---
+            % --- Map setup ---
             axMap = app.UI(fIdx).mapAxes; cla(axMap);
             if bnds.isValid
                 axis(axMap, [bnds.minLon, bnds.maxLon, bnds.minLat, bnds.maxLat]);
@@ -8419,12 +8419,12 @@
             x_base = [0, -0.5, 0.5, 0] * scale; y_base = [1, -1, -1, 1] * scale;
             patch('Parent', app.UI(fIdx).hgMapPlane, 'XData', x_base, 'YData', y_base, 'FaceColor', 'r', 'EdgeColor', [0.5 0 0], 'LineWidth', 1);
 
-            % --- Altitude 설정 및 Y축 동적 스케일링 활성화 ---
+            % --- Altitude setup and Y-axis dynamic scaling enable ---
             axAlt = app.UI(fIdx).altAxes; cla(axAlt);
             times = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Time);
             alts = app.Models(fIdx).rawData.(app.Models(fIdx).mappedCols.Alt);
 
-            % 에러 방어: altXLimListener가 유효한지 체크
+            % error defense: check whether altXLimListener is valid
             if isfield(app.UI(fIdx), 'altXLimListener')
                 try
                     if ~isempty(app.UI(fIdx).altXLimListener) && isvalid(app.UI(fIdx).altXLimListener)
@@ -8435,16 +8435,16 @@
                 end
             end
 
-            % X축을 데이터 전체로 잡고, Y축은 auto 모드로 설정하여 GUI 리사이즈 시 동적으로 적응하도록 보장
+            % set the X axis to the full data and the Y axis to auto mode so it adapts dynamically on GUI resize
             axAlt.XLim = [min(times) max(times)];
             axAlt.YLimMode = 'auto';
             plot(axAlt, times, alts, 'Color', [0.8 0.8 0.8], 'LineWidth', 1, 'HitTest', 'off');
 
-            % [V3.10] Altitude axes는 툴바 숨김 (휠 줌/드래그 팬만 사용)
+            % [V3.10] Altitude axes hide the toolbar (use wheel-zoom/drag-pan only)
             app.UI(fIdx).altAxes.Toolbar.Visible = 'off';
             app.UI(fIdx).altAxes.Interactions = [panInteraction, zoomInteraction];
 
-            % [개선안 3] 타임라인 두께 증가 및 투명도 반영, 마커 크기 14로 고정
+            % [plan 3] increase timeline thickness and reflect transparency, fix marker size to 14
             app.UI(fIdx).hAltPath = plot(axAlt, times(1), alts(1), 'Color', [0.06 0.72 0.51], 'LineWidth', 2, 'HitTest', 'off');
             app.UI(fIdx).hAltMarker = plot(axAlt, times(1), alts(1), 'p', 'MarkerFaceColor', [0.98 0.75 0.14], 'MarkerEdgeColor', [0.71 0.33 0.04], 'MarkerSize', 14, 'HitTest', 'on');
             app.UI(fIdx).timeLine = xline(axAlt, times(1), 'r', 'LineWidth', 3.0, 'Alpha', 0.5, 'HitTest', 'on');
@@ -8452,10 +8452,10 @@
             app.UI(fIdx).hAltMarker.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(fIdx, 0, src, event);
             app.UI(fIdx).timeLine.ButtonDownFcn = @(src, event) app.startPlotMarkerDrag(fIdx, 0, src, event);
 
-            % Altitude 패널의 Zoom/Pan 시 동기화 리스너 추가
+            % add a sync listener for Altitude panel Zoom/Pan
             app.UI(fIdx).altXLimListener = addlistener(axAlt, 'XLim', 'PostSet', @(~,~) app.handlePlotXLimChange(fIdx, axAlt));
 
-            % --- 비행자세 게이지 설정 ---
+            % --- flight attitude gauge setup ---
             theta = linspace(0, 2*pi, 100);
             angles = 0:30:330;
             for gaugeType = 1:3
@@ -8497,8 +8497,8 @@
                     plot(hg, [-0.3 0.3], [0.1 0.1], 'Color', tg.gaugeNeedleFg, 'LineWidth', 3);
                     plot(hg, [-0.15 0.15], [-0.3 -0.3], 'Color', tg.gaugeNeedleFg, 'LineWidth', 2);
                 end
-                % v2-D3: 중복 inner value text 제거 — text 객체 자체를 생성하지 않음.
-                % 외부 label (pitchLabel/rollLabel/hdgLabel) 만 사용.
+                % v2-D3: removed the duplicate inner value text - the text object itself is not created.
+                % use only the external labels (pitchLabel/rollLabel/hdgLabel).
                 app.UI(fIdx).(valueField) = gobjects(0);
                 axis(ax, 'equal'); axis(ax, [-1.35 1.35 -1.35 1.35]); axis(ax, 'off');
             end
@@ -8558,26 +8558,26 @@
             set(app.UI(fIdx).hgRoll,  'Matrix', makehgtform('zrotate', -roll * pi / 180));
             set(app.UI(fIdx).hgHdg,   'Matrix', makehgtform('zrotate', -hdg * pi / 180));
 
-            % 비디오 및 H 영역 갱신
-            % [V3.12 2.2.3] 비디오 동기 설정 시 Frame No 기반 갱신 (정확한 매핑)
+            % video and H area update
+            % [V3.12 2.2.3] Frame-No-based update when video sync is set (precise mapping)
             if app.VideoSyncState(fIdx).IsSynced
                 try
                     targetFrame = app.timeToFrame(fIdx, currTime);
                     app.VideoSyncState(fIdx).CurrentFrame = targetFrame;
-                    % [V3.14] Frame 마커 + xline + 슬라이더 + 라벨 일괄 동기화
+                    % [V3.14] sync Frame marker + xline + slider + label at once
                     app.syncFrameMarkersAndLabel(fIdx, targetFrame);
-                    app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'sync');  % 정확한 동기화
+                    app.updateVideoFrameByFrameNo(fIdx, targetFrame, 'sync');  % precise sync
                 catch ME
                     app.logCaught(ME, 'video-sync-dashboard');
                     try
-                        app.updateVideoFrame(fIdx, currTime);  % 폴백
+                        app.updateVideoFrame(fIdx, currTime);  % fallback
                     catch ME_fallback
                         app.logCaught(ME_fallback, 'video-sync-dashboard-fallback');
                     end
                 end
             else
-                % 동기 미설정: 기존 방식대로 시간 기반 갱신
-                % app.updateVideoFrame(fIdx, currTime);  % <--- 이 줄을 주석 처리하여 완전 분리
+                % sync not set: time-based update as before
+                % app.updateVideoFrame(fIdx, currTime);  % <--- commented out this line for full separation
             end
             try
                 app.updatePlotTimeLines(fIdx, index, currTime);
@@ -8587,17 +8587,17 @@
             app.refreshFlightPlayControlPanel(fIdx);
             app.refreshBoardOffSummaryPanel(fIdx);
 
-            % [R3] project 복원/동기 refresh 등으로 altitude marker/xline 의 상호작용
-            % 콜백이 유실될 수 있어 best-effort 로 재부착 (GUI 드래그 안정성 + case118).
+            % [R3] project restore/sync refresh etc. may lose the altitude marker/xline interaction
+            % callback, so best-effort re-attach (GUI drag stability + case118).
             app.ensureAltitudeMarkerCallbacks(fIdx);
 
             drawnow limitrate;
         end
 
         function ensureAltitudeMarkerCallbacks(app, fIdx)
-            % [R3] hAltMarker / timeLine 의 HitTest/PickableParts/ButtonDownFcn 복구.
-            % project 복원·동기 갱신 후 콜백이 비거나 HitTest='off' 가 되어 마커
-            % 드래그가 죽는 회귀(case118 'altitude marker/xline callback missing') 방지.
+            % [R3] restore hAltMarker / timeLine HitTest/PickableParts/ButtonDownFcn.
+            % after project restore/sync refresh, the callback can be empty or HitTest='off', killing
+            % marker drag - prevents that regression (case118 'altitude marker/xline callback missing').
             try
                 if isempty(app.UI) || fIdx < 1 || fIdx > numel(app.UI), return; end
                 dragCb = @(src, event) app.startPlotMarkerDrag(fIdx, 0, src, event);
@@ -8627,8 +8627,8 @@
         end
 
         function idx = clampedCurrentIndex(app, fIdx)
-            % currentIndex 를 [1, rawData 행수] 로 clamp (rawData 비면 1).
-            % 읽기 전용·무부작용 — 반복되던 동일 표현의 1:1 추출(동작 불변).
+            % clamp currentIndex to [1, rawData row count] (1 if rawData empty).
+            % read-only, side-effect-free - 1:1 extraction of the repeated identical expression (behavior unchanged).
             idx = max(1, min(app.Models(fIdx).currentIndex, height(app.Models(fIdx).rawData)));
         end
 
@@ -8727,7 +8727,7 @@
                     return;
                 end
                 fIdx = round(double(fIdx));
-                % v-fixC: UI/Models/FlightPlayActive 배열 길이 모두 검증
+                % v-fixC: validate UI/Models/FlightPlayActive array lengths all
                 ok = fIdx >= 1 && fIdx <= 2 ...
                     && ~isempty(app.UI) && fIdx <= numel(app.UI) ...
                     && ~isempty(app.Models) && fIdx <= numel(app.Models) ...
@@ -8787,7 +8787,7 @@
             try
                 [okIdx, fIdx] = app.validateFlightPlayIndex(fIdx);
                 if ~okIdx, return; end
-                % v-fixA: collapse 전 재생 중지 (hidden playback / currentIndex drift 방지)
+                % v-fixA: stop playback before collapse (prevents hidden playback / currentIndex drift)
                 try
                     app.stopFlightPlay(fIdx);
                 catch ME_stop
@@ -8895,9 +8895,9 @@
                 if app.IsDeleting || isempty(app.Models(fIdx).rawData), return; end
                 app.stopFlightPlay(fIdx);
                 app.FlightPlayActive(fIdx) = true;
-                % [#8] Period 는 start 시점의 FlightPlayFps 로 1회 계산된다. 재생 중
-                %      FlightPlayFps 를 바꿔도 즉시 반영되지 않으며, stop→start(재시작)
-                %      시에만 새 FPS 가 적용된다. (현재 런타임 FPS setter 없음 — 기본 20.)
+                % [#8] Period is computed once from FlightPlayFps at start time. Changing
+                %      FlightPlayFps during playback does not apply immediately; only a stop->start(restart)
+                %      applies the new FPS. (no runtime FPS setter currently - default 20.)
                 app.FlightPlayTimer{fIdx} = timer('ExecutionMode', 'fixedSpacing', ...
                     'Period', max(0.01, 1 / max(1, app.FlightPlayFps)), ...
                     'BusyMode', 'drop', ...
@@ -8908,7 +8908,7 @@
                 start(app.FlightPlayTimer{fIdx});
                 app.refreshFlightPlayControlPanel(fIdx);
             catch ME
-                % v-fixB: start 실패 시 부분 생성된 timer 정리
+                % v-fixB: clean up the partially created timer on start failure
                 try
                     if exist('okIdx', 'var') && okIdx
                         app.FlightPlayActive(fIdx) = false;
@@ -8973,7 +8973,7 @@
     end
 
     % =========================================================================
-    % UI 레이아웃 생성 팩토리 (Create Layout)
+    % UI layout creation factory (Create Layout)
     % =========================================================================
     methods (Access = public)
         function pos = getInitialWindowPosition(app)
@@ -9108,7 +9108,7 @@
                     end
                 end
                 app.updateWindowControlLabels();
-                app.applyResponsiveControlBar();   % v-fix7: 좁은 폭 시 control bar 2줄 전환
+                app.applyResponsiveControlBar();   % v-fix7: switch the control bar to 2 rows at narrow width
                 % [High #3] When any board is off, commit the layout pass eagerly so the
                 % source widths re-settle before next user interaction (avoid blank gaps).
                 if anyBoardOff
@@ -9122,7 +9122,7 @@
         end
 
         function applyResponsiveControlBar(app)
-            % v-fix7: figure 폭 < 1100 이면 control bar 2줄 (라벨/값 1행 + 토글 2행)
+            % v-fix7: if figure width < 1100, control bar 2 rows (label/value row 1 + toggle row 2)
             try
                 figW = app.getFigurePixelWidth();
                 narrow = figW < 1100;
@@ -9437,7 +9437,7 @@
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 dlg = app.UI(fIdx).vidViewerDialog;
                 if isempty(dlg) || ~isvalid(dlg), return; end
-                % v5-A2: board-off 중 외부 Video Player 표시 금지 — 모든 호출 경로 최종 방어
+                % v5-A2: forbid external Video Player display during board-off - final defense on all call paths
                 if tf && ~isempty(find(app.BoardOffState, 1))
                     try
                         app.hideVideoControlDialog(fIdx);
@@ -9445,7 +9445,7 @@
                         app.logCaught(ME_control, 'videoViewerVisible:boardOffControl');
                     end
                     dlg.Visible = 'off';
-                    app.UI(fIdx).PanelVisible.video = true;   % board-on 복귀용 상태만 유지
+                    app.UI(fIdx).PanelVisible.video = true;   % keep only the state for board-on restore
                     if isfield(app.UI(fIdx), 'btnVid') && ~isempty(app.UI(fIdx).btnVid) && isvalid(app.UI(fIdx).btnVid)
                         app.UI(fIdx).btnVid.Text = '비디오 창 예약';
                     end
@@ -9490,7 +9490,7 @@
         end
 
         function hideVideoViewersForBoardOff(app)
-            % v5-A: board-off 중 Video Player 비표시 — dialog 만 숨김 (PanelVisible/버튼 유지)
+            % v5-A: hide Video Player during board-off - hide only the dialog (keep PanelVisible/button)
             for vIdx = 1:numel(app.UI)
                 try
                     dlg = app.UI(vIdx).vidViewerDialog;
@@ -9503,7 +9503,7 @@
         end
 
         function restoreVideoViewersAfterBoardOn(app)
-            % v5-A: board-on 복원 — PanelVisible.video 유지 보드만 재표시
+            % v5-A: board-on restore - re-show only boards whose PanelVisible.video is kept
             for vIdx = 1:numel(app.UI)
                 try
                     if isfield(app.UI(vIdx), 'PanelVisible') && logical(app.UI(vIdx).PanelVisible.video)
@@ -9515,7 +9515,7 @@
         end
 
         function onVideoResolutionChanged(app, fIdx)
-            % v4-R2: resolution 변경 시 dialog 자동 표시 제거. frame/display 만 갱신.
+            % v4-R2: removed dialog auto-show on resolution change. update frame/display only.
             try
                 app.setVideoImageFrame(fIdx, app.CurrentVideoFrame{fIdx});
                 app.setVideoDisplaySize(fIdx);
@@ -9535,11 +9535,11 @@
                 pad = 0;
                 if isfield(app.UI(fIdx), 'vidContainer') && ~isempty(app.UI(fIdx).vidContainer) && ...
                         isvalid(app.UI(fIdx).vidContainer)
-                    app.UI(fIdx).vidContainer.BackgroundColor = app.getLightTheme().videoPanelBg;   % v3-D: 외부 컨테이너 light
+                    app.UI(fIdx).vidContainer.BackgroundColor = app.getLightTheme().videoPanelBg;   % v3-D: external container light
                 end
                 app.UI(fIdx).vidAxes.Units = 'pixels';
                 app.UI(fIdx).vidAxes.Position = [pad, pad, sizePx(1), sizePx(2)];
-                app.UI(fIdx).vidAxes.Color = app.getLightTheme().videoAxesBg;   % v3-sample: 검은색 제거
+                app.UI(fIdx).vidAxes.Color = app.getLightTheme().videoAxesBg;   % v3-sample: remove black
                 app.UI(fIdx).vidAxes.XColor = 'none';
                 app.UI(fIdx).vidAxes.YColor = 'none';
                 try
@@ -9658,13 +9658,13 @@
             ctrl = struct();
             ctrlFont = 14;
             ctrlSmallFont = 13;
-            % [step1] 신규 video control dialog build 전구간 보호 — 실패 시 partial figure 정리 후 rethrow
+            % [step1] protect the entire new video-control-dialog build - on failure clean the partial figure then rethrow
             try
             dlg = uifigure('Name', sprintf('AVI 제어 - Flight Data %d', fIdx), ...
                 'Visible', 'off', 'Position', [120, 120, 760, 380], ...
                 'Color', [0.94 0.94 0.96], ...
                 'CloseRequestFcn', @(~,~) app.hideVideoControlDialog(fIdx));
-            % v-fix5: resize 안정화 — AutoResizeChildren off 선행(필수) 후 SizeChangedFcn 지정
+            % v-fix5: resize stabilization - set AutoResizeChildren off first (required) before SizeChangedFcn
             try
                 if isprop(dlg, 'AutoResizeChildren')
                     dlg.AutoResizeChildren = 'off';
@@ -9678,7 +9678,7 @@
                 app.logCaught(ME_silent, 'videoControlDialog:size-changed-fcn');
             end
             root = uigridlayout(dlg, [3 1]);
-            root.RowHeight = {64, '1x', 56};   % v-fix5: Navigator 행 flex + 최소 높이 확보
+            root.RowHeight = {64, '1x', 56};   % v-fix5: Navigator row flex + secure min height
             root.Padding = [6 6 6 6];
             root.RowSpacing = 5;
 
@@ -9704,7 +9704,7 @@
                 'BackgroundColor', [0.94 0.96 0.98], ...
                 'BorderType', 'line', 'ForegroundColor', tT.textPrimary);
             vdubGrid = uigridlayout(vdubGroupPnl, [3 1]);
-            vdubGrid.RowHeight = {32, 50, 40};   % v2-F2: label/slider/button row 높이 증가 (clipping 방지)
+            vdubGrid.RowHeight = {32, 50, 40};   % v2-F2: increase label/slider/button row height (prevents clipping)
             vdubGrid.Padding = [8 3 8 2];
             vdubGrid.RowSpacing = 2;
             ctrl.vidVdubLabel = uilabel(vdubGrid, ...
@@ -9777,7 +9777,7 @@
             ctrl.vidCacheBudget = uidropdown(glHz, ...
                 'Items', {'30 MB', '50 MB', '100 MB'}, ...
                 'ItemsData', [30, 50, 100], ...
-                'Value', 100, 'FontSize', ctrlSmallFont, ...   % v-fix6: 기본 100MB
+                'Value', 100, 'FontSize', ctrlSmallFont, ...   % v-fix6: default 100MB
                 'ValueChangedFcn', @(src,~) app.setCacheBudget(src.Value));
 
             ctrl.vidControlDialog = dlg;
@@ -9792,7 +9792,7 @@
                     end
                 catch
                 end
-                % [#3] 설명·구현 정합 — 빌드 실패 시 슬롯도 명시 무효화(존재·범위 가드)
+                % [#3] description-implementation alignment - on build failure, explicitly invalidate the slot too (existence/range guard)
                 try
                     if fIdx >= 1 && fIdx <= numel(app.UI) && isfield(app.UI(fIdx), 'vidControlDialog')
                         app.UI(fIdx).vidControlDialog = [];
@@ -9809,8 +9809,8 @@
                 if fIdx < 1 || fIdx > 2 || isempty(app.UI) || fIdx > numel(app.UI)
                     return;
                 end
-                % [bug#4] 빠른 연속 토글 시 말미 drawnow 의 큐 drain 으로 재진입할 수 있어
-                % 인스턴스 플래그로 차단. onCleanup 으로 예외/조기반환 포함 해제 보장.
+                % [bug#4] on fast consecutive toggles, the trailing drawnow's queue drain can re-enter, so
+                % block via an instance flag. onCleanup guarantees release including exception/early-return.
                 if app.InBoardToggle, return; end
                 app.InBoardToggle = true;
                 cleanupBoardToggle = onCleanup(@() app.restoreInBoardToggle()); %#ok<NASGU>
@@ -9838,7 +9838,7 @@
                     app.captureBoardPanelState(fIdx);
                     app.captureBoardPanelState(sourceIdx);
                     app.BoardOffState(fIdx) = true;
-                    app.hideVideoViewersForBoardOff();   % v5-A: 정책 — off 중 Video Player 비표시
+                    app.hideVideoViewersForBoardOff();   % v5-A: policy - do not show Video Player during board-off
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
@@ -9857,7 +9857,7 @@
                 % 0-width columns visible as blank space.
                 app.reflowBoardColumns(fIdx);
                 app.reflowBoardColumns(sourceIdx);
-                % [L1 C-1] BodyGrid RowHeight 동적 변경: off 시 source/summary 별도 행 사용.
+                % [L1 C-1] dynamic BodyGrid RowHeight change: use separate source/summary rows when off.
                 app.applyBodyGridRowHeights();
                 app.updateBoardToggleButtons();
                 drawnow;
@@ -9867,7 +9867,7 @@
         end
 
         function applyBodyGridRowHeights(app)
-            % [L1 C-1/L4] row splitter/off-summary 포함 4-row bodyGrid.
+            % [L1 C-1/L4] 4-row bodyGrid including row splitter/off-summary.
             try
                 if isempty(app.BodyGrid) || ~isvalid(app.BodyGrid), return; end
                 activeOff = find(app.BoardOffState, 1);
@@ -9879,7 +9879,7 @@
                         app.LAYOUT_SPLITTER_THICKNESS, sprintf('%dx', round(botW * 100)), 0};
                     return;
                 end
-                % v-fix1: board-off 시에도 splitter 표시 — BoardOffSourceRatio drag 조절 가능
+                % v-fix1: show the splitter even during board-off - BoardOffSourceRatio drag-adjustable
                 app.setUiVisible(app.BodyRowSplitter, true);
                 srcW = max(0.5, min(1.0, double(app.BoardOffSourceRatio)));
                 summaryW = max(0, 1 - srcW);
@@ -9926,7 +9926,7 @@
                 end
                 app.IsDraggingRowSplitter = true;
                 app.RowSplitterStartPoint = app.UIFigure.CurrentPoint;
-                % v-fix1: board-off 시 BoardOffSourceRatio 를 drag 대상으로 사용
+                % v-fix1: use BoardOffSourceRatio as the drag target during board-off
                 if any(app.BoardOffState)
                     app.RowSplitterStartRatio = app.BoardOffSourceRatio;
                 else
@@ -9948,7 +9948,7 @@
                 figH = max(1, app.UIFigure.Position(4));
                 dy = double(pt(2) - app.RowSplitterStartPoint(2));
                 if any(app.BoardOffState)
-                    % v-fix1: off 상태 — source 비율 drag 조절 (위 보드 off 면 방향 반전)
+                    % v-fix1: off state - drag-adjust source ratio (direction reversed if the upper board is off)
                     activeOff = find(app.BoardOffState, 1);
                     delta = dy / figH;
                     if activeOff == 1, delta = -delta; end
@@ -10067,7 +10067,7 @@
                     newRight = max(minW, total - newLeft);
                 end
                 live = dg.ColumnWidth;
-                % v4 P2: plot/dataView 컬럼은 fixed pixel 로 변경하지 않음 — 항상 '1x'
+                % v4 P2: do not change plot/dataView columns to fixed pixels - always '1x'
                 if leftCol == 7
                     live{leftCol} = '1x';
                 else
@@ -10132,7 +10132,7 @@
                     newLeft = max(minW, min(total - minW, newLeft));
                     newRight = max(minW, total - newLeft);
                 end
-                % v4 P2: plot/dataView 컬럼은 fixed pixel 로 변경하지 않음 — 항상 '1x'
+                % v4 P2: do not change plot/dataView columns to fixed pixels - always '1x'
                 if leftCol == 7
                     cw{leftCol} = '1x';
                 else
@@ -10161,7 +10161,7 @@
                     return;
                 end
                 widths = app.UI(fIdx).dataGrid.ColumnWidth;
-                % v-fix2: side-analysis(hsplit) 모드에선 col5=mapAlt — drag 결과를 mapAltWidth 로 저장
+                % v-fix2: in side-analysis(hsplit) mode col5=mapAlt - save the drag result as mapAltWidth
                 isHsplitMode = isfield(app.UI(fIdx), 'arrangementMode') ...
                     && strcmp(app.UI(fIdx).arrangementMode, 'hsplit');
                 if isHsplitMode
@@ -10175,7 +10175,7 @@
                     catch
                     end
                 else
-                    % v-final P3: normal 모드만 normalize (hsplit 컬럼 매핑 다름)
+                    % v-final P3: normalize only in normal mode (hsplit column mapping differs)
                     if isfield(app.UI(fIdx), 'PanelVisible')
                         widths = app.normalizeColumnWidthsForVisiblePanels(app.UI(fIdx).PanelVisible, widths);
                         app.UI(fIdx).dataGrid.ColumnWidth = widths;
@@ -10194,8 +10194,8 @@
         end
 
         function rememberUserColumnWidths(app, fIdx, widths)
-            % v4-R3: adjustable fixed-width fields(att/mapAlt/info) 만 추출 저장.
-            % plot/splitter/hidden/legacy video 컬럼은 절대 저장하지 않음.
+            % v4-R3: extract-save only adjustable fixed-width fields(att/mapAlt/info).
+            % never save plot/splitter/hidden/legacy video columns.
             try
                 if fIdx < 1 || fIdx > 2, return; end
                 widths = app.normalizeDataGridColumnWidth(widths);
@@ -10232,12 +10232,12 @@
         end
 
         function widths = getRememberedColumnWidths(app, fIdx)
-            % v4-R3: struct → 8-cell 재구성. plot=`1x`, splitter=0 자동.
+            % v4-R3: struct -> 8-cell reconstruction. plot=`1x`, splitter=0 auto.
             widths = {};
             try
                 if fIdx < 1 || fIdx > numel(app.UserColumnWidths), return; end
                 s = app.UserColumnWidths{fIdx};
-                % legacy upgrade: 이전 cell 캐시 → 1회 struct 변환
+                % legacy upgrade: previous cell cache -> one-time struct conversion
                 if iscell(s) && ~isempty(s)
                     legacy = app.normalizeDataGridColumnWidth(s);
                     migrated = app.getEmptyUserColumnWidthsStruct();
@@ -10351,7 +10351,7 @@
         end
 
         function ensureBoardCorePanelsVisible(app, fIdx)
-            % [Bug fix B2] Force 데이터 뷰 / 현재 비행 정보 to be visible. These have
+            % [Bug fix B2] Force data view / current flight info to be visible. These have
             % no togglePanel button but can be zero-width inside the off-mode source board.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
@@ -10417,12 +10417,12 @@
                 if isfield(st, 'attitude') && isfield(app.UI(fIdx), 'panelAttitude')
                     app.setUiVisible(app.UI(fIdx).panelAttitude, st.attitude);
                 end
-                % [L1 B-1] panelMapAlt 가시성은 mapOnly || altOnly 합집합.
-                % legacy 'map' 키도 backward-compat 으로 인식.
+                % [L1 B-1] panelMapAlt visibility is the union mapOnly || altOnly.
+                % recognize the legacy 'map' key for backward-compat too.
                 hasMapOnly = isfield(st, 'mapOnly') && st.mapOnly;
                 hasAltOnly = isfield(st, 'altOnly') && st.altOnly;
                 if ~isfield(st, 'mapOnly') && isfield(st, 'map')
-                    % 옛 project 로드 시 legacy 'map' 키 → 둘 다 켬으로 마이그레이션
+                    % when loading an old project, migrate the legacy 'map' key -> turn both on
                     hasMapOnly = st.map; hasAltOnly = st.map;
                 end
                 if isfield(app.UI(fIdx), 'panelMapAlt')
@@ -10434,7 +10434,7 @@
                 if isfield(app.UI(fIdx), 'panelAlt') && ~isempty(app.UI(fIdx).panelAlt) && isvalid(app.UI(fIdx).panelAlt)
                     app.UI(fIdx).panelAlt.Visible = hasAltOnly;
                 end
-                % v4-R2: video dialog 자동 동기화 제거. dialog visibility 는 사용자 토글로만 변경.
+                % v4-R2: removed video dialog auto-sync. dialog visibility changes only via user toggle.
             catch ME
                 app.logCaught(ME, 'boardSyncPanelHandles');
             end
@@ -10447,16 +10447,16 @@
                         ~isvalid(app.UI(fIdx).dataGrid)
                     return;
                 end
-                % v4-L1: board-off 활성 source 보드 → 항상 hsplit (upper info+plot / lower remaining)
+                % v4-L1: board-off active source board -> always hsplit (upper info+plot / lower remaining)
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
                     app.applyBoardHsplit(fIdx);
                     return;
                 end
-                % 이전이 hsplit 이었다면 normal 로 복귀
+                % if it was hsplit before, return to normal
                 if isfield(app.UI(fIdx), 'arrangementMode') && strcmp(app.UI(fIdx).arrangementMode, 'hsplit')
                     if strcmp(app.CurrentLayoutPreset, 'layout-hsplit')
-                        % 사용자가 hsplit preset 선택 상태 — 양 보드 visible 일 때도 hsplit 유지
+                        % user has the hsplit preset selected - keep hsplit even when both boards are visible
                         app.applyBoardHsplit(fIdx);
                         return;
                     end
@@ -10482,7 +10482,7 @@
                     elseif isfield(st, 'attitude') && st.attitude && app.isTestWidthZero(widths{1})
                         widths{1} = panelWidths(1);
                     end
-                    % [L1 B-1] mapOnly + altOnly 둘 다 false 일 때만 컬럼 hide
+                    % [L1 B-1] hide the column only when both mapOnly + altOnly are false
                     mapColOn = (isfield(st, 'mapOnly') && st.mapOnly) || ...
                                (isfield(st, 'altOnly') && st.altOnly) || ...
                                (~isfield(st, 'mapOnly') && isfield(st, 'map') && st.map);
@@ -10505,7 +10505,7 @@
                     if ~dataViewOn
                         widths{7} = 0;
                     else
-                        % v4 P2: plot/dataView visible 시 항상 '1x' (fixed pixel drift 방지)
+                        % v4 P2: always '1x' when plot/dataView visible (prevents fixed-pixel drift)
                         widths{7} = '1x';
                     end
                     widths{2} = 0; widths{4} = 0; widths{6} = 0;
@@ -10524,8 +10524,8 @@
                         end
                     end
                 end
-                % v4-R1: board-off source override 제거. source 는 자신의 PanelVisible 그대로 표시.
-                % v4-R4: 단일 normalize helper 로 마지막 일관성 보장 (idempotent).
+                % v4-R1: removed board-off source override. the source shows its own PanelVisible as-is.
+                % v4-R4: a single normalize helper guarantees final consistency (idempotent).
                 widths = app.normalizeColumnWidthsForVisiblePanels(st, widths);
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
                 app.UI(fIdx).dataGrid.Scrollable = 'on';
@@ -10699,12 +10699,12 @@
 
         function applyLayoutPreset(app, presetName)
             % v4: arrangement-only. PanelVisible / BoardOffState / BodyGrid.RowHeight /
-            % BodyRowSplitRatio / Video Player 는 변경하지 않음. board 내부 컬럼 배치만 조정.
+            % do not change BodyRowSplitRatio / Video Player. adjust only the in-board column layout.
             try
                 presetName = char(presetName);
                 validNames = app.getLayoutPresetNames();
                 if ~any(strcmp(presetName, validNames))
-                    % Legacy preset name (single-top/data-focus/video-focus 등) → reset 으로 안전 매핑
+                    % Legacy preset names (single-top/data-focus/video-focus etc.) -> safe-map to reset
                     presetName = 'layout-reset';
                 end
                 app.CurrentLayoutPreset = presetName;
@@ -10712,7 +10712,7 @@
                 if strcmp(presetName, 'layout-reset')
                     for k = 1:2
                         app.resetUserColumnWidths(k);
-                        % v4-L1: board-off 활성 보드면 hsplit 유지, 아니면 normal 로 복귀
+                        % v4-L1: keep hsplit if a board-off active board, else return to normal
                         if any(app.BoardOffState) && k == app.getBoardOffSourceIdx(find(app.BoardOffState, 1))
                             app.applyBoardHsplit(k);
                         else
@@ -10736,7 +10736,7 @@
         end
 
         function applyBoardInternalArrangement(app, fIdx, presetName)
-            % v4: 보드 내부 배치 조정. PanelVisible/BoardOff/BodyGrid.RowHeight 불변.
+            % v4: adjust in-board layout. PanelVisible/BoardOff/BodyGrid.RowHeight unchanged.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 if ~isfield(app.UI(fIdx), 'dataGrid') || isempty(app.UI(fIdx).dataGrid) || ~isvalid(app.UI(fIdx).dataGrid)
@@ -10744,17 +10744,17 @@
                 end
                 if ~isfield(app.UI(fIdx), 'PanelVisible'), return; end
 
-                % v4-L1: board-off 활성 source 보드는 항상 hsplit (single-board analysis)
+                % v4-L1: board-off active source board is always hsplit (single-board analysis)
                 activeOff = find(app.BoardOffState, 1);
                 if ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff)
                     app.applyBoardHsplit(fIdx);
                     return;
                 end
                 if strcmp(presetName, 'layout-hsplit')
-                    app.applyBoardHsplit(fIdx);  % v4-L1: 양 보드 visible 시에도 진짜 2-row
+                    app.applyBoardHsplit(fIdx);  % v4-L1: a real 2-row even when both boards are visible
                     return;
                 end
-                % 다른 preset 은 1-row normal arrangement
+                % other presets are 1-row normal arrangement
                 app.applyBoardNormal(fIdx);
 
                 st = app.UI(fIdx).PanelVisible;
@@ -10771,7 +10771,7 @@
                         widths{3} = max(140, round(pw(2) * 0.8));
                         widths{5} = max(140, round(pw(3) * 0.7));
                     case 'layout-reset'
-                        % default 유지
+                        % keep default
                 end
                 widths = app.normalizeColumnWidthsForVisiblePanels(st, widths);
                 app.UI(fIdx).dataGrid.ColumnWidth = widths;
@@ -10786,7 +10786,7 @@
         end
 
         function applyBoardNormal(app, fIdx)
-            % v4-L1: dataGrid 를 1-row 8-col 기본 모드로 복귀.
+            % v4-L1: return dataGrid to the 1-row 8-col default mode.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 dg = app.UI(fIdx).dataGrid;
@@ -10795,13 +10795,13 @@
                     return;  % idempotent
                 end
                 dg.RowHeight = {'1x'};
-                % 자식 패널 Layout.Row=1 + 원래 Column 복귀
+                % child panel Layout.Row=1 + restore original Column
                 placements = {{'panelAttitude', 1}, {'panelMapAlt', 3}, {'panelInfo', 5}, {'panelDataView', 7}};
                 for k = 1:numel(placements)
                     nm = placements{k}{1}; col = placements{k}{2};
                     app.setPanelLayoutCell(fIdx, nm, 1, col);
                 end
-                % v3-audit M: normal 복귀 시 attitude col span 해제
+                % v3-audit M: release the attitude col span on normal return
                 if isfield(app.UI(fIdx), 'panelAttitude') && ~isempty(app.UI(fIdx).panelAttitude) ...
                         && isvalid(app.UI(fIdx).panelAttitude)
                     try
@@ -10809,7 +10809,7 @@
                     catch
                     end
                 end
-                % splitters (col 2/4/6) — Layout 복귀 + 가시화 (hsplit 모드에서 hide 한 것 복원)
+                % splitters (col 2/4/6) - restore Layout + visibility (recover what was hidden in hsplit mode)
                 if isfield(app.UI(fIdx), 'colSplitters')
                     sp = app.UI(fIdx).colSplitters;
                     splitCols = [2, 4, 6];
@@ -10851,12 +10851,12 @@
         end
 
         function applyBoardHsplit(app, fIdx)
-            % v4-L1: dataGrid 를 3-row (upper / splitter / lower) 모드로 전환.
+            % v4-L1: switch dataGrid to 3-row (upper / splitter / lower) mode.
             %   Row 1: info(col 1) + plot(col 3)
             %   Row 2: splitter (LAYOUT_SPLITTER_THICKNESS)
             %   Row 3: attitude(col 1) + map/alt(col 3)
-            % Column 5/7 은 사용 안 함 (width 0).
-            % PanelVisible 불변 — hidden 패널은 width 0 으로 숨김.
+            % Columns 5/7 unused (width 0).
+            % PanelVisible unchanged - hidden panels hidden via width 0.
             try
                 if isempty(app.UI) || fIdx > numel(app.UI), return; end
                 dg = app.UI(fIdx).dataGrid;
@@ -10865,7 +10865,7 @@
                 st = app.UI(fIdx).PanelVisible;
                 thk = app.LAYOUT_SPLITTER_THICKNESS;
 
-                % v3-audit B: board-off active 시 single-board analysis 목적 — info+plot 강제 visible
+                % v3-audit B: board-off active means single-board analysis - force info+plot visible
                 activeOff = find(app.BoardOffState, 1);
                 isBoardOffSource = ~isempty(activeOff) && fIdx == app.getBoardOffSourceIdx(activeOff);
                 if isBoardOffSource
@@ -10903,7 +10903,7 @@
                 sideAnalysisMode = isBoardOffSource && ~attitudeOn && mapColOn && infoOn && dataViewOn;
 
                 if sideAnalysisMode
-                    % v-fix2: 사용자 조절 width 우선 (UserColumnWidths.mapAltWidth), 없으면 기본 계산
+                    % v-fix2: prefer user-adjusted width (UserColumnWidths.mapAltWidth), else default computation
                     mapW = max(220, round(figW * 0.24));
                     try
                         s = app.UserColumnWidths{fIdx};
@@ -10965,8 +10965,8 @@
                     return;
                 end
 
-                % 양 영역 모두 visible 인 케이스가 대부분 — 좌 fixed, 우 flex.
-                % 단독 영역만 visible 인 경우는 좌측을 flex 로 확장.
+                % most cases have both areas visible - left fixed, right flex.
+                % when only one area is visible, expand the left side via flex.
                 widths = {leftFixed, thk, '1x', 0, 0, 0, 0, 0};
                 upperLeftOn  = infoOn;
                 upperRightOn = dataViewOn;
@@ -10979,19 +10979,19 @@
                 elseif anyRight && ~anyLeft
                     widths = {0, 0, '1x', 0, 0, 0, 0, 0};
                 end
-                % plot/dataView 가 visible 이면 Col 3 은 항상 '1x' (이미 그렇게 설정).
+                % if plot/dataView is visible, Col 3 is always '1x' (already set that way).
                 dg.ColumnWidth = widths;
                 dg.Scrollable = 'on';
 
-                % v2-C3: 자식 패널 배치 — blank lower-left 제거
-                % Case C3-2/C3-3: attitudeOff + mapColOn → panelMapAlt 가 lower-left 채움
-                % Case C3-1: attitudeOff + mapColOn (both) → 일반 horizontal Map/Alt
-                % Case C3-5: attitudeOn + mapColOn → 기본 좌/우 분할
+                % v2-C3: child panel layout - remove blank lower-left
+                % Case C3-2/C3-3: attitudeOff + mapColOn -> panelMapAlt fills lower-left
+                % Case C3-1: attitudeOff + mapColOn (both) -> normal horizontal Map/Alt
+                % Case C3-5: attitudeOn + mapColOn -> default left/right split
                 % Case M: attitudeOn + !mapColOn → attitude col [1 3] span
                 app.setPanelLayoutCell(fIdx, 'panelInfo',     1, 1);
                 app.setPanelLayoutCell(fIdx, 'panelDataView', 1, 3);
                 if attitudeOn && ~mapColOn
-                    % attitude 단독 lower — col [1 3] span (1×3 가로 reflow 확보)
+                    % attitude alone lower - col [1 3] span (secures 1x3 horizontal reflow)
                     if isfield(app.UI(fIdx), 'panelAttitude') ...
                             && ~isempty(app.UI(fIdx).panelAttitude) && isvalid(app.UI(fIdx).panelAttitude)
                         try
@@ -11005,7 +11005,7 @@
                     end
                     app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
                 elseif ~attitudeOn && mapColOn
-                    % v2-C3-2/C3-3: attitude hidden — panelMapAlt 를 lower-left 로 옮겨 blank 제거
+                    % v2-C3-2/C3-3: attitude hidden - move panelMapAlt to lower-left to remove blank
                     if isfield(app.UI(fIdx), 'panelMapAlt') ...
                             && ~isempty(app.UI(fIdx).panelMapAlt) && isvalid(app.UI(fIdx).panelMapAlt)
                         try
@@ -11023,8 +11023,8 @@
                     app.setPanelLayoutCell(fIdx, 'panelMapAlt',   3, 3);
                 end
 
-                % v3-fix: hsplit 는 shared column 모델 — 패널 width 만으로 hidden 처리 부족.
-                % 각 패널 Visible 을 PanelVisible state 에 명시적으로 동기화.
+                % v3-fix: hsplit is a shared column model - panel width alone is insufficient for hidden handling.
+                % explicitly sync each panel's Visible to PanelVisible state.
                 try
                     app.setUiVisible(app.UI(fIdx).panelInfo, infoOn);
                 catch
@@ -11042,7 +11042,7 @@
                 catch
                 end
 
-                % splitters: 외부 column splitter 는 hsplit 모드에서 hide
+                % splitters: hide the external column splitter in hsplit mode
                 if isfield(app.UI(fIdx), 'colSplitters')
                     sp = app.UI(fIdx).colSplitters;
                     for s = 1:numel(sp)
@@ -11070,7 +11070,7 @@
         end
 
         function setPanelLayoutCell(app, fIdx, fieldName, rowIdx, colIdx)
-            % v4-L1: 자식 패널 Layout.Row/.Column 재할당. Visible 은 호출자/syncBoardPanelHandles 가 관리.
+            % v4-L1: reassign child panel Layout.Row/.Column. Visible is managed by the caller/syncBoardPanelHandles.
             try
                 if ~isfield(app.UI(fIdx), fieldName), return; end
                 h = app.UI(fIdx).(fieldName);
@@ -11089,7 +11089,7 @@
         end
 
         function setBoardOffDirect(app, offIdx)
-            % v4-R1/L1: summary 폐기. active source 보드에 hsplit (upper info+plot / lower remaining).
+            % v4-R1/L1: summary dropped. hsplit on the active source board (upper info+plot / lower remaining).
             try
                 app.BoardOffState = [false, false];
                 for k = 1:min(2, numel(app.UI))
@@ -11109,11 +11109,11 @@
                     app.setUiVisible(app.UI(offIdx).panel, false);
                     sourceIdx = app.getBoardOffSourceIdx(offIdx);
                     if sourceIdx >= 1 && sourceIdx <= numel(app.UI)
-                        app.applyBoardNormal(offIdx);   % off 보드는 정상 모드 (어차피 hidden)
-                        app.applyBoardHsplit(sourceIdx);  % v4-L1: 활성 source 보드 = upper/lower
+                        app.applyBoardNormal(offIdx);   % the off board stays in normal mode (hidden anyway)
+                        app.applyBoardHsplit(sourceIdx);  % v4-L1: active source board = upper/lower
                     end
                 else
-                    % board on 복귀: 양 보드 정상 모드
+                    % board-on return: both boards in normal mode
                     for k = 1:min(2, numel(app.UI))
                         app.applyBoardNormal(k);
                     end
@@ -11124,7 +11124,7 @@
         end
 
         function clampVideoControlDialogSize(~, dlg)
-            % v-fix5: AVI 제어 dialog 최소 크기 보정 (UI 잘림 방지)
+            % v-fix5: correct the AVI control dialog min size (prevents UI clipping)
             try
                 if isempty(dlg) || ~isvalid(dlg), return; end
                 minW = 620; minH = 320;
@@ -11191,7 +11191,7 @@
         end
 
         function names = getLayoutPresetNames(~)
-            % v4: arrangement-only presets (V/focus-style 제거)
+            % v4: arrangement-only presets (removed V/focus-style)
             names = {'layout-grid', 'layout-vsplit', 'layout-hsplit', 'layout-compact', 'layout-reset'};
         end
 
@@ -11655,7 +11655,7 @@
         end
 
         function t = getLightTheme(~)
-            % v3-style: sample.png 기반 light/calm 팔레트. saturated blue 는 accent 전용.
+            % v3-style: light/calm palette based on sample.png. saturated blue is accent-only.
             t = struct();
             t.windowBg       = [0.94 0.96 0.98];
             t.appShellBg     = [0.94 0.96 0.98];
@@ -11691,7 +11691,7 @@
             t.gaugeTickFg    = [0.03 0.05 0.07];
             t.gaugeNeedleFg  = [0.95 0.67 0.10];
             t.videoPlaceholderBg = [0.94 0.96 0.98];
-            t.videoAxesBg        = [0 0 0];   % v-sync: 비디오 axes 검은색 유지 (요구사항 #2)
+            t.videoAxesBg        = [0 0 0];   % v-sync: keep the video axes black (requirement #2)
             t.panelBg            = [1.00 1.00 1.00];
             t.panelAltBg         = [0.97 0.98 1.00];
             t.panelTitleBg       = [0.86 0.92 0.97];
@@ -11714,7 +11714,7 @@
             t.gaugePanelBg       = [1.00 1.00 1.00];
             t.gaugeAxesBg        = [1.00 1.00 1.00];
             t.gaugeTextFg        = [0.05 0.10 0.18];
-            t.videoPanelBg       = [0 0 0];   % v-sync: 비디오 컨테이너 검은색 유지
+            t.videoPanelBg       = [0 0 0];   % v-sync: keep the video container black
             t.dialogBg           = [0.95 0.97 0.99];
             t.dialogHeaderBg     = [0.86 0.92 0.97];
             t.dialogTabBg        = [0.88 0.92 0.96];
@@ -11730,33 +11730,33 @@
             t.fontSizeSmall  = 11;
             t.fontSizeBase   = 12;
             t.fontSizeLarge  = 14;
-            % v3-sample: 버튼 bg = panel bg (harmonized). 기능 구분은 fg color 로만.
-            t.btnActiveBg    = [0.86 0.92 0.97];   % 선택 강조는 옅은 blue tint
+            % v3-sample: button bg = panel bg (harmonized). distinguish function via fg color only.
+            t.btnActiveBg    = [0.86 0.92 0.97];   % selection highlight is a light blue tint
             t.btnActiveFg    = [0.00 0.18 0.32];
             t.btnAccentBg    = [1.00 1.00 1.00];
-            t.btnAccentFg    = [0.78 0.55 0.05];   % 강조 yellow text
-            t.btnNormalBg    = [1.00 1.00 1.00];   % panel(white) 과 동일
+            t.btnAccentFg    = [0.78 0.55 0.05];   % accent yellow text
+            t.btnNormalBg    = [1.00 1.00 1.00];   % same as panel(white)
             t.btnNormalFg    = [0.05 0.10 0.18];
             t.btnDisabledBg  = [0.94 0.95 0.96];
             t.btnDisabledFg  = [0.55 0.60 0.65];
             t.btnWarningBg   = [1.00 1.00 1.00];
             t.btnWarningFg   = [0.78 0.16 0.12];   % warning red text on white
-            % v3-sample: panel header → 연한 blue strip (sample 일관)
+            % v3-sample: panel header -> light blue strip (sample-consistent)
             t.panelBlueBg    = [0.95 0.97 0.99];
             t.panelBlueBg2   = [0.93 0.96 0.98];
             t.panelBlueFg    = [0.05 0.12 0.20];
-            % v3-sample: 모든 toolbar bg = panel(white). 기능 구분은 fg color 만.
+            % v3-sample: all toolbar bg = panel(white). distinguish function via fg color only.
             t.toolbarYellowBg = [1.00 1.00 1.00];
-            t.toolbarYellowFg = [0.78 0.55 0.05];   % 짙은 노랑 (파일/import)
+            t.toolbarYellowFg = [0.78 0.55 0.05];   % deep yellow (file/import)
             t.toolbarGreenBg  = [1.00 1.00 1.00];
-            t.toolbarGreenFg  = [0.00 0.50 0.20];   % 진초록 (동기/apply)
+            t.toolbarGreenFg  = [0.00 0.50 0.20];   % deep green (sync/apply)
             t.toolbarBlueBg   = [1.00 1.00 1.00];
-            t.toolbarBlueFg   = [0.00 0.32 0.62];   % 진파랑 (보드/액션)
+            t.toolbarBlueFg   = [0.00 0.32 0.62];   % deep blue (board/action)
             t.toolbarGrayBg   = [1.00 1.00 1.00];
-            t.toolbarGrayFg   = [0.18 0.24 0.30];   % 짙은 회색 (default)
+            t.toolbarGrayFg   = [0.18 0.24 0.30];   % dark gray (default)
             t.toolbarDarkBg   = [1.00 1.00 1.00];
-            t.toolbarDarkFg   = [0.30 0.16 0.50];   % 짙은 보라 (설정/편집)
-            % 추가 accent text 컬러 (panel 위 fg 전용)
+            t.toolbarDarkFg   = [0.30 0.16 0.50];   % deep purple (settings/edit)
+            % extra accent text color (fg over panel only)
             t.accentOrangeFg = [0.85 0.42 0.10];
             t.accentRedFg    = [0.78 0.16 0.12];
             t.accentPurpleFg = [0.45 0.18 0.62];
@@ -11822,7 +11822,7 @@
         end
 
         function applyLightTheme(app, root)
-            % v4-L2: 역할 기반 light theme. dispatcher.
+            % v4-L2: role-based light theme. dispatcher.
             try
                 if nargin < 2 || isempty(root) || ~isvalid(root)
                     root = app.UIFigure;
@@ -11849,7 +11849,7 @@
         end
 
         function applyThemeToPanels(app, root, t)
-            % v2-style: blue 의도는 보존 + near-black non-video 는 surfaceAltBg 로 normalize.
+            % v2-style: preserve blue intent + normalize near-black non-video to surfaceAltBg.
             try
                 panels = findall(root, 'Type', 'uipanel');
                 for k = 1:numel(panels)
@@ -11865,11 +11865,11 @@
                                 % sample style: pale blue panels still use dark text.
                                 if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textPrimary; end
                             elseif app.isNearBlackColor(bg)
-                                % near-black non-video → surfaceAltBg 로 light normalize
+                                % near-black non-video -> light-normalize to surfaceAltBg
                                 p.BackgroundColor = t.surfaceAltBg;
                                 if isprop(p, 'ForegroundColor'), p.ForegroundColor = t.textPrimary; end
                             else
-                                % light bg: 흰글씨 → dark 로 교정
+                                % light bg: correct white text -> dark
                                 if isprop(p, 'ForegroundColor')
                                     fg = p.ForegroundColor;
                                     if isnumeric(fg) && numel(fg)==3 && mean(double(fg))>=0.85 ...
@@ -11902,7 +11902,7 @@
         end
 
         function applyThemeToButtons(app, root, t)
-            % v-sync: role-colored 버튼은 Tag='FDD:RoleButton' 또는 role palette 일치 시 skip.
+            % v-sync: skip role-colored buttons when Tag='FDD:RoleButton' or role palette matches.
             try
                 btns = findall(root, 'Type', 'uibutton');
                 rolePalette = [t.toolbarYellowBg; t.toolbarGreenBg; t.toolbarBlueBg; ...
@@ -11911,7 +11911,7 @@
                     b = btns(k);
                     if isempty(b) || ~isvalid(b), continue; end
                     try
-                        % v-sync: Tag 기반 whitelist
+                        % v-sync: Tag-based whitelist
                         if isprop(b, 'Tag') && strcmp(string(b.Tag), "FDD:RoleButton")
                             continue;
                         end
@@ -11952,7 +11952,7 @@
         end
 
         function applyThemeToLabels(app, root, t)
-            % v4-L2: uilabel — light bg 위 white text 만 dark 로 normalize.
+            % v4-L2: uilabel - normalize only white text over a light bg to dark.
             try
                 labels = findall(root, 'Type', 'uilabel');
                 for k = 1:numel(labels)
@@ -11982,8 +11982,8 @@
         end
 
         function applyThemeToTables(app, root, t)
-            % v-final P11: role-based — dashboard 소유 uitable 은 white bg + dark text 강제.
-            % 채도 높은 (mean<0.85) bg 는 모두 white 로 교체. flight identity 는 accent strip 별도.
+            % v-final P11: role-based - force white bg + dark text on dashboard-owned uitable.
+            % replace all high-saturation (mean<0.85) bg with white. flight identity uses a separate accent strip.
             try
                 tbls = findall(root, 'Type', 'uitable');
                 for k = 1:numel(tbls)
@@ -12012,7 +12012,7 @@
         end
 
         function applyThemeToAxes(app, root, t)
-            % v2-style: non-video axes 항상 light 강제 + tick/grid/font 일관성.
+            % v2-style: always force non-video axes light + consistent tick/grid/font.
             try
                 axesAll = findall(root, 'Type', 'axes');
                 for k = 1:numel(axesAll)
@@ -12092,13 +12092,13 @@
         end
 
         function applyThemeToTabs(app, root, t)
-            % v4-L2: uitabgroup/uitab — 배경 light normalize.
+            % v4-L2: uitabgroup/uitab - light-normalize the background.
             try
                 tgs = findall(root, 'Type', 'uitabgroup');
                 for k = 1:numel(tgs)
                     tg = tgs(k);
                     if isempty(tg) || ~isvalid(tg), continue; end
-                    % uitabgroup 자체는 BackgroundColor 없음. tab 들만 처리.
+                    % uitabgroup itself has no BackgroundColor. process only the tabs.
                     try
                         tabs = tg.Children;
                         for s = 1:numel(tabs)
@@ -12211,8 +12211,8 @@
         end
 
         function createLayout(app)
-            % [V3.22 #7] 메인 레이아웃 골격 + 헤더는 buildHeaderBar로 위임
-            % 비행경로별 빌드는 기존 in-place 코드 유지 (위험도 관리)
+            % [V3.22 #7] main layout skeleton + header delegated to buildHeaderBar
+            % per-flight-path build keeps the existing in-place code (risk management)
             mainLayout = uigridlayout(app.UIFigure, [2 1]);
             mainLayout.RowHeight = {66, '1x'};
             mainLayout.Padding = [2 2 2 2];
@@ -12221,7 +12221,7 @@
             % --- Header bar ---
             app.buildHeaderBar(mainLayout);
 
-            % --- Body (2 비행경로 vertical stack) ---
+            % --- Body (2 flight-paths vertical stack) ---
             tT = app.getLightTheme();   % v-style
             scrollBody = uipanel(mainLayout, 'Scrollable', 'on', 'BorderType', 'none', 'BackgroundColor', tT.windowBg);
             bodyGrid = uigridlayout(scrollBody, [4 1]);
@@ -12269,16 +12269,16 @@
                         'boardOffSignature', {});
 
             for fIdx = 1:2
-                % [V3.22 #7] 비행경로 fIdx 빌드 - 섹션 가이드 (위→아래 빌드 순서):
-                %   (a) 메인 패널 + 컨트롤바
-                %   (b) Col 1: 비행 자세 (3 게이지)
-                %   (c) Col 2: 지도 + 고도 (수직 분할)
-                %   (d) Col 3: 데이터 테이블 (정보 패널)
-                %   (e) Col 4: 플롯 영역(H) - tabGroup
-                %   (f) Col 5: H↔I splitter (드래그 가능)
-                %   (g) Col 6: 비디오 + Frame Navigator
+                % [V3.22 #7] flight-path fIdx build - section guide (top->bottom build order):
+                %   (a) main panel + control bar
+                %   (b) Col 1: flight attitude (3 gauges)
+                %   (c) Col 2: map + altitude (vertical split)
+                %   (d) Col 3: data table (info panel)
+                %   (e) Col 4: plot area(H) - tabGroup
+                %   (f) Col 5: H<->I splitter (draggable)
+                %   (g) Col 6: video + Frame Navigator
 
-                % --- (a) 메인 패널 + 컨트롤바 ---
+                % --- (a) main panel + control bar ---
                 UI_temp(fIdx).panel = uipanel(bodyGrid, 'Title', titleStrs{fIdx}, 'FontWeight', 'bold', 'FontSize', 14, ...
                     'BackgroundColor', panelColors{fIdx}, 'ForegroundColor', tT.panelBlueFg);
                 UI_temp(fIdx).panel.Layout.Row = app.getBodyGridRowForFlight(fIdx);
@@ -12291,14 +12291,14 @@
                 fGrid.RowSpacing = 2;
 
                 controlPanel = uipanel(fGrid, 'BackgroundColor', tT.headerBg, 'ForegroundColor', tT.textInverse, 'BorderType', 'line');
-                % [L1 B-1/L2] 지도/고도/정보/plot/비디오 독립 토글.
-                % v2-B: 헤더에 visible 정보/plot 버튼 제거 — 11→9 col
+                % [L1 B-1/L2] independent map/altitude/info/plot/video toggles.
+                % v2-B: removed the visible info/plot buttons in the header - 11->9 col
                 glCtrl = uigridlayout(controlPanel, [1 9]);
                 glCtrl.BackgroundColor = tT.headerBg;
                 glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
-                UI_temp(fIdx).ctrlGrid = glCtrl;            % v-fix7: responsive 2줄 전환용
+                UI_temp(fIdx).ctrlGrid = glCtrl;            % v-fix7: for responsive 2-row switching
                 UI_temp(fIdx).ctrlRowPanel = controlPanel;
                 UI_temp(fIdx).ctrlFGrid = fGrid;
 
@@ -12310,7 +12310,7 @@
                 UI_temp(fIdx).currentTimeLabel = uilabel(glCtrl, 'Text', '0.000 s', 'FontWeight', 'bold', 'FontSize', 13, 'FontColor', tT.warningRed);
                 UI_temp(fIdx).fileNameLabel = uilabel(glCtrl, 'Text', '파일 없음', 'FontColor', tT.textSecondary, 'FontSize', 11, 'FontWeight', 'bold');
 
-                % v-style: 패널 토글 버튼 role 컬러 (Att=blue, Map=green, Alt=blue, Info=yellow, Plot=purple, Vid=dark)
+                % v-style: panel toggle button role colors (Att=blue, Map=green, Alt=blue, Info=yellow, Plot=purple, Vid=dark)
                 UI_temp(fIdx).btnAtt = uibutton(glCtrl, 'Text', '자세 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
                     'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'attitude'));
@@ -12323,7 +12323,7 @@
                     'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
-                % v2-B: btnInfo/btnDataView 제거 (PanelVisible.info/dataView 는 내부적으로 true 유지)
+                % v2-B: removed btnInfo/btnDataView (PanelVisible.info/dataView kept true internally)
                 UI_temp(fIdx).btnInfo = gobjects(0);
                 UI_temp(fIdx).btnDataView = gobjects(0);
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
@@ -12342,7 +12342,7 @@
                 UI_temp(fIdx).dataGrid.ColumnWidth = {0, 0, 0, 0, panelWidths(3), 4, '1x', 0};
                 UI_temp(fIdx).dataGrid.RowHeight = {'1x'};
                 UI_temp(fIdx).dataGrid.Padding = [0 0 0 0];
-                UI_temp(fIdx).dataGrid.ColumnSpacing = 3;   % splitter 가시성
+                UI_temp(fIdx).dataGrid.ColumnSpacing = 3;   % splitter visibility
                 UI_temp(fIdx).dataGrid.Scrollable = 'on';
 
                 UI_temp(fIdx).colSplitters = gobjects(1, 3);
@@ -12354,7 +12354,7 @@
                     UI_temp(fIdx).colSplitters(sIdx) = sp;
                 end
 
-                % --- (b) Col 1: 비행 자세 (Pitch / Roll / Heading 게이지) ---
+                % --- (b) Col 1: flight attitude (Pitch / Roll / Heading gauges) ---
                 UI_temp(fIdx).panelAttitude = uipanel(UI_temp(fIdx).dataGrid, 'Title', '비행 자세', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 UI_temp(fIdx).panelAttitude.Layout.Column = 1;
                 UI_temp(fIdx).panelAttitude.Visible = 'off';
@@ -12368,14 +12368,14 @@
                 [UI_temp(fIdx).rollAxes, UI_temp(fIdx).rollLabel, UI_temp(fIdx).rollGaugeGrid]   = app.createGaugePanel(gGrid, 'Roll');
                 [UI_temp(fIdx).hdgAxes, UI_temp(fIdx).hdgLabel, UI_temp(fIdx).hdgGaugeGrid]     = app.createGaugePanel(gGrid, 'Heading');
 
-                % --- (c) Col 2: Map (위) + Altitude (아래) ---
+                % --- (c) Col 2: Map (top) + Altitude (bottom) ---
                 UI_temp(fIdx).panelMapAlt = uipanel(UI_temp(fIdx).dataGrid, 'BorderType', 'none', 'BackgroundColor', panelColors{fIdx});
                 UI_temp(fIdx).panelMapAlt.Layout.Column = 3;
                 UI_temp(fIdx).panelMapAlt.Visible = 'off';
                 pGrid = uigridlayout(UI_temp(fIdx).panelMapAlt, [2 1]);
                 pGrid.RowHeight = {'1.5x', '1x'};
                 pGrid.Padding = [0 0 0 0];
-                UI_temp(fIdx).panelMapAltGrid = pGrid;   % [L1 B-1] sub-row 동적 변경용
+                UI_temp(fIdx).panelMapAltGrid = pGrid;   % [L1 B-1] for dynamic sub-row change
 
                 mapPnl = uipanel(pGrid, 'Title', 'Map', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 mapGrid = uigridlayout(mapPnl, [1 1], 'Padding', [5 5 5 5]);
@@ -12385,13 +12385,13 @@
                 ylabel(UI_temp(fIdx).mapAxes, 'Lat', 'FontWeight', 'bold', 'FontSize', 10);
                 set(UI_temp(fIdx).mapAxes, 'XGrid', 'on', 'YGrid', 'on', 'XMinorGrid', 'on', 'YMinorGrid', 'on', 'XMinorTick', 'on', 'YMinorTick', 'on', 'TickDir', 'out');
 
-                % [V3.10] Map axes는 툴바 숨김 (휠 줌/드래그 팬만 사용)
+                % [V3.10] Map axes hide the toolbar (use wheel-zoom/drag-pan only)
                 disableDefaultInteractivity(UI_temp(fIdx).mapAxes);
                 UI_temp(fIdx).mapAxes.Toolbar.Visible = 'off';
                 UI_temp(fIdx).mapAxes.Interactions = [panInteraction, zoomInteraction];
 
                 altPnl = uipanel(pGrid, 'Title', 'Altitude', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
-                UI_temp(fIdx).panelMap = mapPnl;          % [L1 B-1] 독립 토글용 핸들
+                UI_temp(fIdx).panelMap = mapPnl;          % [L1 B-1] handle for independent toggle
                 UI_temp(fIdx).panelAlt = altPnl;
                 altGrid = uigridlayout(altPnl, [1 1], 'Padding', [5 5 5 5]);
                 UI_temp(fIdx).altAxes = uiaxes(altGrid);
@@ -12401,15 +12401,15 @@
                 xtickformat(UI_temp(fIdx).altAxes, '%.0f');
                 set(UI_temp(fIdx).altAxes, 'XGrid', 'on', 'YGrid', 'on', 'XMinorGrid', 'on', 'YMinorGrid', 'on', 'XMinorTick', 'on', 'YMinorTick', 'on', 'TickDir', 'out');
 
-                % [V3.10] Altitude axes는 툴바 숨김 (휠 줌/드래그 팬만 사용)
+                % [V3.10] Altitude axes hide the toolbar (use wheel-zoom/drag-pan only)
                 disableDefaultInteractivity(UI_temp(fIdx).altAxes);
                 UI_temp(fIdx).altAxes.Toolbar.Visible = 'off';
                 UI_temp(fIdx).altAxes.Interactions = [panInteraction, zoomInteraction];
 
-                % --- (d) Col 3: 현재 비행 정보 (데이터 테이블) ---
+                % --- (d) Col 3: current flight info (data table) ---
                 infoPanel = uipanel(UI_temp(fIdx).dataGrid, 'Title', '현재 비행 정보', 'FontSize', 13, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary, 'Scrollable', 'on');
                 infoPanel.Layout.Column = 5;
-                UI_temp(fIdx).panelInfo = infoPanel;        % [v4-L1] hsplit reparent 용 핸들
+                UI_temp(fIdx).panelInfo = infoPanel;        % [v4-L1] handle for hsplit reparent
                 glInfo = uigridlayout(infoPanel, [1 1], 'Padding', [0 0 0 0]);
                 UI_temp(fIdx).dataTable = uitable(glInfo, 'BackgroundColor', [1.00 1.00 1.00; 0.96 0.98 1.00], 'ForegroundColor', [0 0 0], 'FontWeight', 'bold', ...
                                              'RowStriping', 'on', 'ColumnName', {'항목', '값'}, 'RowName', [], ...
@@ -12420,10 +12420,10 @@
                 UI_temp(fIdx).dataTable.ContextMenu = cm;
                 UI_temp(fIdx).dataTable.CellSelectionCallback = @(~, event) app.handleTableSelection(fIdx, event);
 
-                % --- (e) Col 4: H 패널 (플롯 tabGroup) ---
+                % --- (e) Col 4: H panel (plot tabGroup) ---
                 hPnl = uipanel(UI_temp(fIdx).dataGrid, 'Title', 'plot 데이터', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 hPnl.Layout.Column = 7;
-                UI_temp(fIdx).panelDataView = hPnl;         % [v4-L1] hsplit reparent 용 핸들
+                UI_temp(fIdx).panelDataView = hPnl;         % [v4-L1] handle for hsplit reparent
                 hGrid2 = uigridlayout(hPnl, [3 1]);
                 hGrid2.RowHeight = {30, 0, '1x'};
                 hGrid2.Padding = [2 2 2 2];
@@ -12474,13 +12474,13 @@
                 UI_temp(fIdx).plotData = cell(1, app.MAX_TABS);
                 UI_temp(fIdx).xLimListeners = cell(1, app.MAX_TABS);
 
-                % --- (f)(g) Col 5: H↔I splitter, Col 6: Video 패널 [V3.15 6행 레이아웃 + VirtualDub 그룹 응집] ---
-                %   Row 1 (32px) : AVI 파일 열기 버튼 + 동기 상태 라벨
-                %   Row 2 (32px) : Frame No 입력 ↔ Time 입력 + 동기 버튼 (단순화)
-                %   Row 3 (1x)   : 영상 표시 영역
-                %   Row 4 (~120px) : ▶ Frame Navigator 그룹 패널 (라벨+슬라이더+버튼+별표 axes)
-                %   Row 5 (32px) : Video Hz / Data Hz 입력 + Cache 드롭다운
-                % [PATCH UX-3] H↔I 경계 splitter (Col 5)
+                % --- (f)(g) Col 5: H<->I splitter, Col 6: Video panel [V3.15 6-row layout + VirtualDub group cohesion] ---
+                %   Row 1 (32px) : AVI open button + sync status label
+                %   Row 2 (32px) : Frame No input <-> Time input + sync button (simplified)
+                %   Row 3 (1x)   : video display area
+                %   Row 4 (~120px) : Frame Navigator group panel (label+slider+button+star axes)
+                %   Row 5 (32px) : Video Hz / Data Hz input + Cache dropdown
+                % [PATCH UX-3] H<->I boundary splitter (Col 5)
                 UI_temp(fIdx).hiSplitter = uipanel(UI_temp(fIdx).dataGrid, ...
                     'BackgroundColor', tT.borderColor, 'BorderType', 'line', ...
                     'BorderColor', tT.dividerColor, ...
@@ -12505,13 +12505,13 @@
                 UI_temp(fIdx).panelVideo = uipanel(viewerRoot, 'Title', 'Video Player', 'FontSize', 12, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1], 'ForegroundColor', tT.textPrimary);
                 UI_temp(fIdx).panelVideo.Layout.Row = 1;
                 UI_temp(fIdx).panelVideo.Layout.Column = 1;
-                % 영상 표시 우선: 제어 기능은 별도 다이얼로그로 분리
+                % video display priority: control functions split into a separate dialog
                 iGrid2 = uigridlayout(UI_temp(fIdx).panelVideo, [2 1]);
                 iGrid2.RowHeight = {34, '1x'};
                 iGrid2.Padding = [0 0 0 0];
                 iGrid2.RowSpacing = 2;
 
-                % Row 1: AVI 파일 열기 + 표시 해상도 + 제어창 버튼 + 동기 상태
+                % Row 1: AVI open + display resolution + control-window button + sync status
                 vBtnPnl = uipanel(iGrid2, 'BorderType', 'none', 'BackgroundColor', [0.94 0.96 0.98]);
                 vBtnPnl.Layout.Row = 1;
                 glVB = uigridlayout(vBtnPnl, [1 5], ...
@@ -12532,13 +12532,13 @@
                     'FontColor', tT.textSecondary, 'HorizontalAlignment', 'right');
                 UI_temp(fIdx).vidSyncStatus.Layout.Column = 5;
 
-                % Row 2: 고정 표시 해상도 영상 영역(컨테이너 스크롤 가능)
+                % Row 2: fixed-resolution video area (container scrollable)
                 UI_temp(fIdx).vidContainer = uipanel(iGrid2, 'BorderType', 'none', ...
-                    'Scrollable', 'on', 'BackgroundColor', tT.videoPanelBg);   % v3-D: 외부 컨테이너 light, vidAxes 만 black
+                    'Scrollable', 'on', 'BackgroundColor', tT.videoPanelBg);   % v3-D: external container light, vidAxes only black
                 UI_temp(fIdx).vidContainer.Layout.Row = 2;
                 UI_temp(fIdx).vidAxes = uiaxes(UI_temp(fIdx).vidContainer, ...
                     'Units', 'pixels', 'Position', [0 0 720 512]);
-                UI_temp(fIdx).vidAxes.Color = tT.videoAxesBg;   % v3-sample: 검은색 제거 (image 가 픽셀 표시)
+                UI_temp(fIdx).vidAxes.Color = tT.videoAxesBg;   % v3-sample: remove black (image shows pixels)
                 UI_temp(fIdx).vidAxes.XColor = 'none';
                 UI_temp(fIdx).vidAxes.YColor = 'none';
                 try
@@ -12582,31 +12582,31 @@
             linkaxes([UI_temp(1).mapAxes, UI_temp(2).mapAxes], 'xy');
             app.UI = UI_temp;
 
-            % [V3.22 #5] UI 평면 struct를 그룹화된 view로 alias - 신규 코드는 그룹 경로 사용
-            % 기존 평면 필드(app.UI(fIdx).mapAxes 등)도 그대로 유지 → 100% 호환
+            % [V3.22 #5] alias the flat UI struct to a grouped view - new code uses the group path
+            % existing flat fields (app.UI(fIdx).mapAxes etc.) are also kept -> 100% compatible
             app.buildUIGroups();
         end
 
-        % [V3.22 #5] 평면 UI struct를 그룹화된 view(struct)로 묶어 별도 속성에 저장
+        % [V3.22 #5] bundle the flat UI struct into a grouped view(struct) stored in a separate property
         % - app.UIGroup(fIdx).attitude.rollAxes = app.UI(fIdx).rollAxes  (alias)
-        % - 새 코드는 app.UIGroup(...) 경로를 권장; 기존 코드는 app.UI(...) 그대로
-        % - 핸들 객체이므로 alias가 동일 객체를 가리켜 변경 시 양쪽 모두 동기됨
+        % - new code prefers the app.UIGroup(...) path; existing code keeps app.UI(...)
+        % - handle objects, so the alias points to the same object and both sync on change
         function buildUIGroups(app)
-            % [V3.22 #5] 평면 UI struct를 그룹화된 view(struct array, 1x2)로 묶음
-            % - 핸들 객체이므로 alias가 동일 객체를 가리켜 변경 시 양쪽 모두 동기됨
+            % [V3.22 #5] bundle the flat UI struct into a grouped view(struct array, 1x2)
+            % - handle objects, so the alias points to the same object and both sync on change
             UIGroup_temp = struct([]);
             for fIdx = 1:2
                 u = app.UI(fIdx);
                 grp = struct();
 
-                % 자세(Attitude) 그룹
+                % Attitude group
                 grp.attitude = struct( ...
                     'panel',      u.panelAttitude, ...
                     'pitchAxes',  u.pitchAxes,  'pitchLabel', u.pitchLabel, 'pitchValueText', u.pitchValueText, 'hgPitch', u.hgPitch, ...
                     'rollAxes',   u.rollAxes,   'rollLabel',  u.rollLabel,  'rollValueText',  u.rollValueText,  'hgRoll',  u.hgRoll, ...
                     'hdgAxes',    u.hdgAxes,    'hdgLabel',   u.hdgLabel,   'hdgValueText',   u.hdgValueText,   'hgHdg',   u.hgHdg);
 
-                % 지도/고도(MapAlt) 그룹
+                % Map/Altitude(MapAlt) group
                 grp.map = struct( ...
                     'panel',      u.panelMapAlt, ...
                     'mapAxes',    u.mapAxes, ...
@@ -12618,7 +12618,7 @@
                     'timeLine',   u.timeLine, ...
                     'altXLimListener', u.altXLimListener);
 
-                % 비디오 + Frame Navigator 그룹
+                % video + Frame Navigator group
                 grp.video = struct( ...
                     'viewerDialog',    u.vidViewerDialog, ...
                     'panel',           u.panelVideo, ...
@@ -12641,7 +12641,7 @@
                     'frameXLine',      u.vidFrameXLine, ...
                     'frameMarker',     u.vidFrameMarker);
 
-                % 플롯(H 영역) 그룹 - cell array는 struct() ctor 회피
+                % Plot(H area) group - cell array avoids the struct() ctor
                 grpPlots = struct();
                 grpPlots.tabGroup       = u.tabGroup;
                 grpPlots.plotTabs       = u.plotTabs;
@@ -12653,7 +12653,7 @@
                 grpPlots.xLimListeners  = u.xLimListeners;
                 grp.plots = grpPlots;
 
-                % 컨트롤 헤더 그룹
+                % control header group
                 grp.controls = struct( ...
                     'spinner',          u.spinner, ...
                     'currentTimeLabel', u.currentTimeLabel, ...
@@ -12665,7 +12665,7 @@
                     'btnDataView',      u.btnDataView, ...
                     'btnVid',           u.btnVid);
 
-                % 데이터 테이블 + 컨테이너
+                % data table + container
                 grp.data = struct( ...
                     'panel',     u.panel, ...
                     'dataTable', u.dataTable, ...
@@ -12702,7 +12702,7 @@
         end
 
         function styleToolbarButton(app, btn, iconText, labelText, stateName)
-            % v-style: 키워드 기반 role 컬러 매핑 (비행경로=yellow, 보드=blue, 해안선/win=gray, 설정/편집=dark).
+            % v-style: keyword-based role color mapping (flight-path=yellow, board=blue, coastline/win=gray, settings/edit=dark).
             try
                 if isempty(btn) || ~isvalid(btn), return; end
                 t = app.getLightTheme();
@@ -12716,7 +12716,7 @@
                 lbl = char(labelText);
                 switch lower(char(stateName))
                     case 'active'
-                        % v3-sample: active = 옅은 blue tint bg + role fg (눌린 상태만 background 변화)
+                        % v3-sample: active = light blue tint bg + role fg (background changes only on pressed)
                         btn.BackgroundColor = t.btnActiveBg;
                         if contains(lbl, '보드')
                             btn.FontColor = t.toolbarBlueFg;
@@ -12752,8 +12752,8 @@
             end
         end
 
-        % [V3.22 #7] 메인 윈도우 상단 헤더 바 (파일 선택 / Sync 입력)
-        % - createLayout에서 분리하여 헤더 영역 변경이 메인 빌더에 영향 없도록 함
+        % [V3.22 #7] main window top header bar (file select / Sync input)
+        % - split out from createLayout so header-area changes do not affect the main builder
         function buildHeaderBar(app, mainLayout)
             t = app.getLightTheme();   % v-style
             hHeaderPanel = uipanel(mainLayout, 'BackgroundColor', t.headerBg, 'ForegroundColor', t.textPrimary, 'BorderType', 'line');
@@ -12868,7 +12868,7 @@
         end
 
         function [ax, lbl, grid] = createGaugePanel(app, parentPnl, titleStr)
-            t = app.getLightTheme();   % v2-D1: 외부 label 가독성 강화
+            t = app.getLightTheme();   % v2-D1: strengthen external label readability
             grid = uigridlayout(parentPnl, [2 1]);
             grid.RowHeight = {28, '1x'};
             grid.Padding = [0 0 0 0];
@@ -13086,12 +13086,12 @@
                 app.PlotConfigState = st.PlotConfig;
             end
             app.ProjectState = st;
-            % [Medium 1] dirty=false 는 caller 가 file load 까지 완료한 후에만 의미가 있음.
-            % autoLoadProjectFromFile 은 이후 loadCompletedCleanly 플래그로 다시 결정함.
-            % 직접 호출(예: 외부 import) 시에도 caller 가 후속 결정을 내려야 한다.
+            % [Medium 1] dirty=false is meaningful only after the caller has completed the file load.
+            % autoLoadProjectFromFile re-decides later via the loadCompletedCleanly flag.
+            % on a direct call (e.g., external import) the caller must make the follow-up decision too.
             app.ProjectDirty = false;
-            % [Review High #3] Edit Dialog 가 열려 있으면 모든 탭의 표시 값을 새 project
-            % 상태로 즉시 재동기화 — Sync / Plot / Files / Options 라벨이 stale 로 남지 않음.
+            % [Review High #3] if the Edit Dialog is open, immediately re-sync all tab display values to the
+            % new project state - so Sync / Plot / Files / Options labels do not remain stale.
             try
                 if ~isempty(app.EditDialog) && isvalid(app.EditDialog)
                     app.refreshEditDialog();
@@ -13393,7 +13393,7 @@
             if ~panelState.dataView
                 widths{7} = 0;
             else
-                % v4 P2: plot/dataView visible 시 항상 flex '1x' 강제 (fixed pixel 저장 금지)
+                % v4 P2: always force flex '1x' when plot/dataView visible (do not store fixed pixels)
                 widths{7} = '1x';
             end
             widths{2} = 0; widths{4} = 0; widths{6} = 0; widths{8} = 0;
@@ -13467,7 +13467,7 @@
                 catch
                 end
                 st = [];
-                % v-crit3: safe-failure 시 상태 일관성 — 부분 갱신된 메타 되돌림
+                % v-crit3: state consistency on safe-failure - revert partially updated meta
                 try
                     app.ProjectLastSaveText = '';
                     app.ProjectDirty = false;
@@ -13618,7 +13618,7 @@
 
         function saveProjectAutosave(app)
             % [D2] crash-safe snapshot while edits are dirty. Lives next to project file or in tempdir.
-            if app.IsDeleting, return; end   % [bug#1] teardown 창에서 타이머 발화 차단
+            if app.IsDeleting, return; end   % [bug#1] block the timer firing in the teardown window
             try
                 if ~app.ProjectDirty, return; end
                 if isempty(app.ProjectFilePath)
@@ -13694,7 +13694,7 @@
         function markProjectDirtyAndScheduleRefresh(app, ~)
             % [D2] mark dirty + (re)start single-shot debounce timer.
             app.ProjectDirty = true;
-            app.setEditDialogStatus('변경됨');   % [step2] 편집 시작 → 변경됨 (best-effort)
+            app.setEditDialogStatus('변경됨');   % [step2] edit started -> changed (best-effort)
             try
                 if isempty(app.EditApplyTimer) || ~isvalid(app.EditApplyTimer)
                     app.EditApplyTimer = timer( ...
@@ -13728,7 +13728,7 @@
         function applyPendingDialogChanges(app)
             % Default applier: refresh data UI for any flights with loaded data.
             % Phases 2-4 extend this with option/sync/plot specific re-applies.
-            if app.IsDeleting, return; end   % [bug#2] EditApplyTimer singleShot teardown 창 차단
+            if app.IsDeleting, return; end   % [bug#2] block the EditApplyTimer singleShot teardown window
             try
                 for fIdx = 1:2
                     try
@@ -13747,10 +13747,10 @@
                 catch ME
                     app.logCaught(ME, 'apply-pending-dialog:refresh-edit-dialog');
                 end
-                app.setEditDialogStatus('적용됨');   % [step2] apply 정상 종료 → 적용됨
+                app.setEditDialogStatus('적용됨');   % [step2] apply finished ok -> applied
             catch ME
                 app.logCaught(ME, 'apply-pending-dialog');
-                app.setEditDialogStatus('오류');     % [step2] apply 실패 → 오류
+                app.setEditDialogStatus('오류');     % [step2] apply failed -> error
             end
         end
 
@@ -13760,12 +13760,12 @@
         % consistent regardless of who initiated the change.
         % =================================================================
         function ok = searchFlightDataValue(app, fIdx)
-            % [Sync Search] 선택 항목 값 검색 → 후보 time list → 동기 기준(T1/T2) 지정.
-            % 반환: dialog open 성공 여부 (guard silent-return 관찰용)
+            % [Sync Search] search the selected item value -> candidate time list -> set sync basis(T1/T2).
+            % returns: whether the dialog opened (for observing guard silent-return)
             ok = false;
             try
                 if fIdx < 1 || fIdx > numel(app.Models), return; end
-                % v-fix: 실제 행 선택이 한 번도 없었으면 기본 row1 검색 방지
+                % v-fix: if there was never an actual row selection, prevent a default row1 search
                 if fIdx <= numel(app.LastInfoTableSelectionValid) && ~app.LastInfoTableSelectionValid(fIdx)
                     uialert(app.UIFigure, '먼저 왼쪽 클릭으로 항목 행을 선택한 뒤 우클릭 메뉴를 사용하세요.', '동기시간 찾기');
                     return;
@@ -13782,7 +13782,7 @@
                 end
                 meta = app.Models(fIdx).displayMeta(selRow);
                 yCol = meta.header;
-                % v-fix5: Time 컬럼 매핑 유효성 검증
+                % v-fix5: validate Time column mapping
                 if ~isfield(app.Models(fIdx).mappedCols, 'Time') || isempty(app.Models(fIdx).mappedCols.Time) ...
                         || ~ismember(app.Models(fIdx).mappedCols.Time, app.Models(fIdx).rawData.Properties.VariableNames)
                     uialert(app.UIFigure, 'Time 컬럼 매핑이 유효하지 않습니다.', '동기시간 찾기');
@@ -13807,7 +13807,7 @@
 
         function openSyncSearchDialog(app, fIdx, yCol, timeCol)
             t = app.getLightTheme();
-            % v-fix3: 기존 dialog 닫고 handle 저장 (lifecycle 추적)
+            % v-fix3: close the existing dialog and store the handle (lifecycle tracking)
             try
                 if numel(app.SyncSearchDialogs) >= fIdx && ~isempty(app.SyncSearchDialogs{fIdx}) ...
                         && isvalid(app.SyncSearchDialogs{fIdx})
@@ -13853,7 +13853,7 @@
         end
 
         function clearPendingSyncAnchor(app, infoLbl)
-            % v-fix4: 동기 해제 시 SyncState + PendingFlightSyncAnchor 모두 초기화
+            % v-fix4: on sync release, reset both SyncState + PendingFlightSyncAnchor
             try
                 app.PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...
                     'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN);
@@ -13867,7 +13867,7 @@
         end
 
         function invalidateInfoTableSelection(app, fIdx)
-            % displayMeta 재구성 시 stale 선택 무효화 (동일 row 가 다른 항목 의미 가능)
+            % invalidate stale selection on displayMeta rebuild (the same row may mean a different item)
             try
                 if fIdx >= 1 && fIdx <= numel(app.LastInfoTableSelectionValid)
                     app.LastInfoTableSelectionValid(fIdx) = false;
@@ -13877,7 +13877,7 @@
         end
 
         function dlgs = getOpenDialogHandlesForTest(app)
-            % v-fix1: runner 가 private property 직접 접근 없이 visible dialog 수집 {handle, tag}
+            % v-fix1: the runner collects visible dialogs {handle, tag} without direct private-property access
             dlgs = cell(0, 2);
             try
                 cand = {};
@@ -13908,10 +13908,10 @@
         end
 
         function rows = computeSyncSearchRows(~, yData, tData, target)
-            % exact match 우선(>500 제한), 없으면 값-정렬 closest 중심 ±7 최대 15.
-            % 열: [Rank, Index, Time, Value, Diff]. nearest 는 closest 가 중간행 유지(재정렬 X).
+            % prefer exact match (>500 limit), else value-sorted closest-centered +-7 max 15.
+            % columns: [Rank, Index, Time, Value, Diff]. nearest keeps closest in the middle row (no re-sort).
             rows = zeros(0, 5);
-            % v-fix1: 빈 데이터/비유한 target 방어
+            % v-fix1: defend against empty data / non-finite target
             if isempty(yData) || isempty(tData) || ~isfinite(target), return; end
             finiteMask = isfinite(yData) & isfinite(tData);
             idxAll = find(finiteMask);
@@ -13931,17 +13931,17 @@
             lo = max(1, nearestPos - 7); hi = min(numel(sortedVals), nearestPos + 7);
             sel = order(lo:hi);
             rowsIdx = idxAll(sel);
-            % v-fix2: closest 가 중간행에 오도록 값-정렬 순서 유지 (index 재정렬 제거)
+            % v-fix2: keep value-sorted order so closest stays in the middle row (removed index re-sort)
             rk = (1:numel(sel))';
             rows = [rk, double(rowsIdx(:)), double(times(sel)), double(vals(sel)), double(vals(sel) - target)];
         end
 
         function r = syncSearchClosestDisplayRow(~, rows)
-            % nearest 결과에서 |Diff| 최소 표시행 (Rank 기준 selection 용)
+            % min |Diff| display row from the nearest result (for Rank-based selection)
             r = 1;
             try
                 if isempty(rows), return; end
-                [~, r] = min(abs(rows(:, 5)));   % Diff 열 = 5
+                [~, r] = min(abs(rows(:, 5)));   % Diff column = 5
             catch
                 r = 1;
             end
@@ -13955,7 +13955,7 @@
                 resTable.Data = rows;
                 if isempty(rows)
                     infoLbl.Text = '검색 결과 없음 (유효 숫자값 없음).';
-                elseif any(rows(:,4) == target)   % Value 열 = 4
+                elseif any(rows(:,4) == target)   % Value column = 4
                     infoLbl.Text = sprintf('일치 %d개 표시.', size(rows,1));
                     try
                         resTable.Selection = [1 1];
@@ -13988,7 +13988,7 @@
             try
                 r = app.syncSearchSelectedRow(resTable);
                 if isempty(r), return; end
-                app.applyTimeChange(fIdx, max(1, min(height(app.Models(fIdx).rawData), round(r(2)))));   % Index 열 = 2
+                app.applyTimeChange(fIdx, max(1, min(height(app.Models(fIdx).rawData), round(r(2)))));   % Index column = 2
             catch ME
                 app.logCaught(ME, 'sync-search:goto');
             end
@@ -13998,7 +13998,7 @@
             try
                 r = app.syncSearchSelectedRow(resTable);
                 if isempty(r), return; end
-                % 열: [Rank, Index, Time, Value, Diff]
+                % columns: [Rank, Index, Time, Value, Diff]
                 if fIdx == 1
                     app.PendingFlightSyncAnchor.T1 = r(3);
                     app.PendingFlightSyncAnchor.Source1 = yCol;
@@ -14203,14 +14203,14 @@
     end
 
     % =========================================================================
-    % [V3.22 #6] Static wrapper - 외부 함수 호출을 클래스 경유로 추상화
-    % - 향후 +flightdash 패키지 분리 시 이 wrapper만 한 줄 수정
-    % - 현재는 file-level 외부 함수에 위임 (parfeval은 두 형태 모두 받음)
-    % - 사용 권장: parfeval(pool, @FlightDataDashboard.workerDecodeFrame, ...)
+    % [V3.22 #6] Static wrapper - abstract external function calls through the class
+    % - on a future +flightdash package split, only this wrapper needs a one-line change
+    % - currently delegates to file-level external functions (parfeval accepts both forms)
+    % - recommended usage: parfeval(pool, @FlightDataDashboard.workerDecodeFrame, ...)
     % =========================================================================
     methods (Static, Access = public)
         function img = workerDecodeFrame(filePath, frameNo, fps, maxSlots)
-            % 미래 마이그레이션: flightdash.asyncDecodeFramePersistent 로 교체
+            % future migration: replace with flightdash.asyncDecodeFramePersistent
             if nargin < 4
                 img = asyncDecodeFramePersistent(filePath, frameNo, fps);
             else
@@ -14219,17 +14219,17 @@
         end
 
         function workerCleanupCache()
-            % 미래 마이그레이션: flightdash.cleanupAsyncDecodeCache 로 교체
+            % future migration: replace with flightdash.cleanupAsyncDecodeCache
             cleanupAsyncDecodeCache();
         end
     end
 
     % =========================================================================
-    % v-fixH1/H2: onCleanup 복원 helper 들을 private method 로 이동.
-    %   classdef 밖 local function 은 private property (IsUpdating /
-    %   DraggedFromVideo) 직접 set 에 실패해 try/catch 가 silent swallow 하던
-    %   문제를 닫음. 모든 cleanup body 는 자체 try/catch + logCaught 로 감싸
-    %   onCleanup 콜백 밖으로 예외가 새지 않게 한다.
+    % v-fixH1/H2: moved the onCleanup restore helpers to private methods.
+    %   a local function outside classdef fails to directly set private properties (IsUpdating /
+    %   DraggedFromVideo), where try/catch silently swallowed the problem - this closes it.
+    %   every cleanup body is wrapped in its own try/catch + logCaught so no exception
+    %   leaks outside the onCleanup callback.
     % =========================================================================
     methods (Access = private)
         function restoreVideoSyncFlags(app, fIdx, prevDraggedFromVideo, prevUpdating)
@@ -14266,15 +14266,15 @@
 end
 
 % =========================================================================
-% [V3.19 (1)] 외부 함수: parfeval worker용 비동기 디코딩
-% parfeval은 클래스 메서드를 직접 받지 못하므로 file-level function 정의
-% worker는 자체 VideoReader를 생성해 디코딩 후 frame 반환
+% [V3.19 (1)] external function: async decoding for the parfeval worker
+% parfeval cannot take a class method directly, so define a file-level function
+% the worker creates its own VideoReader, decodes, and returns the frame
 % =========================================================================
 % =========================================================================
 % [V3.21 #2-A / V3.22 #4] persistent VideoReader worker function
-% - 매 호출마다 VR 재생성(50ms) → persistent로 재사용(3ms)
-% - 파일 경로 변경 시에만 VR 재생성
-% - maxSlots: 호출처에서 전달 (기본 4) - 채널별 VR 독립 보유
+% - recreate VR every call(50ms) -> reuse via persistent(3ms)
+% - recreate VR only when the file path changes
+% - maxSlots: passed by the caller (default 4) - per-channel independent VR
 % =========================================================================
 function out = ternary(cond, ifTrue, ifFalse)
     % Simple ternary helper for UI Enable / mode string toggles.
@@ -14282,7 +14282,7 @@ function out = ternary(cond, ifTrue, ifFalse)
 end
 
 function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
-    % [PATCH] 다중 슬롯 LRU 캐시 (채널별 VR 독립 보유, 파일락/메모리누수 방지)
+    % [PATCH] multi-slot LRU cache (per-channel independent VR, prevents file lock/memory leak)
     persistent cache   % struct array: .path, .sig, .vr, .lastUse
     img = [];
     if nargin < 4 || isempty(maxSlots) || maxSlots < 1
@@ -14290,10 +14290,10 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
     end
     maxSlots = max(1, round(double(maxSlots)));
 
-    % [PATCH] cleanup 분기: 모든 슬롯 VR delete 후 캐시 완전 초기화
+    % [PATCH] cleanup branch: delete all slot VRs then fully reset the cache
     if ischar(filePath) && strcmp(filePath, '__CLEANUP__')
         asyncClearDecodeCache(cache);
-        cache = [];   % v-crit1: persistent 완전 초기화 (stale VR struct 잔존 방지)
+        cache = [];   % v-crit1: full persistent reset (prevents leftover stale VR struct)
         return;
     end
 
@@ -14315,7 +14315,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
             end
         end
 
-        % 슬롯 탐색
+        % slot search
         idx = 0;
         for k = 1:numel(cache)
             if strcmp(cache(k).path, filePath) && strcmp(cache(k).sig, fileSig) && ...
@@ -14325,7 +14325,7 @@ function img = asyncDecodeFramePersistent(filePath, frameNo, fps, maxSlots)
         end
 
         if idx == 0
-            % LRU 축출 (꽉 찬 경우 가장 오래된 슬롯 delete)
+            % LRU eviction (delete the oldest slot when full)
             if numel(cache) >= maxSlots
                 ages = zeros(1, numel(cache));
                 for k = 1:numel(cache)
@@ -14394,8 +14394,8 @@ function sig = asyncDecodeFileSignature(filePath)
     end
 end
 
-% [PATCH] 워커 persistent 캐시 정리 함수
-% - asyncDecodeFramePersistent의 cleanup 분기를 호출하여 모든 VR delete + persistent clear
+% [PATCH] worker persistent cache cleanup function
+% - calls the cleanup branch of asyncDecodeFramePersistent to delete all VRs + persistent clear
 function cleanupAsyncDecodeCache()
     try
         asyncDecodeFramePersistent('__CLEANUP__', 0, 0);
