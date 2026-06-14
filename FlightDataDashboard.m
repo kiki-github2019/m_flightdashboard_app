@@ -6329,6 +6329,26 @@
             app.EditDialog = [];
         end
 
+        function setEditDialogStatus(app, state)
+            % [step2] EditDialog 상단 status 라벨 갱신(best-effort). 5상태:
+            %   준비/변경됨/적용됨/저장됨/오류. 라벨 미생성·무효 시 no-op. 메인 동작 무영향.
+            try
+                lbl = app.EditDialogStatusLbl;
+                if isempty(lbl) || ~isvalid(lbl) || ~isprop(lbl, 'Text'), return; end
+                switch char(state)
+                    case '변경됨', txt = '변경됨'; col = [0.72 0.45 0.05];   % amber
+                    case '적용됨', txt = '적용됨'; col = [0.00 0.33 0.62];   % blue
+                    case '저장됨', txt = '저장됨'; col = [0.06 0.45 0.22];   % green
+                    case '오류',   txt = '오류';   col = [0.75 0.20 0.20];   % red
+                    otherwise,     txt = '준비';   col = [0.10 0.18 0.25];   % neutral
+                end
+                lbl.Text = txt;
+                if isprop(lbl, 'FontColor'), lbl.FontColor = col; end
+            catch ME
+                app.logCaught(ME, 'editDialog:setStatus');
+            end
+        end
+
         function refreshEditDialog(app)
             % Refresh status, paths, sync values, option drafts, plot tree if dialog open.
             % [Review Medium #5] 모든 ED* 핸들 접근 전 ~isempty + isvalid 가드.
@@ -7000,6 +7020,9 @@
                 catch
                 end
                 app.safeRefreshEditDialog('editDialogSaveProject:refresh');   % v-fixE
+                app.setEditDialogStatus('저장됨');   % [step2] save 정상 → 저장됨
+            else
+                app.setEditDialogStatus('오류');     % [step2] save 실패 → 오류
             end
         end
 
@@ -13628,6 +13651,7 @@
         function markProjectDirtyAndScheduleRefresh(app, ~)
             % [D2] mark dirty + (re)start single-shot debounce timer.
             app.ProjectDirty = true;
+            app.setEditDialogStatus('변경됨');   % [step2] 편집 시작 → 변경됨 (best-effort)
             try
                 if isempty(app.EditApplyTimer) || ~isvalid(app.EditApplyTimer)
                     app.EditApplyTimer = timer( ...
@@ -13680,8 +13704,10 @@
                 catch ME
                     app.logCaught(ME, 'apply-pending-dialog:refresh-edit-dialog');
                 end
+                app.setEditDialogStatus('적용됨');   % [step2] apply 정상 종료 → 적용됨
             catch ME
                 app.logCaught(ME, 'apply-pending-dialog');
+                app.setEditDialogStatus('오류');     % [step2] apply 실패 → 오류
             end
         end
 
