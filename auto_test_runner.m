@@ -1885,13 +1885,17 @@ function tf = i_widthSpecIsZero(widthSpec)
     end
 end
 
-function projectPath = i_createProjectFixture(app, kind, outDir)
-    fixtureDir = fullfile(outDir, 'project_fixtures');
+function projectPath = i_createProjectFixture(app, kind, outDir) %#ok<INUSD>
+    % v-fixB3: cwd/outDir 대신 tempname 기반 고유 디렉터리에 fixture 생성 →
+    % 기존 잔존 fixture 와 경로 충돌 차단. 생성 .fdproj 는 i_tempProjectFileRegistry
+    % 에 등록해 runner 종료 시 일괄 삭제.
+    fixtureDir = [tempname() '_fdproj'];
     if ~exist(fixtureDir, 'dir')
         mkdir(fixtureDir);
     end
     safeKind = regexprep(char(kind), '[^\w\-]', '_');
-    projectPath = fullfile(fixtureDir, sprintf('fixture_%03d_%s.fdproj', randi(999), safeKind));
+    projectPath = fullfile(fixtureDir, sprintf('fixture_%s.fdproj', safeKind));
+    i_tempProjectFileRegistry('add', projectPath);
     if strcmp(kind, 'corrupt_json')
         i_writeText(projectPath, '{ "Version": 1, "Flights": [');
         return;
