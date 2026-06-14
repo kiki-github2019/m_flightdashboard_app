@@ -386,9 +386,14 @@
             try
                 if ~isempty(app.AsyncPool) && isvalid(app.AsyncPool)
                     parfevalOnAll(app.AsyncPool, @FlightDataDashboard.workerCleanupCache, 0);
+                else
+                    % [A1] pool 무효 시 클라이언트 측 persistent 캐시 직접 정리(이중 안전망)
+                    cleanupAsyncDecodeCache();
                 end
             catch ME
                 app.logCaught(ME, 'delete:worker-cache-cleanup');
+                % [A1] parfevalOnAll 예외 시에도 클라이언트 측 정리 보장
+                try cleanupAsyncDecodeCache(); catch; end
             end
 
             % [Phase 1 D2] stop debounce + autosave timers before tearing down UI
@@ -3236,16 +3241,16 @@
                 app.FrameCacheUseCounter = app.FrameCacheUseCounter + 1;
                 lastUse = app.FrameCacheLastUse{fIdx};
                 % 길이 동기화 (방어적)
-                if length(lastUse) < length(keys)
-                    lastUse(end+1:length(keys)) = 0;
+                if numel(lastUse) < numel(keys)
+                    lastUse(end+1:numel(keys)) = 0;
                 end
                 lastUse(foundIdx) = app.FrameCacheUseCounter;
                 app.FrameCacheLastUse{fIdx} = lastUse;
 
                 % [V3.19 (3)] 히트 카운터 갱신 (가중 LRU score용)
                 hits = app.FrameCacheHits{fIdx};
-                if length(hits) < length(keys)
-                    hits(end+1:length(keys)) = 1;
+                if numel(hits) < numel(keys)
+                    hits(end+1:numel(keys)) = 1;
                 end
                 hits(foundIdx) = hits(foundIdx) + 1;
                 app.FrameCacheHits{fIdx} = hits;
@@ -3266,11 +3271,11 @@
                 lastUse = app.FrameCacheLastUse{fIdx};
 
                 % [PATCH] 길이 동기화 - 양방향 보정
-                nKeys = length(keys);
-                if length(hits) < nKeys, hits(end+1:nKeys) = 1;
-                elseif length(hits) > nKeys, hits = hits(1:nKeys); end
-                if length(lastUse) < nKeys, lastUse(end+1:nKeys) = 0;
-                elseif length(lastUse) > nKeys, lastUse = lastUse(1:nKeys); end
+                nKeys = numel(keys);
+                if numel(hits) < nKeys, hits(end+1:nKeys) = 1;
+                elseif numel(hits) > nKeys, hits = hits(1:nKeys); end
+                if numel(lastUse) < nKeys, lastUse(end+1:nKeys) = 0;
+                elseif numel(lastUse) > nKeys, lastUse = lastUse(1:nKeys); end
 
                 % 사용 카운터 단조 증가
                 app.FrameCacheUseCounter = app.FrameCacheUseCounter + 1;
