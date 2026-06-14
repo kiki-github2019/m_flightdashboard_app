@@ -6221,6 +6221,8 @@
             end
 
             tED = app.getLightTheme();   % v-r2: window+outer light theme
+            % [step1] 신규 EditDialog build 전구간 보호 — 빌드 중 예외 시 partial figure 정리 후 rethrow
+            try
             fig = uifigure('Name', '설정/프로젝트 편집기', ...
                            'Position', pos, 'Resize', 'on', ...
                            'Color', tED.windowBg, ...
@@ -6277,6 +6279,14 @@
                 'ButtonPushedFcn', @(~,~) app.closeEditDialog());
 
             app.refreshEditDialog();
+            catch ME
+                if exist('fig', 'var') && ~isempty(fig) && isvalid(fig)
+                    delete(fig);
+                end
+                app.EditDialog = [];
+                app.logCaught(ME, 'dialog:editDialog:build');
+                rethrow(ME);
+            end
         end
 
         function closeEditDialog(app)
@@ -9592,6 +9602,8 @@
             ctrl = struct();
             ctrlFont = 14;
             ctrlSmallFont = 13;
+            % [step1] 신규 video control dialog build 전구간 보호 — 실패 시 partial figure 정리 후 rethrow
+            try
             dlg = uifigure('Name', sprintf('AVI 제어 - Flight Data %d', fIdx), ...
                 'Visible', 'off', 'Position', [120, 120, 760, 380], ...
                 'Color', [0.94 0.94 0.96], ...
@@ -9717,6 +9729,13 @@
             ctrl.vidFrameXLine = gobjects(0);
             ctrl.vidFrameMarker = gobjects(0);
             app.applyLightTheme(dlg);  % v4-Theme
+            catch ME
+                if exist('dlg', 'var') && ~isempty(dlg) && isvalid(dlg)
+                    delete(dlg);
+                end
+                app.logCaught(ME, 'dialog:videoControl:build');
+                rethrow(ME);
+            end
         end
 
         function toggleBoardVisibility(app, fIdx)
