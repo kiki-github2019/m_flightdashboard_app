@@ -6286,8 +6286,11 @@
 
             app.refreshEditDialog();
             catch ME
-                if exist('fig', 'var') && ~isempty(fig) && isvalid(fig)
-                    delete(fig);
+                try
+                    if exist('fig', 'var') && ~isempty(fig) && isvalid(fig)
+                        delete(fig);
+                    end
+                catch
                 end
                 app.EditDialog = [];
                 app.logCaught(ME, 'dialog:editDialog:build');
@@ -9783,8 +9786,18 @@
             ctrl.vidFrameMarker = gobjects(0);
             app.applyLightTheme(dlg);  % v4-Theme
             catch ME
-                if exist('dlg', 'var') && ~isempty(dlg) && isvalid(dlg)
-                    delete(dlg);
+                try
+                    if exist('dlg', 'var') && ~isempty(dlg) && isvalid(dlg)
+                        delete(dlg);
+                    end
+                catch
+                end
+                % [#3] 설명·구현 정합 — 빌드 실패 시 슬롯도 명시 무효화(존재·범위 가드)
+                try
+                    if fIdx >= 1 && fIdx <= numel(app.UI) && isfield(app.UI(fIdx), 'vidControlDialog')
+                        app.UI(fIdx).vidControlDialog = [];
+                    end
+                catch
                 end
                 app.logCaught(ME, 'dialog:videoControl:build');
                 rethrow(ME);
