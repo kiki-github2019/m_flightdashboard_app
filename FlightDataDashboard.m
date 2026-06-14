@@ -13493,6 +13493,7 @@
 
         function saveProjectAutosave(app)
             % [D2] crash-safe snapshot while edits are dirty. Lives next to project file or in tempdir.
+            if app.IsDeleting, return; end   % [bug#1] teardown 창에서 타이머 발화 차단
             try
                 if ~app.ProjectDirty, return; end
                 if isempty(app.ProjectFilePath)
@@ -13601,6 +13602,7 @@
         function applyPendingDialogChanges(app)
             % Default applier: refresh data UI for any flights with loaded data.
             % Phases 2-4 extend this with option/sync/plot specific re-applies.
+            if app.IsDeleting, return; end   % [bug#2] EditApplyTimer singleShot teardown 창 차단
             try
                 for fIdx = 1:2
                     try
