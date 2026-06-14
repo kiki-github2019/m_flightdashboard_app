@@ -142,7 +142,7 @@
         VideoDialogLastViewerPos = {[], []}   % 마지막 Video Player 위치(채널별)
         FlightPlayTimer      = {[], []}        % flight data row playback timers
         FlightPlayActive     = [false, false]
-        FlightPlayFps        = 20
+        FlightPlayFps        = 20    % [#8] 변경 시 FlightPlayTimer 재시작(stop→start)해야 Period 반영
         PendingFlightSyncAnchor = struct('T1', NaN, 'T2', NaN, ...   % [Sync Search] 동기 기준 후보
             'Source1', '', 'Source2', '', 'Index1', NaN, 'Index2', NaN, 'Value1', NaN, 'Value2', NaN)
         SyncSearchDialogs    = {[], []}        % [Sync Search] 검색 dialog handle (lifecycle 추적)
@@ -8803,6 +8803,9 @@
                 if app.IsDeleting || isempty(app.Models(fIdx).rawData), return; end
                 app.stopFlightPlay(fIdx);
                 app.FlightPlayActive(fIdx) = true;
+                % [#8] Period 는 start 시점의 FlightPlayFps 로 1회 계산된다. 재생 중
+                %      FlightPlayFps 를 바꿔도 즉시 반영되지 않으며, stop→start(재시작)
+                %      시에만 새 FPS 가 적용된다. (현재 런타임 FPS setter 없음 — 기본 20.)
                 app.FlightPlayTimer{fIdx} = timer('ExecutionMode', 'fixedSpacing', ...
                     'Period', max(0.01, 1 / max(1, app.FlightPlayFps)), ...
                     'BusyMode', 'drop', ...
