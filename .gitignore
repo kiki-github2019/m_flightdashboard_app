@@ -10,6 +10,8 @@ option2.dat
 # Test run artifacts (PNG/ZIP results — large binaries, not versioned)
 cowork auto test/1*/
 cowork auto test/2*/
+# Accidental code-file copies in the output folder (runner writes only .md/.png here)
+cowork auto test/*.m
 
 # Archived Python test suite
 python_gui_tests.zip
