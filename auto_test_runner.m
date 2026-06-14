@@ -507,15 +507,17 @@ function tf = i_containsAny(txt, keys)
     end
 end
 
-function i_settleUi(n)
+function i_settleUi(n, settleS)
+    % #7: settle 시간 인자화. 호출부가 settleS 미전달 시 기존 0.08 유지(동작 동등).
     if nargin < 1 || isempty(n), n = 1; end
+    if nargin < 2 || isempty(settleS), settleS = 0.08; end
     for k = 1:max(1, n)
         try
             drawnow limitrate;
         catch
             drawnow;
         end
-        pause(0.08);
+        pause(settleS);
     end
 end
 
