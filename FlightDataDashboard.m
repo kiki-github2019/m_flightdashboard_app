@@ -4119,9 +4119,17 @@
             app.applyTimeChange(fIdx, idx);
         end
 
-        function idx = findClosestIndexByTime(~, timeArray, targetTime)
+        function idx = findClosestIndexByTime(app, timeArray, targetTime)
+            % PRECONDITION: timeArray 는 단조 증가(시간축) 전제 — 이진 탐색.
+            %               비정렬이면 결과 부정확(DebugMode 에서만 1회 경고).
             if isempty(timeArray), idx = 1; return; end
             if isnan(targetTime), idx = 1; return; end
+            try
+                if app.DebugMode && ~issorted(timeArray)
+                    app.logCaught(MException('FDD:UnsortedTime', 'timeArray not sorted'), 'findClosest:precond');
+                end
+            catch
+            end
 
             left = 1; right = length(timeArray);
             while left <= right
