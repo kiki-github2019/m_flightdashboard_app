@@ -2589,11 +2589,12 @@
 
         % [PATCH] tic/toc 기반 throttle 헬퍼 - 만료 시 false 반환 + 핸들 갱신
         function hit = throttleHit(app, slotName, fIdx, limitS)
-            slot = app.(slotName);
-            t0 = slot{fIdx};
+            % #4: hit(throttled) 경로는 cell 전체 복사 없이 직접 인덱싱으로 읽기.
+            t0 = app.(slotName){fIdx};
             if t0 ~= 0 && toc(t0) < limitS
                 hit = true; return;
             end
+            slot = app.(slotName);
             slot{fIdx} = tic;
             app.(slotName) = slot;
             hit = false;
