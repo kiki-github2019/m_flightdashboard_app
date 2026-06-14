@@ -2672,6 +2672,12 @@ function order = i_buildCaseOrder(nCases, iStart, iEnd, orderMode, skipList, cas
         end
     end
     % clamp + valid range
+    % C3: 범위 밖 항목은 자동 제거(clamp)되지만, 사용자 가시화를 위해 경고.
+    outOfRange = order(order < 1 | order > nCases);
+    if ~isempty(outOfRange)
+        warning('auto_test_runner:CaseOrderOutOfRange', ...
+            '범위(1..%d) 밖 케이스 번호 %s 는 무시됩니다.', nCases, mat2str(unique(outOfRange)));
+    end
     order = order(order >= 1 & order <= nCases);
     % Skip
     if ~isempty(skipList)
