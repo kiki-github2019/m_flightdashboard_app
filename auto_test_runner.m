@@ -625,7 +625,7 @@ function ok = i_waitUntil(predicate, timeoutS, pollS)
     if nargin < 3 || isempty(pollS), pollS = 0.05; end
     % hard cap on poll iterations - guards clock jumps / infinite polling.
     % Reaching the cap exits like the timeout path (ok=false, no new status).
-    MAX_WAIT_ITER = max(10000, ceil(timeoutS / max(pollS, 1e-3)) * 2);
+    MAX_WAIT_ITER = max(200, ceil(timeoutS / max(pollS, 1e-3)) * 2);
     t0 = tic;
     ok = false;
     iter = 0;
