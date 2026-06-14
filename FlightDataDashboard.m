@@ -308,6 +308,31 @@
             app.IsDraggingRowSplitter = false;
             app.IsDraggingColumnSplitter = false;
             app.stopVideoDialogFollowTimer();
+            % [bug#3] IsDeleting 직후 모든 타이머를 우선 stop — 이후 핸들 삭제/큐 drain
+            % 과정에서 콜백이 재발화하는 창 차단(#1/#2 가드와 이중 안전). 핸들 delete 는
+            % 뒤(L4xx, per-fIdx)에서 수행하며 이미 stop 된 상태라 idempotent.
+            try
+                for tIdx = 1:numel(app.FlightPlayTimer)
+                    tmr = app.FlightPlayTimer{tIdx};
+                    if ~isempty(tmr) && isvalid(tmr) && strcmpi(tmr.Running, 'on'), stop(tmr); end
+                end
+            catch ME
+                app.logCaught(ME, 'delete:early-stop-flightplay');
+            end
+            try
+                if ~isempty(app.EditApplyTimer) && isvalid(app.EditApplyTimer) && strcmpi(app.EditApplyTimer.Running, 'on')
+                    stop(app.EditApplyTimer);
+                end
+            catch ME
+                app.logCaught(ME, 'delete:early-stop-editapply');
+            end
+            try
+                if ~isempty(app.AutosaveTimer) && isvalid(app.AutosaveTimer) && strcmpi(app.AutosaveTimer.Running, 'on')
+                    stop(app.AutosaveTimer);
+                end
+            catch ME
+                app.logCaught(ME, 'delete:early-stop-autosave');
+            end
             app.disableAxesInteractionsBeforeDelete(app.UIFigure, 'delete:uifigure-axes');
             try
                 for fIdx = 1:2
