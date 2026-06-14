@@ -1203,6 +1203,11 @@
     % =========================================================================
     methods (Access = private)
         function applyTimeChange(app, fIdx, index)
+            % [C2] 우선순위: 데이터-side 시간 변경이 진입점. VideoSyncState(fIdx).IsSynced
+            % 이면 updateDashboard 가 영상 frame 을 따라 이동(데이터→영상). 반대로 영상
+            % drag(DraggedFromVideo) 중에는 processFrameInternal 이 데이터를 이동(영상→데이터)
+            % 하며 이 함수의 재진입은 IsUpdating 가드로 차단된다. 즉 동시 활성 시
+            % "마지막 사용자 입력 source" 가 우선이고, 반대 방향 동기는 가드로 1방향만 수행.
             if app.IsUpdating(fIdx), return; end
             if isempty(app.Models(fIdx).rawData), return; end
 
