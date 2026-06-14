@@ -2656,7 +2656,19 @@
                     end
                 end
             catch
-                % ring buffer 자체가 실패해도 절대 throw 안 함
+                % ring buffer 자체가 실패해도 절대 throw 안 함.
+                % [C6] stack 포함 entry append 가 실패했어도 최소 정보(tag/message)는
+                % 보존 시도 — stack=[] 로 비워 dimension 충돌 회피. ({[]} = 스칼라 struct)
+                try
+                    minEntry = struct('time', datetime('now'), 'tag', tagText, ...
+                        'identifier', identifierText, 'message', messageText, 'stack', {[]});
+                    if isempty(app.ErrorLog)
+                        app.ErrorLog = minEntry;
+                    else
+                        app.ErrorLog(end+1) = minEntry;
+                    end
+                catch
+                end
             end
 
             try
