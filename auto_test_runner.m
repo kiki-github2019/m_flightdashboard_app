@@ -119,7 +119,7 @@ function auto_test_runner(varargin)
 
     results = repmat(struct('id', 0, 'group', '', 'title', '', ...
                             'status', 'SKIPPED', 'steps', 0, 'error', '', ...
-                            'captureError', ''), nCases, 1);
+                            'captureError', '', 'issues', ''), nCases, 1);
     % v-fixL1: 'i' (imaginary unit shadowing) 대신 의미 있는 이름 사용.
     for k = 1:nCases
         results(k).id    = k;
@@ -150,7 +150,7 @@ function auto_test_runner(varargin)
         if isfield(tc, 'skipReason') && ~isempty(tc.skipReason)
             r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SKIPPED', 'steps', 0, 'error', char(tc.skipReason), ...
-                       'captureError', '');
+                       'captureError', '', 'issues', '');
             results(caseIdx) = r;
             i_writeCaseMd(outDir, caseIdx, tc, r);
             i_appendProgressMd(progressFile, caseIdx, 0, 'SKIPPED', r.error);
@@ -162,7 +162,7 @@ function auto_test_runner(varargin)
             r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SKIPPED', 'steps', 0, ...
                        'error', 'LoadAvi=never: AVI-required case skipped', ...
-                       'captureError', '');
+                       'captureError', '', 'issues', '');
             results(caseIdx) = r;
             i_writeCaseMd(outDir, caseIdx, tc, r);
             i_appendProgressMd(progressFile, caseIdx, 0, 'SKIPPED', r.error);
@@ -190,7 +190,7 @@ function auto_test_runner(varargin)
         catch ME
             r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
                        'status', 'SETUP_FAIL', 'steps', 0, 'error', i_errorReport(ME), ...
-                       'captureError', '');
+                       'captureError', '', 'issues', '');
             i_appendProgressMd(progressFile, caseIdx, 0, 'SETUP_FAIL', r.error);
             fprintf('  SETUP_FAIL: %s\n', ME.message);
         end
@@ -669,7 +669,7 @@ end
 % =========================================================================
 function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
     r = struct('id', caseIdx, 'group', tc.group, 'title', tc.title, ...
-               'status', 'PASS', 'steps', 0, 'error', '', 'captureError', '');
+               'status', 'PASS', 'steps', 0, 'error', '', 'captureError', '', 'issues', '');
 
     i_settleUi(1);
     try
@@ -693,10 +693,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
 
     st = app.testHook('getTestState');
     exp = i_expectedFromState(st);
-    [ok, msg] = i_validateState(st, exp);
+    [ok, msg, vissues] = i_validateState(st, exp);
     if ~ok
         r.status = 'FAIL';
         r.error = sprintf('baseline validation: %s', msg);
+        r.issues = i_recordValidationIssues(progressFile, caseIdx, r.steps, vissues);
         try
             [captured, captureStatus] = i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail');
             if captured
@@ -768,10 +769,11 @@ function r = i_runCase(app, tc, caseIdx, outDir, progressFile, captureOpts)
         end
 
         st = app.testHook('getTestState');
-        [ok, msg] = i_validateState(st, exp);
+        [ok, msg, vissues] = i_validateState(st, exp);
         if ~ok
             r.status = 'FAIL';
             r.error = sprintf('step %d (%s): %s', j + 1, act.label, msg);
+            r.issues = i_recordValidationIssues(progressFile, caseIdx, r.steps, vissues);
             try
                 [captured, captureStatus] = i_capture(app, outDir, caseIdx, r.steps, captureOpts, 'fail');
                 if captured
@@ -1375,7 +1377,9 @@ function idx = i_clampIndex(st, fIdx, value)
     idx = max(1, min(nRows, idx));
 end
 
-function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
+function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
+    % A3: 3번째 반환 issues = 불일치 항목 cell array. 호출부가 두 번째 반환만
+    % 쓰면 그대로 호환(MATLAB 다중 반환). issues 비면 통과.
     % v3-lint: i_makePanelState / i_hasButtonText 제거 — board-off 새 policy 에서 미사용.
     issues = {};
     if sum(st.BoardOffState) > 1
@@ -1597,6 +1601,18 @@ function [ok, msg] = i_validateState(st, exp) %#ok<*AGROW>
     else
         msg = sprintf('%s\nState snapshot: %s', strjoin(issues, '; '), i_stateSnapshot(st, exp));
     end
+end
+
+function joined = i_recordValidationIssues(progressFile, caseIdx, stepIdx, issues)
+    % A3: 검증 불일치 항목을 progress.md 에 줄별(VALIDATION_ISSUE) 기록하고
+    % 개행 결합 문자열을 반환(r.issues 저장용 — case.md 에서 항목별 출력).
+    joined = '';
+    if nargin < 4 || isempty(issues) || ~iscell(issues), return; end
+    for k = 1:numel(issues)
+        item = char(issues{k});
+        i_appendProgressMd(progressFile, caseIdx, stepIdx, 'VALIDATION_ISSUE', item);
+    end
+    joined = strjoin(cellfun(@char, issues, 'UniformOutput', false), sprintf('\n'));
 end
 
 function s = i_boolVecString(v)
@@ -2776,6 +2792,16 @@ function i_writeCaseMd(outDir, idx, tc, r)
 
     if ~isempty(r.error)
         fprintf(fid, '\n## Failure Detail\n```\n%s\n```\n', r.error);
+    end
+    if isfield(r, 'issues') && ~isempty(r.issues)
+        % A3: 검증 불일치 항목 항목별(bullet) 출력
+        fprintf(fid, '\n## Validation Issues\n');
+        lines = strsplit(char(r.issues), sprintf('\n'));
+        for k = 1:numel(lines)
+            if ~isempty(strtrim(lines{k}))
+                fprintf(fid, '- %s\n', lines{k});
+            end
+        end
     end
     if isfield(r, 'captureError') && ~isempty(r.captureError)
         fprintf(fid, '\n## Capture Failure (secondary)\n```\n%s\n```\n', r.captureError);
