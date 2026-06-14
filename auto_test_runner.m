@@ -2703,6 +2703,11 @@ function i_appendProgressMd(progressFile, caseIdx, stepIdx, status, detail)
             caseIdx, stepIdx, i_mdEscape(status), i_mdEscape(detail));
     catch
     end
+    % #2: 진단상 중요한 이벤트는 즉시 디스크 반영(close → 다음 append 자동 재오픈).
+    % 평상시 step append 는 빠른 persistent-fid 경로 유지. 하드 크래시 resilience 회복.
+    if any(strcmp(status, {'FAIL', 'EXCEPTION', 'SETUP_FAIL', 'CAPTURE_FAIL', 'CHUNK_FINISHED'}))
+        i_progressMdHandle('close', '');
+    end
 end
 
 function fid = i_progressMdHandle(mode, progressFile)
