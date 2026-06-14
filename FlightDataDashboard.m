@@ -420,7 +420,10 @@
             catch ME
                 app.logCaught(ME, 'delete:worker-cache-cleanup');
                 % [A1] parfevalOnAll 예외 시에도 클라이언트 측 정리 보장
-                try cleanupAsyncDecodeCache(); catch; end
+                try
+                    cleanupAsyncDecodeCache();
+                catch
+                end
             end
 
             % [Phase 1 D2] stop debounce + autosave timers before tearing down UI
@@ -660,7 +663,10 @@
                     try
                         app.autoLoadProjectFromFile(varargin{1});
                     catch ME
-                        try app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad'); catch; end
+                        try
+                            app.logCaught(ME, 'test:editDialogOpenProjectFromPath:autoLoad');
+                        catch
+                        end
                     end
                     app.safeRefreshEditDialog('test:editDialogOpenProjectFromPath:refresh');
                 case 'setVideoViewerVisible',         app.setVideoViewerVisible(varargin{:});
@@ -7045,7 +7051,10 @@
             try
                 app.autoLoadProjectFromFile(fullfile(pn, fn));   % v-fixE: load 예외 격리
             catch ME
-                try app.logCaught(ME, 'editDialogOpenProject:autoLoad'); catch; end
+                try
+                    app.logCaught(ME, 'editDialogOpenProject:autoLoad');
+                catch
+                end
             end
             app.safeRefreshEditDialog('editDialogOpenProject:refresh');
         end
@@ -7057,7 +7066,10 @@
             try
                 app.autoLoadProjectFromFile(app.ProjectFilePath);   % v-fix: load 예외가 refresh 로 전파되지 않도록 격리
             catch ME
-                try app.logCaught(ME, 'editDialogAutoLoad:autoLoad'); catch; end
+                try
+                    app.logCaught(ME, 'editDialogAutoLoad:autoLoad');
+                catch
+                end
             end
             app.safeRefreshEditDialog('editDialogAutoLoad:refresh');
         end
@@ -7078,7 +7090,10 @@
             try
                 app.refreshEditDialog();
             catch ME
-                try app.logCaught(ME, tag); catch; end
+                try
+                    app.logCaught(ME, tag);
+                catch
+                end
             end
         end
 
@@ -8770,7 +8785,10 @@
                 try
                     app.stopFlightPlay(fIdx);
                 catch ME_stop
-                    try app.logCaught(ME_stop, 'flight-play:collapse-stop'); catch; end
+                    try
+                        app.logCaught(ME_stop, 'flight-play:collapse-stop');
+                    catch
+                    end
                 end
                 if isfield(app.UI(fIdx), 'flightPlayControlPanel') && ~isempty(app.UI(fIdx).flightPlayControlPanel) ...
                         && isvalid(app.UI(fIdx).flightPlayControlPanel)
@@ -8890,7 +8908,10 @@
                         app.FlightPlayActive(fIdx) = false;
                         if numel(app.FlightPlayTimer) >= fIdx && ~isempty(app.FlightPlayTimer{fIdx}) ...
                                 && isvalid(app.FlightPlayTimer{fIdx})
-                            try stop(app.FlightPlayTimer{fIdx}); catch; end
+                            try
+                                stop(app.FlightPlayTimer{fIdx});
+                            catch
+                            end
                             delete(app.FlightPlayTimer{fIdx});
                         end
                         app.FlightPlayTimer{fIdx} = [];
@@ -9113,7 +9134,10 @@
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
-                                try h.Layout.Row = 2; h.Layout.Column = cols(b); catch; end
+                                try
+                                    h.Layout.Row = 2; h.Layout.Column = cols(b);
+                                catch
+                                end
                             end
                         end
                         if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
@@ -9127,7 +9151,10 @@
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
-                                try h.Layout.Row = 1; h.Layout.Column = cols(b); catch; end
+                                try
+                                    h.Layout.Row = 1; h.Layout.Column = cols(b);
+                                catch
+                                end
                             end
                         end
                         if isfield(app.UI(fIdx), 'ctrlFGrid') && ~isempty(app.UI(fIdx).ctrlFGrid) ...
@@ -13775,7 +13802,10 @@
             dlg = uifigure('Name', sprintf('동기시간 찾기 - Flight Data %d (%s)', fIdx, yCol), ...
                 'Position', [200 200 560 460], 'Color', t.dialogBg);
             app.SyncSearchDialogs{fIdx} = dlg;
-            try dlg.AutoResizeChildren = 'off'; catch; end
+            try
+                dlg.AutoResizeChildren = 'off';
+            catch
+            end
             gl = uigridlayout(dlg, [4 4], 'RowHeight', {32, '1x', 32, 36}, ...
                 'ColumnWidth', {'1x', 90, 90, 90}, 'Padding', [8 8 8 8], ...
                 'RowSpacing', 6, 'ColumnSpacing', 6, 'BackgroundColor', t.dialogBg);
@@ -13837,8 +13867,14 @@
                 cand = {};
                 if ~isempty(app.EditDialog), cand(end+1,:) = {app.EditDialog, 'editdialog'}; end
                 for fk = 1:numel(app.UI)
-                    try cand(end+1,:) = {app.UI(fk).vidControlDialog, sprintf('vidctrl_f%d', fk)}; catch; end %#ok<AGROW>
-                    try cand(end+1,:) = {app.UI(fk).vidViewerDialog,  sprintf('vidview_f%d', fk)}; catch; end %#ok<AGROW>
+                    try
+                        cand(end+1,:) = {app.UI(fk).vidControlDialog, sprintf('vidctrl_f%d', fk)}; %#ok<AGROW>
+                    catch
+                    end
+                    try
+                        cand(end+1,:) = {app.UI(fk).vidViewerDialog,  sprintf('vidview_f%d', fk)}; %#ok<AGROW>
+                    catch
+                    end
                 end
                 for fk = 1:numel(app.SyncSearchDialogs)
                     cand(end+1,:) = {app.SyncSearchDialogs{fk}, sprintf('syncsearch_f%d', fk)}; %#ok<AGROW>
@@ -13905,10 +13941,16 @@
                     infoLbl.Text = '검색 결과 없음 (유효 숫자값 없음).';
                 elseif any(rows(:,4) == target)   % Value 열 = 4
                     infoLbl.Text = sprintf('일치 %d개 표시.', size(rows,1));
-                    try resTable.Selection = [1 1]; catch; end
+                    try
+                        resTable.Selection = [1 1];
+                    catch
+                    end
                 else
                     infoLbl.Text = sprintf('일치값 없음 → 가장 가까운 %d개 표시.', size(rows,1));
-                    try resTable.Selection = [app.syncSearchClosestDisplayRow(rows), 1]; catch; end
+                    try
+                        resTable.Selection = [app.syncSearchClosestDisplayRow(rows), 1];
+                    catch
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'sync-search:run');
@@ -14183,7 +14225,10 @@
                     app.IsUpdating(fIdx) = logical(prevUpdating);
                 end
             catch ME
-                try app.logCaught(ME, 'restoreVideoSyncFlags'); catch; end
+                try
+                    app.logCaught(ME, 'restoreVideoSyncFlags');
+                catch
+                end
             end
         end
 
@@ -14195,7 +14240,10 @@
                     app.IsUpdating(fIdx) = logical(prevValue);
                 end
             catch ME
-                try app.logCaught(ME, 'restoreIsUpdating'); catch; end
+                try
+                    app.logCaught(ME, 'restoreIsUpdating');
+                catch
+                end
             end
         end
     end
