@@ -180,6 +180,7 @@
         BoardOffSourceRatio  = 1.0             % [v4-R1] off: source 100% (summary dropped). active board shown alone. (clamp 0.5~1.0)
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
+        Path3DVisible        = [false, false]  % [3D Path P1] desired dialog visibility for project round-trip/board-off restore
 
         % [Audit fix #1] Edit dialog UI handles (all default to [])
         EditDialogStatusLbl  = []
@@ -377,6 +378,17 @@
                     catch ME
                         app.logCaught(ME, 'delete:vid-control-dialog');
                     end
+                    try
+                        if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
+                           isfield(app.UI(fIdx), 'path3DDialog') && ...
+                           ~isempty(app.UI(fIdx).path3DDialog) && isvalid(app.UI(fIdx).path3DDialog)
+                            app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).path3DDialog, 'delete:path3D-dialog-axes');
+                            delete(app.UI(fIdx).path3DDialog);
+                            app.UI(fIdx).path3DDialog = [];
+                        end
+                    catch ME
+                        app.logCaught(ME, 'delete:path3D-dialog');
+                    end
                     % VideoReader cleanup
                     try
                         if ~isempty(app.VideoState(fIdx).videoReader) && ...
@@ -513,6 +525,13 @@
                            'altBounds', struct('minAlt',0, 'maxAlt',0), ...
                            'currentIndex', 1, 'selectedRow', 1, 'isMockData', false, ...
                            'dataFilePath', '', 'aviFilePath', '', 'optionFilePath', '');
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+            model.wayPoints = wayPoints;
+            model.bodyAttitude = bodyAttitude;
+            model.option = struct();
+            model.option.wayPoints = wayPoints;
+            model.option.bodyAttitude = bodyAttitude;
         end
 
         function varargout = testHook(app, methodName, varargin)
@@ -533,6 +552,7 @@
                         case 'attitude', btn = app.UI(fIdx).btnAtt;            routeName = 'attitude';
                         case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;    routeName = 'mapOnly';
                         case 'altonly',  btn = app.UI(fIdx).btnAlt;            routeName = 'altOnly';
+                        case {'path3d', '3d'}, btn = app.UI(fIdx).btnPath3D;   routeName = 'path3D';
                         case 'info',     btn = app.UI(fIdx).btnInfo;           routeName = 'info';
                         case {'dataview', 'plot'}, btn = app.UI(fIdx).btnDataView; routeName = 'dataView';
                         case 'video',    btn = app.UI(fIdx).btnVid;            routeName = 'video';
@@ -541,7 +561,9 @@
                                   'Unknown panel toggle: %s', char(pnlName));
                     end
                     % v2-B: if no btn handle, call togglePanel directly (info/dataView header buttons removed)
-                    if isempty(btn) || ~isvalid(btn)
+                    if strcmp(routeName, 'path3D')
+                        app.btnPath3DPushed(fIdx);
+                    elseif isempty(btn) || ~isvalid(btn)
                         app.togglePanel(fIdx, routeName);
                     else
                         cb = btn.ButtonPushedFcn;
@@ -672,6 +694,8 @@
                 case 'setVideoViewerVisible',         app.setVideoViewerVisible(varargin{:});
                 case 'toggleVideoControlDialog',      app.toggleVideoControlDialog(varargin{:});
                 case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
+                case 'setPath3DDialogVisible',        app.setPath3DDialogVisible(varargin{:});
+                case 'getPath3DState',                varargout{1} = app.getPath3DStateForTest();
                 case 'goToFrame',                     app.goToFrame(varargin{:});
                 case 'loadAviFileFromPath',           varargout{1} = app.loadAviFileFromPath(varargin{:});
                 case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
@@ -763,6 +787,8 @@
             end
             state.vidViewerDialogVisible = false(1, 2);
             state.vidControlDialogVisible = false(1, 2);
+            state.path3DDialogVisible = false(1, 2);
+            state.path3DDesiredVisible = logical(app.Path3DVisible);
             try
                 for vIdx = 1:min(2, numel(app.UI))
                     if isfield(app.UI(vIdx), 'vidViewerDialog') && ~isempty(app.UI(vIdx).vidViewerDialog) ...
@@ -772,6 +798,10 @@
                     if isfield(app.UI(vIdx), 'vidControlDialog') && ~isempty(app.UI(vIdx).vidControlDialog) ...
                             && isvalid(app.UI(vIdx).vidControlDialog)
                         state.vidControlDialogVisible(vIdx) = app.isUiVisible(app.UI(vIdx).vidControlDialog);
+                    end
+                    if isfield(app.UI(vIdx), 'path3DDialog') && ~isempty(app.UI(vIdx).path3DDialog) ...
+                            && isvalid(app.UI(vIdx).path3DDialog)
+                        state.path3DDialogVisible(vIdx) = app.isUiVisible(app.UI(vIdx).path3DDialog);
                     end
                 end
             catch ME
@@ -1252,6 +1282,7 @@
             app.IsUpdating(fIdx) = true;
             try
                 app.updateDashboard(fIdx, index);
+                app.updatePath3DAtTime(fIdx, currTime);
                 if abs(app.UI(fIdx).spinner.Value - currTime) > eps
                     app.UI(fIdx).spinner.Value = currTime;
                 end
@@ -1759,6 +1790,7 @@
                 if isfield(app.UI(fIdx), 'btnDataView') && ~isempty(app.UI(fIdx).btnDataView) && isvalid(app.UI(fIdx).btnDataView)
                     app.UI(fIdx).btnDataView.Text = ternary(pv.dataView, 'plot ▾', 'plot ▸');
                 end
+                app.refreshPath3DButton(fIdx);
                 app.applyMapAltVisibility(fIdx);
             catch ME
                 app.logCaught(ME, 'refreshPanelToggleButtons');
@@ -4087,6 +4119,7 @@
             % H panel page turning + marker update (the IsProgrammaticXLim guard of plan A works)
             try
                 app.updatePlotTimeLines(fIdx, idx, currTime);
+                app.updatePath3DAtTime(fIdx, currTime);
             catch ME
                 app.logCaught(ME, 'hpanel-update');
             end
@@ -8013,13 +8046,72 @@
                 mappedCols.(reqKeys{i}) = '';
             end
             displayMeta = struct('header', {}, 'unit', {}, 'format', {}, 'scale', {}, 'order', {});
+            % [Phase1 3D path] additive named sections (backward-compatible).
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
             if ~isempty(optPath) && isfile(optPath)
                 try
                     lines = readlines(optPath, 'EmptyLineRule', 'skip');
                     section = 0;
+                    namedMode = '';   % '', 'waypoint', 'bodyattitude' (named sections; positional 1/2 unaffected)
                     for i = 1:length(lines)
                         lineStr = strtrim(lines(i));
-                        if startsWith(lineStr, '#'), section = section + 1; continue; end
+                        if startsWith(lineStr, '#')
+                            section = section + 1;
+                            hdrTxt = lower(strtrim(erase(char(lineStr), '#')));
+                            if contains(hdrTxt, 'waypoint')
+                                namedMode = 'waypoint';
+                            elseif contains(hdrTxt, 'bodyattitude') || contains(hdrTxt, 'body attitude')
+                                namedMode = 'bodyattitude';
+                            else
+                                namedMode = '';
+                            end
+                            continue;
+                        end
+                        if strcmp(namedMode, 'waypoint')
+                            % row: name = lat, lon, alt[, label]
+                            try
+                                kv = split(char(lineStr), '=');
+                                if numel(kv) >= 2
+                                    nm = strtrim(kv{1});
+                                    vals = split(strtrim(strjoin(kv(2:end), '=')), ',');
+                                    if numel(vals) >= 3
+                                        lat = str2double(strtrim(vals{1}));
+                                        lon = str2double(strtrim(vals{2}));
+                                        alt = str2double(strtrim(vals{3}));
+                                        if numel(vals) >= 4 && ~isempty(strtrim(vals{4}))
+                                            lbl = strtrim(vals{4});
+                                        else
+                                            lbl = nm;
+                                        end
+                                        if isfinite(lat) && isfinite(lon) && isfinite(alt)
+                                            wayPoints(end+1) = struct('label', char(lbl), ...
+                                                'lat', lat, 'lon', lon, 'alt', alt); %#ok<AGROW>
+                                        else
+                                            app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                                        end
+                                    else
+                                        app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                                    end
+                                else
+                                    app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                                end
+                            catch
+                                app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                            end
+                            continue;
+                        elseif strcmp(namedMode, 'bodyattitude')
+                            % key: bodyX/bodyY/bodyZ = columnName
+                            kv = split(char(lineStr), '=');
+                            if numel(kv) >= 2
+                                bk = strtrim(kv{1});
+                                bv = strtrim(strjoin(kv(2:end), '='));
+                                if any(strcmpi(bk, {'bodyX', 'bodyY', 'bodyZ'})) && ismember(bv, csvHeaders)
+                                    bodyAttitude.(['body' upper(bk(end))]) = bv;
+                                end
+                            end
+                            continue;
+                        end
                         if section == 1
                             parts = split(lineStr, ':');
                             if length(parts) >= 2
@@ -8056,7 +8148,9 @@
             end
             draft = struct('sourcePath', char(optPath), ...
                            'mappedCols', mappedCols, ...
-                           'displayMeta', displayMeta);
+                           'displayMeta', displayMeta, ...
+                           'wayPoints', wayPoints, ...
+                           'bodyAttitude', bodyAttitude);
         end
 
         function [ok, info] = validateOptionDraft(app, draft, csvHeaders)
@@ -8079,6 +8173,18 @@
                     end
                     if isnan(draft.displayMeta(i).scale) || draft.displayMeta(i).scale == 0
                         info.reasons{end+1} = sprintf('scale 비정상: %s', draft.displayMeta(i).header);
+                    end
+                end
+                if isfield(draft, 'bodyAttitude') && isstruct(draft.bodyAttitude)
+                    bodyKeys = {'bodyX', 'bodyY', 'bodyZ'};
+                    for bIdx = 1:numel(bodyKeys)
+                        key = bodyKeys{bIdx};
+                        if isfield(draft.bodyAttitude, key)
+                            v = char(draft.bodyAttitude.(key));
+                            if ~isempty(v) && ~ismember(v, csvHeaders)
+                                info.brokenColumns{end+1} = v;
+                            end
+                        end
                     end
                 end
             catch ME
@@ -8157,9 +8263,16 @@
             app.Models(fIdx).selectedRow = 1;
             app.invalidateInfoTableSelection(fIdx);   % v-fix: row meaning changed -> invalidate selection
             app.Models(fIdx).isMockData  = isMock;
+            [wayPoints, bodyAttitude] = app.normalizePath3DOptionDraft(draft, csvHeaders);
+            app.Models(fIdx).wayPoints = wayPoints;
+            app.Models(fIdx).bodyAttitude = bodyAttitude;
+            app.Models(fIdx).option = struct();
+            app.Models(fIdx).option.wayPoints = wayPoints;
+            app.Models(fIdx).option.bodyAttitude = bodyAttitude;
             % Stash the resolved draft as the editor baseline.
             app.OptionDrafts{fIdx} = struct('sourcePath', char(draft.sourcePath), ...
-                                            'mappedCols', mappedCols, 'displayMeta', displayMeta);
+                                            'mappedCols', mappedCols, 'displayMeta', displayMeta, ...
+                                            'wayPoints', wayPoints, 'bodyAttitude', bodyAttitude);
         end
 
         function ok = writeOptionFileAtomic(app, optPath, draft)
@@ -8172,7 +8285,9 @@
                 reqKeys = app.REQ_KEYS;
                 for i = 1:length(reqKeys)
                     v = '';
-                    if isfield(draft.mappedCols, reqKeys{i}), v = char(draft.mappedCols.(reqKeys{i})); end
+                    if isfield(draft.mappedCols, reqKeys{i})
+                        v = char(draft.mappedCols.(reqKeys{i}));
+                    end
                     lines{end+1} = sprintf('%s: %s', reqKeys{i}, v); %#ok<AGROW>
                 end
                 lines{end+1} = '';
@@ -8181,6 +8296,37 @@
                     dm = draft.displayMeta(i);
                     lines{end+1} = sprintf('%s, %s, %s, %d, %g', ...
                         dm.header, dm.unit, dm.format, dm.order, dm.scale); %#ok<AGROW>
+                end
+                if isfield(draft, 'wayPoints') && ~isempty(draft.wayPoints)
+                    lines{end+1} = '';
+                    lines{end+1} = '# WayPoint';
+                    for wpIdx = 1:numel(draft.wayPoints)
+                        wp = draft.wayPoints(wpIdx);
+                        label = sprintf('WP%d', wpIdx);
+                        if isfield(wp, 'label') && ~isempty(wp.label)
+                            label = char(wp.label);
+                        end
+                        lines{end+1} = sprintf('%s = %.10g, %.10g, %.10g, %s', ...
+                            label, double(wp.lat), double(wp.lon), double(wp.alt), label); %#ok<AGROW>
+                    end
+                end
+                if isfield(draft, 'bodyAttitude') && isstruct(draft.bodyAttitude)
+                    ba = draft.bodyAttitude;
+                    bodyLines = {};
+                    if isfield(ba, 'bodyX') && ~isempty(ba.bodyX)
+                        bodyLines{end+1} = sprintf('bodyX = %s', char(ba.bodyX)); %#ok<AGROW>
+                    end
+                    if isfield(ba, 'bodyY') && ~isempty(ba.bodyY)
+                        bodyLines{end+1} = sprintf('bodyY = %s', char(ba.bodyY)); %#ok<AGROW>
+                    end
+                    if isfield(ba, 'bodyZ') && ~isempty(ba.bodyZ)
+                        bodyLines{end+1} = sprintf('bodyZ = %s', char(ba.bodyZ)); %#ok<AGROW>
+                    end
+                    if ~isempty(bodyLines)
+                        lines{end+1} = '';
+                        lines{end+1} = '# BodyAttitude';
+                        lines = [lines, bodyLines]; %#ok<AGROW>
+                    end
                 end
                 txt = sprintf('%s\n', lines{:});
                 ok = app.writeTextFileAtomic(optPath, txt, 'option-write');
@@ -8586,6 +8732,7 @@
             end
             app.refreshFlightPlayControlPanel(fIdx);
             app.refreshBoardOffSummaryPanel(fIdx);
+            app.updatePath3DAtTime(fIdx, currTime);
 
             % [R3] project restore/sync refresh etc. may lose the altitude marker/xline interaction
             % callback, so best-effort re-attach (GUI drag stability + case118).
@@ -8963,6 +9110,7 @@
                     return;
                 end
                 app.applyTimeChange(fIdx, idx + 1);
+                app.updatePath3DAtTime(fIdx, app.getCurrentFlightTime(fIdx));
             catch ME
                 if exist('okIdx', 'var') && okIdx
                     app.stopFlightPlay(fIdx);
@@ -9514,6 +9662,664 @@
             end
         end
 
+        function btnPath3DPushed(app, fIdx)
+            if app.IsDeleting, return; end
+            try
+                if fIdx < 1 || fIdx > 2 || isempty(app.UI) || numel(app.UI) < fIdx
+                    return;
+                end
+                target = true;
+                if numel(app.Path3DVisible) >= fIdx
+                    target = ~logical(app.Path3DVisible(fIdx));
+                end
+                app.setPath3DDialogVisible(fIdx, target);
+            catch ME
+                app.logCaught(ME, 'path3D:button');
+            end
+        end
+
+        function createPath3DDialog(app, fIdx)
+            if app.IsDeleting, return; end
+            if isempty(app.UI) || numel(app.UI) < fIdx
+                return;
+            end
+            try
+                if isfield(app.UI(fIdx), 'path3DDialog') && ~isempty(app.UI(fIdx).path3DDialog) ...
+                        && isvalid(app.UI(fIdx).path3DDialog)
+                    return;
+                end
+            catch
+            end
+
+            fig = [];
+            try
+                t = app.getLightTheme();
+                fig = uifigure('Name', sprintf('3D Path - Flight Data %d', fIdx), ...
+                    'Visible', 'off', 'Position', [160, 160, 800, 600], ...
+                    'Color', t.windowBg, 'CloseRequestFcn', @(~,~) app.closePath3DDialog(fIdx));
+                try
+                    if isprop(fig, 'Resize')
+                        fig.Resize = 'on';
+                    end
+                    if isprop(fig, 'AutoResizeChildren')
+                        fig.AutoResizeChildren = 'off';
+                    end
+                catch ME_fig
+                    app.logCaught(ME_fig, 'path3D:auto-resize');
+                end
+
+                root = uigridlayout(fig, [1 2]);
+                root.Padding = [6 6 6 6];
+                root.ColumnSpacing = 6;
+                root.ColumnWidth = {'1x', 220};
+                root.BackgroundColor = t.windowBg;
+
+                plotGrid = uigridlayout(root, [2 1]);
+                plotGrid.Layout.Column = 1;
+                plotGrid.Padding = [0 0 0 0];
+                plotGrid.RowSpacing = 4;
+                plotGrid.RowHeight = {32, '1x'};
+                plotGrid.BackgroundColor = t.windowBg;
+
+                topRow = uigridlayout(plotGrid, [1 2]);
+                topRow.Layout.Row = 1;
+                topRow.Padding = [0 0 0 0];
+                topRow.ColumnWidth = {100, '1x'};
+                topRow.BackgroundColor = t.windowBg;
+                uibutton(topRow, 'Text', 'Reset View', 'FontSize', 11, ...
+                    'BackgroundColor', t.toolbarGrayBg, 'FontColor', t.toolbarGrayFg, ...
+                    'ButtonPushedFcn', @(~,~) app.path3DAutoFit(fIdx));
+                uilabel(topRow, 'Text', 'X=Lon, Y=Lat, Z=Alt', ...
+                    'HorizontalAlignment', 'right', 'FontColor', t.textSecondary);
+
+                ax = uiaxes(plotGrid);
+                ax.Layout.Row = 2;
+                ax.Color = t.plotAxesBg;
+                ax.XColor = t.plotTickFg;
+                ax.YColor = t.plotTickFg;
+                ax.ZColor = t.plotTickFg;
+                ax.GridColor = t.plotGridColor;
+                xlabel(ax, 'Lon');
+                ylabel(ax, 'Lat');
+                zlabel(ax, 'Alt');
+                grid(ax, 'on');
+                view(ax, 3);
+                try
+                    disableDefaultInteractivity(ax);
+                    ax.Toolbar.Visible = 'off';
+                catch ME_axes
+                    app.logCaught(ME_axes, 'path3D:axes-interaction');
+                end
+
+                sidebar = uipanel(root, 'Title', 'Axis / Display', ...
+                    'BackgroundColor', t.surfaceBg, 'ForegroundColor', t.textPrimary, ...
+                    'FontSize', 12, 'FontWeight', 'bold');
+                sidebar.Layout.Column = 2;
+                sg = uigridlayout(sidebar, [9 3]);
+                sg.Padding = [6 6 6 6];
+                sg.RowSpacing = 5;
+                sg.ColumnSpacing = 5;
+                sg.RowHeight = {22, 28, 28, 28, 28, 28, 28, 32, '1x'};
+                sg.ColumnWidth = {38, '1x', '1x'};
+                sg.BackgroundColor = t.surfaceBg;
+
+                uilabel(sg, 'Text', 'Axis', 'FontWeight', 'bold', 'FontColor', t.textPrimary);
+                uilabel(sg, 'Text', 'Min', 'FontWeight', 'bold', 'FontColor', t.textPrimary);
+                uilabel(sg, 'Text', 'Max', 'FontWeight', 'bold', 'FontColor', t.textPrimary);
+                xMin = app.createPath3DAxisInput(sg, 'X', 2, 1);
+                xMax = app.createPath3DAxisInput(sg, '', 2, 3);
+                yMin = app.createPath3DAxisInput(sg, 'Y', 3, 1);
+                yMax = app.createPath3DAxisInput(sg, '', 3, 3);
+                zMin = app.createPath3DAxisInput(sg, 'Z', 4, 1);
+                zMax = app.createPath3DAxisInput(sg, '', 4, 3);
+                app.createPath3DApplyButton(sg, fIdx, 'x', xMin, xMax, 5);
+                app.createPath3DApplyButton(sg, fIdx, 'y', yMin, yMax, 6);
+                app.createPath3DApplyButton(sg, fIdx, 'z', zMin, zMax, 7);
+                fitBtn = uibutton(sg, 'Text', 'Auto / Fit', 'FontWeight', 'bold', ...
+                    'BackgroundColor', t.toolbarGreenBg, 'FontColor', t.toolbarGreenFg, ...
+                    'ButtonPushedFcn', @(~,~) app.path3DAutoFit(fIdx));
+                fitBtn.Layout.Row = 8;
+                fitBtn.Layout.Column = [1 3];
+
+                app.UI(fIdx).path3DDialog = fig;
+                app.UI(fIdx).path3DAxes = ax;
+                app.UI(fIdx).path3DFullTrajectory = gobjects(0);
+                app.UI(fIdx).path3DPastTrajectory = gobjects(0);
+                app.UI(fIdx).path3DWayPoints = gobjects(0);
+                app.UI(fIdx).path3DDroneTransform = gobjects(0);
+                app.UI(fIdx).path3DDronePatch = gobjects(0);
+                app.UI(fIdx).path3DBodyAxes = gobjects(1, 3);
+                app.UI(fIdx).path3DSidebar = sidebar;
+                app.UI(fIdx).path3DAxisLimitsCtrl = struct( ...
+                    'xMin', xMin, 'xMax', xMax, 'yMin', yMin, 'yMax', yMax, ...
+                    'zMin', zMin, 'zMax', zMax, 'fitBtn', fitBtn);
+                app.applyLightTheme(fig);
+                app.renderPath3DInitial(fIdx);
+            catch ME
+                try
+                    if ~isempty(fig) && isvalid(fig)
+                        delete(fig);
+                    end
+                catch
+                end
+                try
+                    if ~isempty(app.UI) && numel(app.UI) >= fIdx
+                        app.UI(fIdx).path3DDialog = [];
+                    end
+                catch
+                end
+                app.logCaught(ME, 'dialog:path3D:build');
+                rethrow(ME);
+            end
+        end
+
+        function openPath3DDialog(app, fIdx)
+            app.setPath3DDialogVisible(fIdx, true);
+        end
+
+        function closePath3DDialog(app, fIdx)
+            app.setPath3DDialogVisible(fIdx, false);
+        end
+
+        function setPath3DDialogVisible(app, fIdx, tf)
+            if app.IsDeleting, return; end
+            try
+                if fIdx < 1 || fIdx > 2 || isempty(app.UI) || numel(app.UI) < fIdx
+                    return;
+                end
+                app.Path3DVisible(fIdx) = logical(tf);
+                if tf && ~isempty(find(app.BoardOffState, 1))
+                    if isfield(app.UI(fIdx), 'path3DDialog') && ~isempty(app.UI(fIdx).path3DDialog) ...
+                            && isvalid(app.UI(fIdx).path3DDialog)
+                        app.UI(fIdx).path3DDialog.Visible = 'off';
+                    end
+                    app.refreshPath3DButton(fIdx);
+                    return;
+                end
+                if tf
+                    app.createPath3DDialog(fIdx);
+                end
+                dlg = [];
+                if isfield(app.UI(fIdx), 'path3DDialog')
+                    dlg = app.UI(fIdx).path3DDialog;
+                end
+                if isempty(dlg) || ~isvalid(dlg)
+                    app.refreshPath3DButton(fIdx);
+                    return;
+                end
+                if tf
+                    dlg.Visible = 'on';
+                    app.renderPath3DInitial(fIdx);
+                    app.updatePath3DAtTime(fIdx, app.getCurrentFlightTime(fIdx));
+                else
+                    dlg.Visible = 'off';
+                end
+                app.refreshPath3DButton(fIdx);
+            catch ME
+                app.logCaught(ME, 'path3D:setVisible');
+            end
+        end
+
+        function hidePath3DDialogsForBoardOff(app, ~)
+            for vIdx = 1:min(2, numel(app.UI))
+                try
+                    if isfield(app.UI(vIdx), 'path3DDialog') && ~isempty(app.UI(vIdx).path3DDialog) ...
+                            && isvalid(app.UI(vIdx).path3DDialog)
+                        app.UI(vIdx).path3DDialog.Visible = 'off';
+                    end
+                    app.refreshPath3DButton(vIdx);
+                catch ME
+                    app.logCaught(ME, 'path3D:hideForBoardOff');
+                end
+            end
+        end
+
+        function restorePath3DDialogsAfterBoardOn(app, ~)
+            for vIdx = 1:min(2, numel(app.Path3DVisible))
+                try
+                    if logical(app.Path3DVisible(vIdx))
+                        app.setPath3DDialogVisible(vIdx, true);
+                    else
+                        app.refreshPath3DButton(vIdx);
+                    end
+                catch ME
+                    app.logCaught(ME, 'path3D:restoreAfterBoardOn');
+                end
+            end
+        end
+
+        function refreshPath3DButton(app, fIdx)
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'btnPath3D')
+                    return;
+                end
+                btn = app.UI(fIdx).btnPath3D;
+                if isempty(btn) || ~isvalid(btn)
+                    return;
+                end
+                if numel(app.Path3DVisible) >= fIdx && app.Path3DVisible(fIdx)
+                    if ~isempty(find(app.BoardOffState, 1))
+                        btn.Text = '3D 예약';
+                    else
+                        btn.Text = '3D 닫기';
+                    end
+                else
+                    btn.Text = '3D 경로 ▸';
+                end
+            catch ME
+                app.logCaught(ME, 'path3D:button-refresh');
+            end
+        end
+
+        function renderPath3DInitial(app, fIdx)
+            if app.IsDeleting, return; end
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'path3DAxes')
+                    return;
+                end
+                ax = app.UI(fIdx).path3DAxes;
+                if isempty(ax) || ~isvalid(ax)
+                    return;
+                end
+                cla(ax);
+                [ok, times, x, y, z] = app.getPath3DSeries(fIdx);
+                hold(ax, 'on');
+                grid(ax, 'on');
+                xlabel(ax, 'Lon');
+                ylabel(ax, 'Lat');
+                zlabel(ax, 'Alt');
+                view(ax, 3);
+                if ~ok
+                    title(ax, 'No flight data');
+                    app.UI(fIdx).path3DFullTrajectory = gobjects(0);
+                    app.UI(fIdx).path3DPastTrajectory = gobjects(0);
+                    app.UI(fIdx).path3DWayPoints = gobjects(0);
+                    app.UI(fIdx).path3DDronePatch = gobjects(0);
+                    return;
+                end
+                app.UI(fIdx).path3DFullTrajectory = plot3(ax, x, y, z, ':', ...
+                    'LineWidth', 1.2, 'Color', [0.25 0.35 0.45]);
+                app.UI(fIdx).path3DPastTrajectory = plot3(ax, nan, nan, nan, '-', ...
+                    'LineWidth', 2.2, 'Color', [0.00 0.45 0.74]);
+                wayPoints = app.getPath3DWayPoints(fIdx);
+                if ~isempty(wayPoints)
+                    app.UI(fIdx).path3DWayPoints = scatter3(ax, [wayPoints.lon], [wayPoints.lat], [wayPoints.alt], ...
+                        64, [0.86 0.16 0.12], 'filled', 'MarkerEdgeColor', [0.35 0.05 0.02], 'LineWidth', 1.0);
+                else
+                    app.UI(fIdx).path3DWayPoints = gobjects(0);
+                end
+                idx = max(1, min(numel(times), round(app.Models(fIdx).currentIndex)));
+                app.UI(fIdx).path3DDronePatch = plot3(ax, x(idx), y(idx), z(idx), 'o', ...
+                    'MarkerSize', 8, 'MarkerFaceColor', [0.95 0.67 0.10], ...
+                    'MarkerEdgeColor', [0.10 0.10 0.10], 'LineWidth', 1.2);
+                title(ax, sprintf('Flight Data %d 3D Path', fIdx));
+                app.path3DAutoFit(fIdx);
+                app.updatePath3DAtTime(fIdx, times(idx));
+            catch ME
+                app.logCaught(ME, 'path3D:render');
+            end
+        end
+
+        function updatePath3DAtTime(app, fIdx, t)
+            if app.IsDeleting, return; end
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'path3DDialog')
+                    return;
+                end
+                dlg = app.UI(fIdx).path3DDialog;
+                if isempty(dlg) || ~isvalid(dlg) || ~app.isUiVisible(dlg)
+                    return;
+                end
+                [ok, times, x, y, z] = app.getPath3DSeries(fIdx);
+                if ~ok
+                    return;
+                end
+                idx = app.findClosestIndexByTime(times, t);
+                idx = max(1, min(numel(times), idx));
+                if isempty(app.UI(fIdx).path3DPastTrajectory) || ~isvalid(app.UI(fIdx).path3DPastTrajectory) ...
+                        || isempty(app.UI(fIdx).path3DDronePatch) || ~isvalid(app.UI(fIdx).path3DDronePatch)
+                    app.renderPath3DInitial(fIdx);
+                    return;
+                end
+                set(app.UI(fIdx).path3DPastTrajectory, 'XData', x(1:idx), 'YData', y(1:idx), 'ZData', z(1:idx));
+                set(app.UI(fIdx).path3DDronePatch, 'XData', x(idx), 'YData', y(idx), 'ZData', z(idx));
+            catch ME
+                app.logCaught(ME, 'path3D:update');
+            end
+        end
+
+        function bodyAttitude = resolvePath3DAttitudeSource(app, fIdx)
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+            try
+                if fIdx >= 1 && fIdx <= numel(app.Models) && isfield(app.Models(fIdx), 'bodyAttitude')
+                    bodyAttitude = app.Models(fIdx).bodyAttitude;
+                end
+            catch ME
+                app.logCaught(ME, 'path3D:resolve-attitude');
+            end
+        end
+
+        function applyPath3DAxisLimits(app, fIdx, axisName, lo, hi)
+            try
+                if ~isfinite(lo) || ~isfinite(hi) || lo >= hi
+                    return;
+                end
+                ax = app.UI(fIdx).path3DAxes;
+                if isempty(ax) || ~isvalid(ax)
+                    return;
+                end
+                switch lower(char(axisName))
+                    case 'x'
+                        xlim(ax, [lo hi]);
+                    case 'y'
+                        ylim(ax, [lo hi]);
+                    case 'z'
+                        zlim(ax, [lo hi]);
+                end
+            catch ME
+                app.logCaught(ME, 'path3D:axis-apply');
+            end
+        end
+
+        function path3DAutoFit(app, fIdx)
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'path3DAxes')
+                    return;
+                end
+                ax = app.UI(fIdx).path3DAxes;
+                if isempty(ax) || ~isvalid(ax)
+                    return;
+                end
+                [ok, ~, x, y, z] = app.getPath3DSeries(fIdx);
+                if ~ok
+                    return;
+                end
+                wayPoints = app.getPath3DWayPoints(fIdx);
+                if ~isempty(wayPoints)
+                    x = [x(:); reshape([wayPoints.lon], [], 1)];
+                    y = [y(:); reshape([wayPoints.lat], [], 1)];
+                    z = [z(:); reshape([wayPoints.alt], [], 1)];
+                end
+                xLim = app.path3DBounds(x);
+                yLim = app.path3DBounds(y);
+                zLim = app.path3DBounds(z);
+                xlim(ax, xLim);
+                ylim(ax, yLim);
+                zlim(ax, zLim);
+                app.setPath3DAxisCtrlValues(fIdx, xLim, yLim, zLim);
+            catch ME
+                app.logCaught(ME, 'path3D:auto-fit');
+            end
+        end
+
+        function ctrl = createPath3DAxisInput(~, parent, labelText, rowIdx, colIdx)
+            if ~isempty(labelText)
+                lbl = uilabel(parent, 'Text', labelText, 'FontWeight', 'bold');
+                lbl.Layout.Row = rowIdx;
+                lbl.Layout.Column = colIdx;
+                editCol = 2;
+            else
+                editCol = colIdx;
+            end
+            ctrl = uieditfield(parent, 'numeric', 'Value', 0);
+            ctrl.Layout.Row = rowIdx;
+            ctrl.Layout.Column = editCol;
+        end
+
+        function createPath3DApplyButton(app, parent, fIdx, axisName, loCtrl, hiCtrl, rowIdx)
+            btn = uibutton(parent, 'Text', sprintf('%s Apply', upper(char(axisName))), ...
+                'ButtonPushedFcn', @(~,~) app.applyPath3DAxisLimits(fIdx, axisName, loCtrl.Value, hiCtrl.Value));
+            btn.Layout.Row = rowIdx;
+            btn.Layout.Column = [1 3];
+        end
+
+        function setPath3DAxisCtrlValues(app, fIdx, xLim, yLim, zLim)
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'path3DAxisLimitsCtrl')
+                    return;
+                end
+                c = app.UI(fIdx).path3DAxisLimitsCtrl;
+                c.xMin.Value = xLim(1); c.xMax.Value = xLim(2);
+                c.yMin.Value = yLim(1); c.yMax.Value = yLim(2);
+                c.zMin.Value = zLim(1); c.zMax.Value = zLim(2);
+            catch ME
+                app.logCaught(ME, 'path3D:axis-field-refresh');
+            end
+        end
+
+        function lim = path3DBounds(~, values)
+            values = values(isfinite(values));
+            if isempty(values)
+                lim = [0 1];
+                return;
+            end
+            lo = min(values);
+            hi = max(values);
+            if lo == hi
+                pad = max(1, abs(lo) * 0.01);
+            else
+                pad = (hi - lo) * 0.05;
+            end
+            lim = [lo - pad, hi + pad];
+        end
+
+        function [ok, times, x, y, z] = getPath3DSeries(app, fIdx)
+            ok = false;
+            times = [];
+            x = [];
+            y = [];
+            z = [];
+            try
+                if fIdx < 1 || fIdx > numel(app.Models) || isempty(app.Models(fIdx).rawData)
+                    return;
+                end
+                tbl = app.Models(fIdx).rawData;
+                if height(tbl) == 0 || ~isfield(app.Models(fIdx), 'mappedCols')
+                    return;
+                end
+                cols = app.Models(fIdx).mappedCols;
+                needed = {'Time', 'Lon', 'Lat', 'Alt'};
+                for nIdx = 1:numel(needed)
+                    key = needed{nIdx};
+                    if ~isfield(cols, key) || isempty(cols.(key)) ...
+                            || ~ismember(cols.(key), tbl.Properties.VariableNames)
+                        return;
+                    end
+                end
+                times = double(tbl.(cols.Time)(:));
+                x = double(tbl.(cols.Lon)(:));
+                y = double(tbl.(cols.Lat)(:));
+                z = double(tbl.(cols.Alt)(:));
+                n = min([numel(times), numel(x), numel(y), numel(z)]);
+                if n < 1
+                    return;
+                end
+                times = times(1:n);
+                x = x(1:n);
+                y = y(1:n);
+                z = z(1:n);
+                ok = any(isfinite(x) & isfinite(y) & isfinite(z));
+            catch ME
+                app.logCaught(ME, 'path3D:series');
+            end
+        end
+
+        function wayPoints = getPath3DWayPoints(app, fIdx)
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            try
+                if fIdx < 1 || fIdx > numel(app.Models)
+                    return;
+                end
+                if isfield(app.Models(fIdx), 'option') && isfield(app.Models(fIdx).option, 'wayPoints')
+                    raw = app.Models(fIdx).option.wayPoints;
+                elseif isfield(app.Models(fIdx), 'wayPoints')
+                    raw = app.Models(fIdx).wayPoints;
+                else
+                    raw = wayPoints;
+                end
+                wayPoints = app.normalizeWayPointStruct(raw);
+            catch ME
+                app.logCaught(ME, 'path3D:waypoints');
+            end
+        end
+
+        function currentTime = getCurrentFlightTime(app, fIdx)
+            currentTime = 0;
+            try
+                if isempty(app.Models(fIdx).rawData)
+                    return;
+                end
+                idx = max(1, min(height(app.Models(fIdx).rawData), round(app.Models(fIdx).currentIndex)));
+                timeCol = app.Models(fIdx).mappedCols.Time;
+                currentTime = double(app.Models(fIdx).rawData.(timeCol)(idx));
+            catch
+            end
+        end
+
+        function [wayPoints, bodyAttitude] = normalizePath3DOptionDraft(app, draft, csvHeaders)
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+            try
+                if isfield(draft, 'wayPoints')
+                    wayPoints = app.normalizeWayPointStruct(draft.wayPoints);
+                end
+                if isfield(draft, 'bodyAttitude') && isstruct(draft.bodyAttitude)
+                    keys = {'bodyX', 'bodyY', 'bodyZ'};
+                    for keyIdx = 1:numel(keys)
+                        key = keys{keyIdx};
+                        if isfield(draft.bodyAttitude, key)
+                            value = char(draft.bodyAttitude.(key));
+                            if ~isempty(value) && ismember(value, csvHeaders)
+                                bodyAttitude.(key) = value;
+                            end
+                        end
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'path3D:normalize-option');
+            end
+        end
+
+        function wayPoints = normalizeWayPointStruct(app, raw)
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            try
+                if isempty(raw) || ~isstruct(raw)
+                    return;
+                end
+                for wpIdx = 1:numel(raw)
+                    if ~isfield(raw(wpIdx), 'lat') || ~isfield(raw(wpIdx), 'lon') || ~isfield(raw(wpIdx), 'alt')
+                        app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                        continue;
+                    end
+                    lat = double(raw(wpIdx).lat);
+                    lon = double(raw(wpIdx).lon);
+                    alt = double(raw(wpIdx).alt);
+                    if ~(isfinite(lat) && isfinite(lon) && isfinite(alt))
+                        app.logCaught(MException('FDD:OptionWayPoint', 'invalid row'), 'option:wayPoint:invalidRow');
+                        continue;
+                    end
+                    label = sprintf('WP%d', wpIdx);
+                    if isfield(raw(wpIdx), 'label') && ~isempty(raw(wpIdx).label)
+                        label = char(raw(wpIdx).label);
+                    end
+                    wayPoints(end+1) = struct('label', label, 'lat', lat, 'lon', lon, 'alt', alt); %#ok<AGROW>
+                end
+            catch ME
+                app.logCaught(ME, 'path3D:normalize-waypoints');
+            end
+        end
+
+        function wayPoints = parseOptionWayPoints(app, linesOrText)
+            wayPoints = struct('label', {}, 'lat', {}, 'lon', {}, 'alt', {});
+            try
+                lines = splitlines(string(linesOrText));
+                for lineIdx = 1:numel(lines)
+                    lineStr = strtrim(lines(lineIdx));
+                    if lineStr == "" || startsWith(lineStr, "#")
+                        continue;
+                    end
+                    kv = split(char(lineStr), '=');
+                    if numel(kv) < 2
+                        continue;
+                    end
+                    nm = strtrim(kv{1});
+                    vals = split(strtrim(strjoin(kv(2:end), '=')), ',');
+                    if numel(vals) < 3
+                        continue;
+                    end
+                    lat = str2double(strtrim(vals{1}));
+                    lon = str2double(strtrim(vals{2}));
+                    alt = str2double(strtrim(vals{3}));
+                    label = nm;
+                    if numel(vals) >= 4 && ~isempty(strtrim(vals{4}))
+                        label = strtrim(vals{4});
+                    end
+                    if isfinite(lat) && isfinite(lon) && isfinite(alt)
+                        wayPoints(end+1) = struct('label', char(label), 'lat', lat, 'lon', lon, 'alt', alt); %#ok<AGROW>
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'option:wayPoint:parse');
+            end
+        end
+
+        function bodyAttitude = parseOptionBodyAttitude(app, linesOrText, csvHeaders)
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+            try
+                lines = splitlines(string(linesOrText));
+                for lineIdx = 1:numel(lines)
+                    kv = split(char(strtrim(lines(lineIdx))), '=');
+                    if numel(kv) < 2
+                        continue;
+                    end
+                    bk = strtrim(kv{1});
+                    bv = strtrim(strjoin(kv(2:end), '='));
+                    if any(strcmpi(bk, {'bodyX', 'bodyY', 'bodyZ'})) && ismember(bv, csvHeaders)
+                        bodyAttitude.(['body' upper(bk(end))]) = bv;
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'option:bodyAttitude:parse');
+            end
+        end
+
+        function editDialogApplyPath3DDraft(app, ~)
+            try
+                app.editDialogApplyOptionDraft();
+                for fIdx = 1:2
+                    if app.Path3DVisible(fIdx)
+                        app.renderPath3DInitial(fIdx);
+                        app.updatePath3DAtTime(fIdx, app.getCurrentFlightTime(fIdx));
+                    end
+                end
+            catch ME
+                app.logCaught(ME, 'editDialog:path3DApply');
+            end
+        end
+
+        function state = getPath3DStateForTest(app)
+            state = struct('visible', false(1, 2), 'desiredVisible', logical(app.Path3DVisible), ...
+                'hasAxes', false(1, 2), 'pastPointCount', zeros(1, 2));
+            for vIdx = 1:min(2, numel(app.UI))
+                try
+                    if isfield(app.UI(vIdx), 'path3DDialog') && ~isempty(app.UI(vIdx).path3DDialog) ...
+                            && isvalid(app.UI(vIdx).path3DDialog)
+                        state.visible(vIdx) = app.isUiVisible(app.UI(vIdx).path3DDialog);
+                    end
+                    if isfield(app.UI(vIdx), 'path3DAxes') && ~isempty(app.UI(vIdx).path3DAxes) ...
+                            && isvalid(app.UI(vIdx).path3DAxes)
+                        state.hasAxes(vIdx) = true;
+                    end
+                    if isfield(app.UI(vIdx), 'path3DPastTrajectory') && ~isempty(app.UI(vIdx).path3DPastTrajectory) ...
+                            && isvalid(app.UI(vIdx).path3DPastTrajectory)
+                        state.pastPointCount(vIdx) = numel(app.UI(vIdx).path3DPastTrajectory.XData);
+                    end
+                catch ME
+                    app.logCaught(ME, 'test:path3D-state');
+                end
+            end
+        end
+
         function onVideoResolutionChanged(app, fIdx)
             % v4-R2: removed dialog auto-show on resolution change. update frame/display only.
             try
@@ -9826,6 +10632,7 @@
                     app.restoreBoardPanelState(fIdx);
                     app.restoreBoardPanelState(sourceIdx);
                     app.restoreVideoViewersAfterBoardOn();   % v5-A
+                    app.restorePath3DDialogsAfterBoardOn(fIdx);
                     if isfield(app.UI(fIdx), 'boardOffSignature')
                         app.UI(fIdx).boardOffSignature = '';
                     end
@@ -9839,6 +10646,7 @@
                     app.captureBoardPanelState(sourceIdx);
                     app.BoardOffState(fIdx) = true;
                     app.hideVideoViewersForBoardOff();   % v5-A: policy - do not show Video Player during board-off
+                    app.hidePath3DDialogsForBoardOff(fIdx);
                     app.setUiVisible(app.UI(fIdx).panel, false);
                     if isfield(app.UI(fIdx), 'boardOffPanel')
                         app.setUiVisible(app.UI(fIdx).boardOffPanel, true);
@@ -11106,6 +11914,7 @@
                 end
                 if offIdx >= 1 && offIdx <= 2
                     app.BoardOffState(offIdx) = true;
+                    app.hidePath3DDialogsForBoardOff(offIdx);
                     app.setUiVisible(app.UI(offIdx).panel, false);
                     sourceIdx = app.getBoardOffSourceIdx(offIdx);
                     if sourceIdx >= 1 && sourceIdx <= numel(app.UI)
@@ -11117,6 +11926,7 @@
                     for k = 1:min(2, numel(app.UI))
                         app.applyBoardNormal(k);
                     end
+                    app.restorePath3DDialogsAfterBoardOn(0);
                 end
             catch ME
                 app.logCaught(ME, 'layoutPreset:boardOff');
@@ -12253,7 +13063,7 @@
                         'pitchGaugeGrid', {}, 'rollGaugeGrid', {}, 'hdgGaugeGrid', {}, ...
                         'panelMapAlt', {}, 'panelInfo', {}, 'panelDataView', {}, 'panelVideo', {}, 'colSplitters', {}, ...
                         'arrangementMode', {}, 'ctrlGrid', {}, 'ctrlRowPanel', {}, 'ctrlFGrid', {}, ...
-                        'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnInfo', {}, 'btnDataView', {}, 'btnVid', {}, 'PanelVisible', {}, ...
+                        'btnAtt', {}, 'btnMap', {}, 'btnAlt', {}, 'btnPath3D', {}, 'btnInfo', {}, 'btnDataView', {}, 'btnVid', {}, 'PanelVisible', {}, ...
                         'btnFlightPlayControl', {}, 'flightPlayHostGrid', {}, 'flightPlayControlPanel', {}, 'flightPlayGrid', {}, ...
                         'flightPlayStatusLabel', {}, 'flightPlaySlider', {}, 'flightPlayFrameInput', {}, 'flightPlayTimeInput', {}, ...
                         'flightPlayBtnBack20', {}, 'flightPlayBtnBack10', {}, 'flightPlayBtnPrev', {}, 'flightPlayBtnNext', {}, ...
@@ -12262,6 +13072,9 @@
                         'vidSyncFrameInput', {}, 'vidSyncTimeInput', {}, 'vidSyncBtn', {}, 'vidSyncStatus', {}, ...
                         'vidVideoFpsInput', {}, 'vidDataFpsInput', {}, ...
                         'vidFrameAxes', {}, 'vidFrameXLine', {}, 'vidFrameMarker', {}, ...
+                        'path3DDialog', {}, 'path3DAxes', {}, 'path3DFullTrajectory', {}, 'path3DPastTrajectory', {}, ...
+                        'path3DWayPoints', {}, 'path3DDroneTransform', {}, 'path3DDronePatch', {}, 'path3DBodyAxes', {}, ...
+                        'path3DSidebar', {}, 'path3DAxisLimitsCtrl', {}, ...
                         'vidCacheBudget', {}, 'vidVdubSlider', {}, 'vidVdubLabel', {}, ...
                         'boardOffPanel', {}, 'boardOffTable', {}, 'boardOffTabGroup', {}, ...
                         'boardOffPlotTabs', {}, 'boardOffPlotLayouts', {}, 'boardOffPlotAxes', {}, ...
@@ -12292,10 +13105,10 @@
 
                 controlPanel = uipanel(fGrid, 'BackgroundColor', tT.headerBg, 'ForegroundColor', tT.textInverse, 'BorderType', 'line');
                 % [L1 B-1/L2] independent map/altitude/info/plot/video toggles.
-                % v2-B: removed the visible info/plot buttons in the header - 11->9 col
-                glCtrl = uigridlayout(controlPanel, [1 9]);
+                % v2-B: removed the visible info/plot buttons in the header; 3D Path adds one control button.
+                glCtrl = uigridlayout(controlPanel, [1 10]);
                 glCtrl.BackgroundColor = tT.headerBg;
-                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
+                glCtrl.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 80, 70};
                 glCtrl.RowHeight = {'1x'};
                 glCtrl.Padding = [2 2 2 2];
                 UI_temp(fIdx).ctrlGrid = glCtrl;            % v-fix7: for responsive 2-row switching
@@ -12323,13 +13136,17 @@
                     'BackgroundColor', tT.toolbarBlueBg, 'FontColor', tT.toolbarBlueFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'altOnly'));
                 UI_temp(fIdx).btnAlt.Layout.Column = 8;
+                UI_temp(fIdx).btnPath3D = uibutton(glCtrl, 'Text', '3D 경로 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
+                    'BackgroundColor', tT.toolbarGreenBg, 'FontColor', tT.toolbarGreenFg, ...
+                    'ButtonPushedFcn', @(~,~) app.btnPath3DPushed(fIdx));
+                UI_temp(fIdx).btnPath3D.Layout.Column = 9;
                 % v2-B: removed btnInfo/btnDataView (PanelVisible.info/dataView kept true internally)
                 UI_temp(fIdx).btnInfo = gobjects(0);
                 UI_temp(fIdx).btnDataView = gobjects(0);
                 UI_temp(fIdx).btnVid = uibutton(glCtrl, 'Text', '비디오 ▸', 'FontSize', 11, 'FontWeight', 'bold', ...
                     'BackgroundColor', tT.toolbarDarkBg, 'FontColor', tT.toolbarDarkFg, ...
                     'ButtonPushedFcn', @(~,~) app.togglePanel(fIdx, 'video'));
-                UI_temp(fIdx).btnVid.Layout.Column = 9;
+                UI_temp(fIdx).btnVid.Layout.Column = 10;
                 UI_temp(fIdx).PanelVisible = struct( ...
                     'attitude', false, 'mapOnly', false, 'altOnly', false, 'video', false, ...
                     'info', true, 'dataView', true);
@@ -12661,6 +13478,7 @@
                     'btnAtt',           u.btnAtt, ...
                     'btnMap',           u.btnMap, ...
                     'btnAlt',           u.btnAlt, ...
+                    'btnPath3D',        u.btnPath3D, ...
                     'btnInfo',          u.btnInfo, ...
                     'btnDataView',      u.btnDataView, ...
                     'btnVid',           u.btnVid);
@@ -12935,6 +13753,7 @@
                 'BoardOffSourceRatio', 1.0, ...
                 'BodyRowSplitRatio', 0.5, ...
                 'BodyRowHeight', {{'1x', app.LAYOUT_SPLITTER_THICKNESS, '1x', 0}}, ...
+                'Path3DVisible', [false, false], ...
                 'PanelVisible', [panel, panel]);
             layout.ColumnWidth = cell(1, 2);
             layout.LayoutPresets = struct('Name', {}, 'SavedAt', {}, 'Layout', {});
@@ -13107,6 +13926,7 @@
             layout.BoardOffState = logical(app.BoardOffState);
             layout.BoardOffSourceRatio = double(app.BoardOffSourceRatio);
             layout.BodyRowSplitRatio = double(app.BodyRowSplitRatio);
+            layout.Path3DVisible = logical(app.Path3DVisible);
             try
                 if ~isempty(app.BodyGrid) && isvalid(app.BodyGrid)
                     layout.BodyRowHeight = app.BodyGrid.RowHeight;
@@ -13188,6 +14008,10 @@
                 else
                     app.applyBodyGridRowHeights();
                 end
+                app.Path3DVisible = logical(layout.Path3DVisible);
+                for fIdx = 1:2
+                    app.setPath3DDialogVisible(fIdx, app.Path3DVisible(fIdx));
+                end
                 app.updateBoardToggleButtons();
                 app.updateLayoutPresetButtons();
                 drawnow limitrate;
@@ -13220,6 +14044,11 @@
             layout.BoardOffSourceRatio = max(0.5, min(1.0, double(layout.BoardOffSourceRatio)));
             layout.BodyRowSplitRatio = max(0.2, min(0.8, double(layout.BodyRowSplitRatio)));
             layout.BodyRowHeight = app.normalizeBodyRowHeight(layout.BodyRowHeight);
+            p3 = logical(layout.Path3DVisible);
+            if numel(p3) < 2
+                p3 = def.Path3DVisible;
+            end
+            layout.Path3DVisible = [p3(1), p3(2)];
             layout.ColumnWidth = app.normalizeLayoutColumnWidth(layout.ColumnWidth);
             panels = def.PanelVisible;
             if isfield(layout, 'PanelVisible') && isstruct(layout.PanelVisible)

@@ -39,6 +39,16 @@ progress 로그: progress_NNN-NNN.md 의 해당 STEP 라인
 caseNN.md Failure Detail 전문
 ```
 
+## K-PATH3D — 3D Path Phase 1 수동 검증
+```matlab
+app = FlightDataDashboard;
+```
+- `3D 경로` 버튼으로 Flight 1/2 다이얼로그 open/close.
+- 시간 spinner 또는 plot marker 이동 시 solid past trajectory 길이 변경 확인.
+- board-off 진입 시 열린 3D Path 창이 숨겨지고 board-on 복귀 시 다시 표시되는지 확인.
+- `# WayPoint` 섹션이 있는 option 파일 로드 시 waypoint 점 표시 확인.
+- project 저장/로드 후 `3D 경로` 표시 상태가 복원되는지 확인.
+
 ## 부록 — 적용 패치 커밋 표
 
 | 커밋 | 내용 | 영향 범위 |
