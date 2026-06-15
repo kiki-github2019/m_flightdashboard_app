@@ -2115,6 +2115,12 @@ function st = i_mutateProjectFixtureStruct(st, kind, fixtureDir)
             if isfield(st, 'Version'), st.Version = 1; end
         case 'extra_unknown_fields'
             st.UnknownFutureField = struct('Value', 42, 'Text', 'ignored by restore');
+        case 'no_path3d'
+            % [C2] simulate an old project saved before Path3DVisible existed in the layout
+            if isfield(st, 'UiState') && isfield(st.UiState, 'Layout') ...
+                    && isfield(st.UiState.Layout, 'Path3DVisible')
+                st.UiState.Layout = rmfield(st.UiState.Layout, 'Path3DVisible');
+            end
         otherwise
             error('AutoTest:UnknownProjectFixtureKind', 'Unknown project fixture kind: %s', char(kind));
     end
@@ -3471,6 +3477,9 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('I-PROJECT-RESTORE','I-PROJECT-RESTORE-22 edit dialog project open path', ...
         'project restore through edit dialog', 'EditDialog stays visible and project path is restored', ...
         {BVR('reset board-off'), PRE('full', 'open fixture through edit dialog')});
+    cases(end + 1) = mk('I-PROJECT-RESTORE','I-PROJECT-RESTORE-23 no_path3d backward-compat fixture', ...
+        'project restore backward-compat', 'old project without Path3DVisible restores with no validation issues', ...
+        {BVR('reset board-off'), PR('no_path3d', 'restore: no_path3d')});
 
     % J-PANEL-SYNC: cross-panel state propagation for main, edit, video, and flight-play controls.
     for jIdx = 1:10
