@@ -698,6 +698,7 @@
                 case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
                 case 'setPath3DDialogVisible',        app.setPath3DDialogVisible(varargin{:});
                 case 'getPath3DState',                varargout{1} = app.getPath3DStateForTest();
+                case 'getEditDialogStatus',           varargout{1} = app.getEditDialogStatusForTest();
                 case 'path3DYawNedToEnu',             varargout{1} = app.path3DYawNedToEnu(varargin{:});
                 case 'goToFrame',                     app.goToFrame(varargin{:});
                 case 'loadAviFileFromPath',           varargout{1} = app.loadAviFileFromPath(varargin{:});
@@ -10639,6 +10640,18 @@
                 end
             catch ME
                 app.logCaught(ME, 'editDialog:path3DApply');
+            end
+        end
+
+        function s = getEditDialogStatusForTest(app)
+            % [C6] read-only: current EditDialog status label text (for ATR transition checks).
+            s = '';
+            try
+                if ~isempty(app.EditDialogStatusLbl) && isvalid(app.EditDialogStatusLbl)
+                    s = char(app.EditDialogStatusLbl.Text);
+                end
+            catch ME
+                app.logCaught(ME, 'test:editDialogStatus');
             end
         end
 

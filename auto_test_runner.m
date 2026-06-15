@@ -924,6 +924,26 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                     'board %d 3D Path past invalid after timer update (count=%d consistent=%d finite=%d)', ...
                     fIdx, ps.pastPointCount(fIdx), ps.pastXYZConsistent(fIdx), ps.pastHasFinite(fIdx));
             end
+        case 'assertEditDialogStatusTransitions'
+            % [C6] EditDialog status label state machine - reachable transitions only.
+            % Not asserted (no safe hook): initial ready-state (fragile under dialog reuse),
+            % changed-state (needs a field-edit hook), error-state (needs forced apply/save failure).
+            % Korean literals below are live UI strings (preserved per UI-string policy).
+            app.testHook('openEditDialog');
+            app.testHook('applyPendingDialogChanges');
+            sApplied = app.testHook('getEditDialogStatus');
+            if ~strcmp(sApplied, '적용됨')
+                error('AutoTest:EditStatus', 'after applyPendingDialogChanges expected applied-status, actual "%s"', sApplied);
+            end
+            projectPath = [tempname() '.fdproj'];
+            i_tempProjectFileRegistry('add', projectPath);
+            app.testHook('saveProjectFile', projectPath);   % set ProjectFilePath so save will not open uiputfile
+            app.testHook('editDialogSaveProject');
+            sSaved = app.testHook('getEditDialogStatus');
+            if ~strcmp(sSaved, '저장됨')
+                error('AutoTest:EditStatus', 'after editDialogSaveProject expected saved-status, actual "%s"', sSaved);
+            end
+            app.testHook('closeEditDialog');
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -3413,6 +3433,9 @@ function cases = i_buildCaseMatrix()
     cases(end + 1) = mk('G-EDIT','G-EDIT-10 close auto-applies pending changes', ...
         'close finalize', 'close 시 pending apply', ...
         {OED('open'), SET('Plot Manager','tab=Plot Manager'), EAP('apply'), CED('close')});
+    cases(end + 1) = mk('G-EDIT','G-EDIT-11 status label transitions (applied/saved)', ...
+        'edit status label', 'applyPendingDialogChanges -> applied, editDialogSaveProject -> saved', ...
+        {struct('fn', 'assertEditDialogStatusTransitions', 'args', {{}}, 'label', 'verify status transitions', 'row', NaN)});
 
     cases(end + 1) = mk('H-FLIGHT-PLAY','H-FLIGHT-PLAY-01 Flight 1 play control panel toggle', ...
         'flight play panel', 'Flight 1 panel toggles without blank row', ...
