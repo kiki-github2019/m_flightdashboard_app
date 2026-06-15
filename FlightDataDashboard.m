@@ -14246,7 +14246,12 @@
                 else
                     app.applyBodyGridRowHeights();
                 end
-                app.Path3DVisible = logical(layout.Path3DVisible);
+                % [#2] backward-compatible: old .fdproj without Path3DVisible -> default false
+                if isfield(layout, 'Path3DVisible') && numel(layout.Path3DVisible) >= 2
+                    app.Path3DVisible = logical(layout.Path3DVisible);
+                else
+                    app.Path3DVisible = [false, false];
+                end
                 for fIdx = 1:2
                     app.setPath3DDialogVisible(fIdx, app.Path3DVisible(fIdx));
                 end
