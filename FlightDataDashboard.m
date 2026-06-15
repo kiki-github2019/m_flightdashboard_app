@@ -904,7 +904,10 @@
                 'path3DAxesValid', false, ...
                 'path3DDroneTransformValid', false, ...
                 'path3DBodyAxesValid', false, ...
-                'path3DPastPointCount', 0);
+                'path3DPastPointCount', 0, ...
+                'path3DWayPointsCount', 0, ...
+                'path3DHasBodyAttitude', false, ...
+                'path3DAttitudeEnabled', false);
         end
 
         function s = collectTestBoardState(app, fIdx)
@@ -961,6 +964,14 @@
                 if isfield(app.UI(fIdx), 'path3DPastTrajectory') && ~isempty(app.UI(fIdx).path3DPastTrajectory) ...
                         && isvalid(app.UI(fIdx).path3DPastTrajectory)
                     s.path3DPastPointCount = numel(app.UI(fIdx).path3DPastTrajectory.XData);
+                end
+                % [#3] 3D path option-derived state (waypoints / attitude source / gate)
+                try
+                    s.path3DWayPointsCount = numel(app.getPath3DWayPoints(fIdx));
+                    [~, hasAtt] = app.resolvePath3DAttitudeSource(fIdx);
+                    s.path3DHasBodyAttitude = logical(hasAtt);
+                    s.path3DAttitudeEnabled = logical(app.Path3DAttitudeEnabled);
+                catch
                 end
                 if isfield(app.UI(fIdx), 'panelAttitudeGrid') && ~isempty(app.UI(fIdx).panelAttitudeGrid) ...
                         && isvalid(app.UI(fIdx).panelAttitudeGrid)
