@@ -53,6 +53,7 @@
         MOCK_STEP_COUNT   = 200     % mock data step count
         VIDEO_THROTTLE_S  = 0.05    % video frame update throttle interval (s)
         SLIDER_THROTTLE_S = 0.03    % [V3.15 item 1] slider update min interval (s) - 33fps cap
+        PATH3D_THROTTLE_S = 0.03    % [#5] 3D Path update min interval (s) on hot drag path - 33fps cap
         VIDEO_DIALOG_FOLLOW_S = 0.18 % [#5] Video dialog follower poll period (s)
         MAX_CACHE_FRAMES  = 200     % [V3.14] absolute upper bound (DynamicCacheLimit applies only at or below this)
         MIN_CACHE_FRAMES  = 5       % [V3.14] absolute lower bound
@@ -124,6 +125,7 @@
         DynamicCacheLimit   = [50, 50]      % [V3.14 item 3] per-flight-path dynamically computed max cache frame count
         CacheBudgetMB       = 100           % [v-fix6] per-flight-path cache memory budget (MB) default 100 - adjustable in GUI
         LastSliderUpdate    = {uint64(0), uint64(0)}  % [PATCH] tic handles (per channel)
+        LastPath3DUpdate    = {uint64(0), uint64(0)}  % [#5] 3D Path update tic handles (per channel)
         LastDragTableUpdate = [uint64(0), uint64(0)]  % [Perf] dataTable throttle (during drag)
         InGoToFrame         = [false, false] % [V3.16] goToFrame re-entry guard flag
         PendingFrame        = [NaN, NaN]     % [V3.17 (1)(9)] latest frame request arriving during processing
@@ -4171,7 +4173,7 @@
             % H panel page turning + marker update (the IsProgrammaticXLim guard of plan A works)
             try
                 app.updatePlotTimeLines(fIdx, idx, currTime);
-                app.updatePath3DAtTime(fIdx, currTime);
+                app.updatePath3DAtTime(fIdx, currTime, true);  % [#5] hot drag path -> throttled
             catch ME
                 app.logCaught(ME, 'hpanel-update');
             end
@@ -10022,8 +10024,12 @@
             end
         end
 
-        function updatePath3DAtTime(app, fIdx, t)
+        function updatePath3DAtTime(app, fIdx, t, allowThrottle)
             if app.IsDeleting, return; end
+            % [#5] opt-in throttle: only hot drag callers pass allowThrottle=true;
+            % one-shot show/restore/render/test paths omit it (synchronous, never skipped).
+            if nargin < 4, allowThrottle = false; end
+            if allowThrottle && app.throttleHit('LastPath3DUpdate', fIdx, app.PATH3D_THROTTLE_S), return; end
             try
                 if isempty(app.UI) || numel(app.UI) < fIdx || ~isfield(app.UI(fIdx), 'path3DDialog')
                     return;
