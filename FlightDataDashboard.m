@@ -4781,6 +4781,95 @@
             drawnow;
             app.refreshBoardOffSummaryPanel(fIdx, true);
         end
+
+        function applyPlotAxesAlignment(app, axList)
+            % [plot-align] equalize inner plot-box left/width across stacked plot axes by
+            % adjusting each axes' enclosing uigridlayout left/right Padding only (no
+            % Position/Layout conflict). Measure-based, non-negative deltas, clamped.
+            % Must NOT be called from hot marker-drag paths.
+            try
+                validAx = gobjects(0);
+                for k = 1:numel(axList)
+                    a = axList{k};
+                    if ~isempty(a) && isvalid(a) && isa(a, 'matlab.ui.control.UIAxes')
+                        validAx(end + 1) = a; %#ok<AGROW>
+                    end
+                end
+                n = numel(validAx);
+                if n < 2, return; end
+                drawnow;   % settle layout so pixel positions are valid before measuring
+                innerLeft = nan(1, n); innerRight = nan(1, n);
+                grids = gobjects(1, n);
+                for k = 1:n
+                    g = validAx(k).Parent;
+                    if isempty(g) || ~isvalid(g) || ~isa(g, 'matlab.ui.container.GridLayout')
+                        return;   % unexpected container -> conservative bail
+                    end
+                    grids(k) = g;
+                    pos = getpixelposition(validAx(k), true);
+                    if numel(pos) ~= 4 || pos(3) <= 0
+                        return;
+                    end
+                    innerLeft(k)  = pos(1);
+                    innerRight(k) = pos(1) + pos(3);
+                end
+                if any(~isfinite(innerLeft)) || any(~isfinite(innerRight)), return; end
+                targetLeft  = max(innerLeft);
+                targetRight = min(innerRight);
+                if targetRight - targetLeft < 20, return; end   % degenerate width -> skip
+                changed = false;
+                for k = 1:n
+                    dL = targetLeft - innerLeft(k);     % >= 0
+                    dR = innerRight(k) - targetRight;   % >= 0
+                    if dL < 0.5 && dR < 0.5, continue; end
+                    pad = grids(k).Padding;
+                    newL = max(0, min(pad(1) + dL, pad(1) + 200));
+                    newR = max(0, min(pad(3) + dR, pad(3) + 200));
+                    grids(k).Padding = [newL, pad(2), newR, pad(4)];
+                    changed = true;
+                end
+                if changed, drawnow; end
+            catch ME
+                app.logCaught(ME, 'plot:align-axes');
+            end
+        end
+
+        function alignPlotAxesInTab(app, fIdx, tabIdx)
+            % [plot-align] align stacked plot axes within one Plot Data tab.
+            try
+                if fIdx < 1 || fIdx > numel(app.UI), return; end
+                if tabIdx < 1 || tabIdx > numel(app.UI(fIdx).plotAxes), return; end
+                app.applyPlotAxesAlignment(app.UI(fIdx).plotAxes{tabIdx});
+            catch ME
+                app.logCaught(ME, 'plot:align-tab');
+            end
+        end
+
+        function alignAllPlotAxes(app, fIdx)
+            % [plot-align] align the currently selected Plot Data tab (conservative:
+            % hidden tabs realign on their own plot/rebuild events).
+            try
+                if fIdx < 1 || fIdx > numel(app.UI), return; end
+                sel = find(app.UI(fIdx).plotTabs == app.UI(fIdx).tabGroup.SelectedTab, 1);
+                if isempty(sel), return; end
+                app.alignPlotAxesInTab(fIdx, sel);
+            catch ME
+                app.logCaught(ME, 'plot:align-all');
+            end
+        end
+
+        function alignBoardOffPlotAxes(app, offIdx)
+            % [plot-align] align stacked summary plot axes in the active board-off tab.
+            try
+                if offIdx < 1 || offIdx > numel(app.UI), return; end
+                if ~isfield(app.UI(offIdx), 'boardOffPlotAxes') || ~isfield(app.UI(offIdx), 'boardOffPlotTabs'), return; end
+                sel = find(app.UI(offIdx).boardOffPlotTabs == app.UI(offIdx).boardOffTabGroup.SelectedTab, 1);
+                if isempty(sel) || sel > numel(app.UI(offIdx).boardOffPlotAxes), return; end
+                app.applyPlotAxesAlignment(app.UI(offIdx).boardOffPlotAxes{sel});
+            catch ME
+                app.logCaught(ME, 'plot:align-boardoff');
+            end
+        end
     end
 
     % =========================================================================
