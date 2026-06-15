@@ -384,15 +384,9 @@
                         app.logCaught(ME, 'delete:vid-control-dialog');
                     end
                     try
-                        if ~isempty(app.UI) && numel(app.UI) >= fIdx && ...
-                           isfield(app.UI(fIdx), 'path3DDialog') && ...
-                           ~isempty(app.UI(fIdx).path3DDialog) && isvalid(app.UI(fIdx).path3DDialog)
-                            app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).path3DDialog, 'delete:path3D-dialog-axes');
-                            delete(app.UI(fIdx).path3DDialog);
-                            app.UI(fIdx).path3DDialog = [];
-                        end
+                        app.deletePath3DResources(fIdx);
                     catch ME
-                        app.logCaught(ME, 'delete:path3D-dialog');
+                        app.logCaught(ME, 'delete:path3D-resources');
                     end
                     % VideoReader cleanup
                     try
@@ -4476,6 +4470,72 @@
                 catch ME_silent
                     app.logCaught(ME_silent, 'deleteGraphicsHandles');
                 end
+            end
+        end
+
+        function deletePath3DResources(app, fIdx)
+            try
+                if isempty(app.UI) || numel(app.UI) < fIdx
+                    return;
+                end
+
+                if isfield(app.UI(fIdx), 'path3DDialog') && ~isempty(app.UI(fIdx).path3DDialog) ...
+                        && isvalid(app.UI(fIdx).path3DDialog)
+                    app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).path3DDialog, 'delete:path3D-dialog-axes');
+                elseif isfield(app.UI(fIdx), 'path3DAxes') && ~isempty(app.UI(fIdx).path3DAxes) ...
+                        && isvalid(app.UI(fIdx).path3DAxes)
+                    app.disableAxesInteractionsBeforeDelete(app.UI(fIdx).path3DAxes, 'delete:path3D-axes');
+                end
+
+                graphicsFields = {'path3DDroneTransform', 'path3DDronePatch', 'path3DBodyAxes', ...
+                    'path3DFullTrajectory', 'path3DPastTrajectory', 'path3DWayPoints'};
+                for fieldIdx = 1:numel(graphicsFields)
+                    fieldName = graphicsFields{fieldIdx};
+                    try
+                        if isfield(app.UI(fIdx), fieldName)
+                            h = app.UI(fIdx).(fieldName);
+                            if ~isempty(h)
+                                validMask = isvalid(h);
+                                if any(validMask(:))
+                                    delete(h(validMask));
+                                end
+                            end
+                        end
+                    catch ME_field
+                        app.logCaught(ME_field, ['delete:path3D:' fieldName]);
+                    end
+                end
+
+                try
+                    if isfield(app.UI(fIdx), 'path3DAxes') && ~isempty(app.UI(fIdx).path3DAxes) ...
+                            && isvalid(app.UI(fIdx).path3DAxes)
+                        delete(app.UI(fIdx).path3DAxes);
+                    end
+                catch ME_axes
+                    app.logCaught(ME_axes, 'delete:path3D-axes');
+                end
+
+                try
+                    if isfield(app.UI(fIdx), 'path3DDialog') && ~isempty(app.UI(fIdx).path3DDialog) ...
+                            && isvalid(app.UI(fIdx).path3DDialog)
+                        delete(app.UI(fIdx).path3DDialog);
+                    end
+                catch ME_dialog
+                    app.logCaught(ME_dialog, 'delete:path3D-dialog');
+                end
+
+                app.UI(fIdx).path3DDialog = [];
+                app.UI(fIdx).path3DAxes = gobjects(0);
+                app.UI(fIdx).path3DFullTrajectory = gobjects(0);
+                app.UI(fIdx).path3DPastTrajectory = gobjects(0);
+                app.UI(fIdx).path3DWayPoints = gobjects(0);
+                app.UI(fIdx).path3DDroneTransform = gobjects(0);
+                app.UI(fIdx).path3DDronePatch = gobjects(0);
+                app.UI(fIdx).path3DBodyAxes = gobjects(1, 3);
+                app.UI(fIdx).path3DSidebar = [];
+                app.UI(fIdx).path3DAxisLimitsCtrl = struct();
+            catch ME
+                app.logCaught(ME, 'delete:path3D');
             end
         end
 
