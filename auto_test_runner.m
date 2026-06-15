@@ -823,6 +823,16 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             end
         case 'setPath3DDialogVisible'
             app.testHook('setPath3DDialogVisible', act.args{:});
+        case 'assertPath3DYawConversion'
+            % #1 ENU<-NED yaw: North(0)->pi/2(+y), East(pi/2)->0(+x), South(pi)->-pi/2.
+            checks = {0, pi/2; pi/2, 0; pi, -pi/2};
+            for cIdx = 1:size(checks, 1)
+                got = app.testHook('path3DYawNedToEnu', checks{cIdx, 1});
+                if ~isfinite(got) || abs(got - checks{cIdx, 2}) > 1e-9
+                    error('AutoTest:Path3DYawConversion', ...
+                        'NED %.4f -> ENU expected %.4f actual %.4f', checks{cIdx, 1}, checks{cIdx, 2}, got);
+                end
+            end
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -3445,6 +3455,9 @@ function cases = i_buildCaseMatrix()
         '3D Path time update', 'past trajectory renders while main current index changes', ...
         {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), ATC(1, 10, 'move F1 time'), ...
          ATC(1, 20, 'move F1 time again'), P3D(1, false, 'close F1 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-06 ENU<-NED yaw conversion', ...
+        '3D Path attitude yaw', 'NED heading -> ENU yaw mapping (North->+y, East->+x)', ...
+        {struct('fn', 'assertPath3DYawConversion', 'args', {{}}, 'label', 'verify yaw conversion', 'row', NaN)});
 
     % K-PANEL-CAPTURE: mandatory external/control-panel capture coverage.
     captureSpecs = { ...

@@ -183,6 +183,7 @@
         CurrentLayoutPreset  = 'custom'        % [L3] active layout preset name
         UserLayoutPresets    = struct('Name', {}, 'SavedAt', {}, 'Layout', {})  % [L5] project-persisted custom layout snapshots
         Path3DVisible        = [false, false]  % [3D Path P1] desired dialog visibility for project round-trip/board-off restore
+        Path3DAttitudeEnabled = false           % [3D Path P2 #4] gate drone attitude rotation; default off until ENU/NED alignment verified
 
         % [Audit fix #1] Edit dialog UI handles (all default to [])
         EditDialogStatusLbl  = []
@@ -698,6 +699,7 @@
                 case 'hideVideoControlDialog',        app.hideVideoControlDialog(varargin{:});
                 case 'setPath3DDialogVisible',        app.setPath3DDialogVisible(varargin{:});
                 case 'getPath3DState',                varargout{1} = app.getPath3DStateForTest();
+                case 'path3DYawNedToEnu',             varargout{1} = app.path3DYawNedToEnu(varargin{:});
                 case 'goToFrame',                     app.goToFrame(varargin{:});
                 case 'loadAviFileFromPath',           varargout{1} = app.loadAviFileFromPath(varargin{:});
                 case 'plotSelectedVariable',          app.plotSelectedVariable(varargin{:});
@@ -10102,6 +10104,10 @@
 
         function R = path3DRotationMatrixAtIndex(app, fIdx, idx)
             R = eye(3);
+            % [#4] attitude gated off by default (identity = position only) until verified
+            if ~app.Path3DAttitudeEnabled
+                return;
+            end
             try
                 [bodyAttitude, hasSource] = app.resolvePath3DAttitudeSource(fIdx);
                 if ~hasSource || fIdx < 1 || fIdx > numel(app.Models) || isempty(app.Models(fIdx).rawData)
@@ -10124,6 +10130,9 @@
                 roll = app.path3DAngleToRadians(vals(1), cols{1}, useDegreeFallback);
                 pitch = app.path3DAngleToRadians(vals(2), cols{2}, useDegreeFallback);
                 yaw = app.path3DAngleToRadians(vals(3), cols{3}, useDegreeFallback);
+                % [#1] ENU<-NED yaw conversion (pure helper, unit-testable).
+                % roll/pitch are body-frame rotations (no ENU/NED difference); kept as-is.
+                yaw = app.path3DYawNedToEnu(yaw);
                 cr = cos(roll);  sr = sin(roll);
                 cp = cos(pitch); sp = sin(pitch);
                 cy = cos(yaw);   sy = sin(yaw);
@@ -10135,6 +10144,12 @@
                 app.logCaught(ME, 'path3D:rotation');
                 R = eye(3);
             end
+        end
+
+        function yawEnu = path3DYawNedToEnu(~, yawNed)
+            % [#1] NED heading (clockwise from North) -> ENU yaw (counter-clockwise from East).
+            % psi_ENU = pi/2 - psi_NED. So North(0)->pi/2 (+y), East(pi/2)->0 (+x), South(pi)->-pi/2.
+            yawEnu = pi/2 - double(yawNed);
         end
 
         function angleRad = path3DAngleToRadians(~, value, columnName, useDegreeFallback)
