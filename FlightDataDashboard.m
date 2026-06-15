@@ -900,6 +900,8 @@
                 'path3DDesiredVisible', false, ...
                 'path3DDialogVisible', false, ...
                 'path3DAxesValid', false, ...
+                'path3DDroneTransformValid', false, ...
+                'path3DBodyAxesValid', false, ...
                 'path3DPastPointCount', 0);
         end
 
@@ -942,6 +944,17 @@
                 if isfield(app.UI(fIdx), 'path3DAxes') && ~isempty(app.UI(fIdx).path3DAxes) ...
                         && isvalid(app.UI(fIdx).path3DAxes)
                     s.path3DAxesValid = true;
+                end
+                if isfield(app.UI(fIdx), 'path3DDroneTransform') && ~isempty(app.UI(fIdx).path3DDroneTransform) ...
+                        && isvalid(app.UI(fIdx).path3DDroneTransform)
+                    s.path3DDroneTransformValid = true;
+                end
+                if isfield(app.UI(fIdx), 'path3DBodyAxes') && ~isempty(app.UI(fIdx).path3DBodyAxes)
+                    try
+                        s.path3DBodyAxesValid = all(isvalid(app.UI(fIdx).path3DBodyAxes));
+                    catch
+                        s.path3DBodyAxesValid = false;
+                    end
                 end
                 if isfield(app.UI(fIdx), 'path3DPastTrajectory') && ~isempty(app.UI(fIdx).path3DPastTrajectory) ...
                         && isvalid(app.UI(fIdx).path3DPastTrajectory)
@@ -9968,7 +9981,9 @@
                     app.UI(fIdx).path3DFullTrajectory = gobjects(0);
                     app.UI(fIdx).path3DPastTrajectory = gobjects(0);
                     app.UI(fIdx).path3DWayPoints = gobjects(0);
+                    app.UI(fIdx).path3DDroneTransform = gobjects(0);
                     app.UI(fIdx).path3DDronePatch = gobjects(0);
+                    app.UI(fIdx).path3DBodyAxes = gobjects(1, 3);
                     return;
                 end
                 fullIdx = app.path3DDecimatedIndices(numel(x), app.PATH3D_FULL_MAX_POINTS);
@@ -9984,9 +9999,7 @@
                     app.UI(fIdx).path3DWayPoints = gobjects(0);
                 end
                 idx = max(1, min(numel(times), round(app.Models(fIdx).currentIndex)));
-                app.UI(fIdx).path3DDronePatch = plot3(ax, x(idx), y(idx), z(idx), 'o', ...
-                    'MarkerSize', 8, 'MarkerFaceColor', [0.95 0.67 0.10], ...
-                    'MarkerEdgeColor', [0.10 0.10 0.10], 'LineWidth', 1.2);
+                app.createPath3DDroneGlyph(fIdx, ax, x, y, z);
                 title(ax, sprintf('Flight Data %d 3D Path', fIdx));
                 app.path3DAutoFit(fIdx);
                 app.updatePath3DAtTime(fIdx, times(idx));
@@ -10012,23 +10025,162 @@
                 idx = app.findClosestIndexByTime(times, t);
                 idx = max(1, min(numel(times), idx));
                 if isempty(app.UI(fIdx).path3DPastTrajectory) || ~isvalid(app.UI(fIdx).path3DPastTrajectory) ...
-                        || isempty(app.UI(fIdx).path3DDronePatch) || ~isvalid(app.UI(fIdx).path3DDronePatch)
+                        || isempty(app.UI(fIdx).path3DDroneTransform) || ~isvalid(app.UI(fIdx).path3DDroneTransform)
                     app.renderPath3DInitial(fIdx);
                     return;
                 end
                 pastIdx = app.path3DDecimatedIndices(idx, app.PATH3D_PAST_MAX_POINTS);
                 set(app.UI(fIdx).path3DPastTrajectory, 'XData', x(pastIdx), 'YData', y(pastIdx), 'ZData', z(pastIdx));
-                set(app.UI(fIdx).path3DDronePatch, 'XData', x(idx), 'YData', y(idx), 'ZData', z(idx));
+                app.UI(fIdx).path3DDroneTransform.Matrix = app.path3DDroneTransformMatrix(fIdx, idx, x(idx), y(idx), z(idx), x, y, z);
             catch ME
                 app.logCaught(ME, 'path3D:update');
             end
         end
 
-        function bodyAttitude = resolvePath3DAttitudeSource(app, fIdx)
-            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+        function createPath3DDroneGlyph(app, fIdx, ax, x, y, z)
             try
-                if fIdx >= 1 && fIdx <= numel(app.Models) && isfield(app.Models(fIdx), 'bodyAttitude')
-                    bodyAttitude = app.Models(fIdx).bodyAttitude;
+                hg = hgtransform('Parent', ax);
+                vertices = [ ...
+                     1.00,  0.00, 0.00; ...
+                     0.00,  0.45, 0.00; ...
+                    -1.00,  0.00, 0.00; ...
+                     0.00, -0.45, 0.00];
+                faces = [1 2 3 4];
+                app.UI(fIdx).path3DDroneTransform = hg;
+                app.UI(fIdx).path3DDronePatch = patch('Parent', hg, ...
+                    'Vertices', vertices, 'Faces', faces, ...
+                    'FaceColor', [0.95 0.67 0.10], 'FaceAlpha', 0.88, ...
+                    'EdgeColor', [0.10 0.10 0.10], 'LineWidth', 1.0);
+                app.UI(fIdx).path3DBodyAxes = gobjects(1, 3);
+                app.UI(fIdx).path3DBodyAxes(1) = line('Parent', hg, 'XData', [0 1.35], 'YData', [0 0], ...
+                    'ZData', [0 0], 'Color', [0.85 0.10 0.10], 'LineWidth', 2.0);
+                app.UI(fIdx).path3DBodyAxes(2) = line('Parent', hg, 'XData', [0 0], 'YData', [0 1.35], ...
+                    'ZData', [0 0], 'Color', [0.10 0.65 0.20], 'LineWidth', 2.0);
+                app.UI(fIdx).path3DBodyAxes(3) = line('Parent', hg, 'XData', [0 0], 'YData', [0 0], ...
+                    'ZData', [0 1.35], 'Color', [0.10 0.25 0.90], 'LineWidth', 2.0);
+                idx = max(1, min(numel(x), round(app.Models(fIdx).currentIndex)));
+                hg.Matrix = app.path3DDroneTransformMatrix(fIdx, idx, x(idx), y(idx), z(idx), x, y, z);
+            catch ME
+                app.logCaught(ME, 'path3D:drone-glyph');
+                app.UI(fIdx).path3DDroneTransform = gobjects(0);
+                app.UI(fIdx).path3DDronePatch = gobjects(0);
+                app.UI(fIdx).path3DBodyAxes = gobjects(1, 3);
+            end
+        end
+
+        function M = path3DDroneTransformMatrix(app, fIdx, idx, x0, y0, z0, x, y, z)
+            M = eye(4);
+            try
+                scales = app.path3DDroneScale(x, y, z);
+                R = app.path3DRotationMatrixAtIndex(fIdx, idx);
+                M(1:3, 1:3) = R * diag(scales);
+                M(1:3, 4) = [double(x0); double(y0); double(z0)];
+            catch ME
+                app.logCaught(ME, 'path3D:drone-transform');
+                M(1:3, 4) = [double(x0); double(y0); double(z0)];
+            end
+        end
+
+        function scales = path3DDroneScale(~, x, y, z)
+            x = x(isfinite(x));
+            y = y(isfinite(y));
+            z = z(isfinite(z));
+            xySpan = 1e-3;
+            zSpan = 1;
+            if ~isempty(x)
+                xySpan = max(xySpan, max(x) - min(x));
+            end
+            if ~isempty(y)
+                xySpan = max(xySpan, max(y) - min(y));
+            end
+            if ~isempty(z)
+                zSpan = max(zSpan, max(z) - min(z));
+            end
+            scales = [xySpan * 0.035, xySpan * 0.035, zSpan * 0.035];
+        end
+
+        function R = path3DRotationMatrixAtIndex(app, fIdx, idx)
+            R = eye(3);
+            try
+                [bodyAttitude, hasSource] = app.resolvePath3DAttitudeSource(fIdx);
+                if ~hasSource || fIdx < 1 || fIdx > numel(app.Models) || isempty(app.Models(fIdx).rawData)
+                    return;
+                end
+                tbl = app.Models(fIdx).rawData;
+                idx = max(1, min(height(tbl), round(double(idx))));
+                cols = {bodyAttitude.bodyX, bodyAttitude.bodyY, bodyAttitude.bodyZ};
+                vals = nan(1, 3);
+                for colIdx = 1:3
+                    if isempty(cols{colIdx}) || ~ismember(cols{colIdx}, tbl.Properties.VariableNames)
+                        return;
+                    end
+                    vals(colIdx) = double(tbl.(cols{colIdx})(idx));
+                end
+                if any(~isfinite(vals))
+                    return;
+                end
+                useDegreeFallback = any(abs(vals) > (2 * pi * 1.2));
+                roll = app.path3DAngleToRadians(vals(1), cols{1}, useDegreeFallback);
+                pitch = app.path3DAngleToRadians(vals(2), cols{2}, useDegreeFallback);
+                yaw = app.path3DAngleToRadians(vals(3), cols{3}, useDegreeFallback);
+                cr = cos(roll);  sr = sin(roll);
+                cp = cos(pitch); sp = sin(pitch);
+                cy = cos(yaw);   sy = sin(yaw);
+                Rx = [1 0 0; 0 cr -sr; 0 sr cr];
+                Ry = [cp 0 sp; 0 1 0; -sp 0 cp];
+                Rz = [cy -sy 0; sy cy 0; 0 0 1];
+                R = Rz * Ry * Rx;
+            catch ME
+                app.logCaught(ME, 'path3D:rotation');
+                R = eye(3);
+            end
+        end
+
+        function angleRad = path3DAngleToRadians(~, value, columnName, useDegreeFallback)
+            lowerName = lower(char(columnName));
+            if contains(lowerName, 'rad')
+                angleRad = double(value);
+            elseif contains(lowerName, 'deg') || useDegreeFallback
+                angleRad = double(value) * pi / 180;
+            else
+                angleRad = double(value);
+            end
+        end
+
+        function [bodyAttitude, hasSource] = resolvePath3DAttitudeSource(app, fIdx)
+            bodyAttitude = struct('bodyX', '', 'bodyY', '', 'bodyZ', '');
+            hasSource = false;
+            try
+                if fIdx < 1 || fIdx > numel(app.Models) || isempty(app.Models(fIdx).rawData)
+                    return;
+                end
+                tbl = app.Models(fIdx).rawData;
+                if isfield(app.Models(fIdx), 'bodyAttitude') && isstruct(app.Models(fIdx).bodyAttitude)
+                    configured = app.Models(fIdx).bodyAttitude;
+                    keys = {'bodyX', 'bodyY', 'bodyZ'};
+                    for keyIdx = 1:numel(keys)
+                        key = keys{keyIdx};
+                        if isfield(configured, key)
+                            bodyAttitude.(key) = char(configured.(key));
+                        end
+                    end
+                    hasSource = all(cellfun(@(key) isfield(bodyAttitude, key) && ...
+                        ~isempty(bodyAttitude.(key)) && ismember(bodyAttitude.(key), tbl.Properties.VariableNames), keys));
+                    if hasSource
+                        return;
+                    end
+                end
+                if isfield(app.Models(fIdx), 'mappedCols')
+                    cols = app.Models(fIdx).mappedCols;
+                    if isfield(cols, 'Roll') && isfield(cols, 'Pitch') && isfield(cols, 'Heading') ...
+                            && ismember(cols.Roll, tbl.Properties.VariableNames) ...
+                            && ismember(cols.Pitch, tbl.Properties.VariableNames) ...
+                            && ismember(cols.Heading, tbl.Properties.VariableNames)
+                        bodyAttitude.bodyX = char(cols.Roll);
+                        bodyAttitude.bodyY = char(cols.Pitch);
+                        bodyAttitude.bodyZ = char(cols.Heading);
+                        hasSource = true;
+                    end
                 end
             catch ME
                 app.logCaught(ME, 'path3D:resolve-attitude');
@@ -10361,7 +10513,8 @@
 
         function state = getPath3DStateForTest(app)
             state = struct('visible', false(1, 2), 'desiredVisible', logical(app.Path3DVisible), ...
-                'hasAxes', false(1, 2), 'pastPointCount', zeros(1, 2));
+                'hasAxes', false(1, 2), 'hasDroneTransform', false(1, 2), ...
+                'hasBodyAxes', false(1, 2), 'pastPointCount', zeros(1, 2));
             for vIdx = 1:min(2, numel(app.UI))
                 try
                     if isfield(app.UI(vIdx), 'path3DDialog') && ~isempty(app.UI(vIdx).path3DDialog) ...
@@ -10375,6 +10528,13 @@
                     if isfield(app.UI(vIdx), 'path3DPastTrajectory') && ~isempty(app.UI(vIdx).path3DPastTrajectory) ...
                             && isvalid(app.UI(vIdx).path3DPastTrajectory)
                         state.pastPointCount(vIdx) = numel(app.UI(vIdx).path3DPastTrajectory.XData);
+                    end
+                    if isfield(app.UI(vIdx), 'path3DDroneTransform') && ~isempty(app.UI(vIdx).path3DDroneTransform) ...
+                            && isvalid(app.UI(vIdx).path3DDroneTransform)
+                        state.hasDroneTransform(vIdx) = true;
+                    end
+                    if isfield(app.UI(vIdx), 'path3DBodyAxes') && ~isempty(app.UI(vIdx).path3DBodyAxes)
+                        state.hasBodyAxes(vIdx) = all(isvalid(app.UI(vIdx).path3DBodyAxes));
                     end
                 catch ME
                     app.logCaught(ME, 'test:path3D-state');

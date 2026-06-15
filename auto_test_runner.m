@@ -1564,6 +1564,15 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
                 && st.boards(fIdx).path3DPastPointCount < 1
             issues{end + 1} = sprintf('board %d 3D Path past trajectory did not render', fIdx);
         end
+        if isfield(st.boards(fIdx), 'path3DDialogVisible') && st.boards(fIdx).path3DDialogVisible ...
+                && st.boards(fIdx).dataLoaded
+            if ~isfield(st.boards(fIdx), 'path3DDroneTransformValid') || ~st.boards(fIdx).path3DDroneTransformValid
+                issues{end + 1} = sprintf('board %d 3D Path drone transform missing', fIdx);
+            end
+            if ~isfield(st.boards(fIdx), 'path3DBodyAxesValid') || ~st.boards(fIdx).path3DBodyAxesValid
+                issues{end + 1} = sprintf('board %d 3D Path body axes missing', fIdx);
+            end
+        end
         if st.boards(fIdx).plotTabCount < exp.minPlotTabCount(fIdx)
             issues{end + 1} = sprintf('board %d plot tab count below expected minimum', fIdx);
         end
