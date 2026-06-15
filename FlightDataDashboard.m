@@ -62,6 +62,8 @@
         WORKER_VR_CACHE_SLOTS = 4    % worker persistent VideoReader LRU slot count
         MAX_SEQ_READ_STEP     = 4    % max step for sequential readFrame (random seek beyond this)
         MAX_PENDING_ITERS     = 10   % goToFrame Pending-drain loop max iterations
+        PATH3D_FULL_MAX_POINTS = 5000 % max rendered points for dotted full 3D trajectory
+        PATH3D_PAST_MAX_POINTS = 3000 % max rendered points for solid past 3D trajectory
     end
 
     properties (Access = public)
@@ -9769,6 +9771,14 @@
                 grid(ax, 'on');
                 view(ax, 3);
                 try
+                    ax.XLimMode = 'manual';
+                    ax.YLimMode = 'manual';
+                    ax.ZLimMode = 'manual';
+                    ax.Clipping = 'on';
+                catch ME_axes_props
+                    app.logCaught(ME_axes_props, 'path3D:axes-props');
+                end
+                try
                     disableDefaultInteractivity(ax);
                     ax.Toolbar.Visible = 'off';
                 catch ME_axes
@@ -9961,7 +9971,8 @@
                     app.UI(fIdx).path3DDronePatch = gobjects(0);
                     return;
                 end
-                app.UI(fIdx).path3DFullTrajectory = plot3(ax, x, y, z, ':', ...
+                fullIdx = app.path3DDecimatedIndices(numel(x), app.PATH3D_FULL_MAX_POINTS);
+                app.UI(fIdx).path3DFullTrajectory = plot3(ax, x(fullIdx), y(fullIdx), z(fullIdx), ':', ...
                     'LineWidth', 1.2, 'Color', [0.25 0.35 0.45]);
                 app.UI(fIdx).path3DPastTrajectory = plot3(ax, nan, nan, nan, '-', ...
                     'LineWidth', 2.2, 'Color', [0.00 0.45 0.74]);
@@ -10005,7 +10016,8 @@
                     app.renderPath3DInitial(fIdx);
                     return;
                 end
-                set(app.UI(fIdx).path3DPastTrajectory, 'XData', x(1:idx), 'YData', y(1:idx), 'ZData', z(1:idx));
+                pastIdx = app.path3DDecimatedIndices(idx, app.PATH3D_PAST_MAX_POINTS);
+                set(app.UI(fIdx).path3DPastTrajectory, 'XData', x(pastIdx), 'YData', y(pastIdx), 'ZData', z(pastIdx));
                 set(app.UI(fIdx).path3DDronePatch, 'XData', x(idx), 'YData', y(idx), 'ZData', z(idx));
             catch ME
                 app.logCaught(ME, 'path3D:update');
@@ -10070,6 +10082,14 @@
                 xlim(ax, xLim);
                 ylim(ax, yLim);
                 zlim(ax, zLim);
+                try
+                    ax.XLimMode = 'manual';
+                    ax.YLimMode = 'manual';
+                    ax.ZLimMode = 'manual';
+                    ax.Clipping = 'on';
+                catch ME_axes_props
+                    app.logCaught(ME_axes_props, 'path3D:auto-fit-axes-props');
+                end
                 app.setPath3DAxisCtrlValues(fIdx, xLim, yLim, zLim);
             catch ME
                 app.logCaught(ME, 'path3D:auto-fit');
@@ -10125,6 +10145,24 @@
                 pad = (hi - lo) * 0.05;
             end
             lim = [lo - pad, hi + pad];
+        end
+
+        function idx = path3DDecimatedIndices(~, stopIdx, maxPoints)
+            idx = [];
+            try
+                stopIdx = floor(double(stopIdx));
+                maxPoints = max(1, floor(double(maxPoints)));
+                if ~isfinite(stopIdx) || stopIdx < 1
+                    return;
+                end
+                step = max(1, ceil(stopIdx / maxPoints));
+                idx = 1:step:stopIdx;
+                if isempty(idx) || idx(end) ~= stopIdx
+                    idx = [idx, stopIdx];
+                end
+            catch
+                idx = [];
+            end
         end
 
         function [ok, times, x, y, z] = getPath3DSeries(app, fIdx)
