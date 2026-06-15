@@ -821,6 +821,8 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if ~isempty(activeOff)
                 app.testHook('pushBoardToggleButton', activeOff);
             end
+        case 'setPath3DDialogVisible'
+            app.testHook('setPath3DDialogVisible', act.args{:});
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -1086,8 +1088,16 @@ function exp = i_expectedFromState(st)
     exp.requireVideoControl = false(1, 2);
     exp.videoControlVisible = false(1, 2);
     exp.videoFrameExpected = NaN(1, 2);
+    exp.path3DDesiredVisible = false(1, 2);
+    exp.path3DDialogVisible = false(1, 2);
     exp.minRequiredPanelCaptures = 0;
     exp.savedPresetState = struct();
+    if isfield(st, 'path3DDesiredVisible')
+        exp.path3DDesiredVisible = logical(st.path3DDesiredVisible);
+    end
+    if isfield(st, 'path3DDialogVisible')
+        exp.path3DDialogVisible = logical(st.path3DDialogVisible);
+    end
     for fIdx = 1:2
         b = st.boards(fIdx);
         exp.panel(fIdx) = b.PanelVisible;
@@ -1106,6 +1116,12 @@ function exp = i_expectedFromState(st)
         end
         if isfield(st, 'vidControlDialogVisible')
             exp.videoControlVisible(fIdx) = logical(st.vidControlDialogVisible(fIdx));
+        end
+        if isfield(b, 'path3DDesiredVisible')
+            exp.path3DDesiredVisible(fIdx) = logical(b.path3DDesiredVisible);
+        end
+        if isfield(b, 'path3DDialogVisible')
+            exp.path3DDialogVisible(fIdx) = logical(b.path3DDialogVisible);
         end
     end
 end
@@ -1137,6 +1153,7 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 exp.boardOff(fIdx) = false;
                 exp.summaryVisible(fIdx) = false;
                 exp.sourceColumnsHidden(3 - fIdx) = false;
+                exp.path3DDialogVisible = logical(exp.path3DDesiredVisible);
                 % v5-B: mid-off persistence policy(v-final P8) - expected panel state after restore is
                 % the pre-restore measurement (keeping during-off toggles is the policy ground truth)
                 pNames = {'attitude', 'map', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
@@ -1156,11 +1173,22 @@ function exp = i_updateExpectedState(exp, act, beforeState)
                 % v5-G: Policy B - on board-off entry, collapse the flight-play panel of both boards
                 exp.flightPlayVisible(:) = false;
                 exp.flightPlayActive(:) = false;
+                exp.path3DDialogVisible(:) = false;
             end
         case 'ensureNoBoardOff'
             exp.boardOff(:) = false;
             exp.summaryVisible(:) = false;
             exp.sourceColumnsHidden(:) = false;
+            exp.path3DDialogVisible = logical(exp.path3DDesiredVisible);
+        case 'setPath3DDialogVisible'
+            fIdx = act.args{1};
+            tf = logical(act.args{2});
+            exp.path3DDesiredVisible(fIdx) = tf;
+            if any(exp.boardOff)
+                exp.path3DDialogVisible(:) = false;
+            else
+                exp.path3DDialogVisible(fIdx) = tf;
+            end
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -1459,6 +1487,24 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
         if isfield(st, 'vidViewerDialogVisible') && any(logical(st.vidViewerDialogVisible))
             issues{end + 1} = 'Video Player auto-opened during board-off';
         end
+        if isfield(st, 'path3DDialogVisible') && any(logical(st.path3DDialogVisible))
+            issues{end + 1} = '3D Path dialog visible during board-off';
+        end
+    end
+
+    if isfield(st, 'path3DDesiredVisible') && any(logical(st.path3DDesiredVisible) ~= logical(exp.path3DDesiredVisible))
+        issues{end + 1} = sprintf('3D Path desired visibility mismatch expected=%s actual=%s', ...
+            i_boolVecString(exp.path3DDesiredVisible), i_boolVecString(st.path3DDesiredVisible));
+    end
+    if isfield(st, 'path3DDialogVisible')
+        expectedPath3DVisible = logical(exp.path3DDialogVisible);
+        if any(st.BoardOffState)
+            expectedPath3DVisible(:) = false;
+        end
+        if any(logical(st.path3DDialogVisible) ~= expectedPath3DVisible)
+            issues{end + 1} = sprintf('3D Path dialog visibility mismatch expected=%s actual=%s', ...
+                i_boolVecString(expectedPath3DVisible), i_boolVecString(st.path3DDialogVisible));
+        end
     end
 
     for fIdx = 1:2
@@ -1512,6 +1558,11 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
                 issues{end + 1} = sprintf('board %d altitude marker/xline callback missing', fIdx);
             end
             issues = i_validateFlightPlayState(st, exp, fIdx, issues);
+        end
+        if isfield(st.boards(fIdx), 'path3DDialogVisible') && st.boards(fIdx).path3DDialogVisible ...
+                && st.boards(fIdx).dataLoaded && st.boards(fIdx).path3DAxesValid ...
+                && st.boards(fIdx).path3DPastPointCount < 1
+            issues{end + 1} = sprintf('board %d 3D Path past trajectory did not render', fIdx);
         end
         if st.boards(fIdx).plotTabCount < exp.minPlotTabCount(fIdx)
             issues{end + 1} = sprintf('board %d plot tab count below expected minimum', fIdx);
@@ -2925,6 +2976,7 @@ function cases = i_buildCaseMatrix()
     ASP = @(name, lbl)         struct('fn','applySavedLayoutPreset',       'args',{{name}},      'label',lbl, 'row',NaN);
     DSP = @(name, lbl)         struct('fn','deleteSavedLayoutPreset',      'args',{{name}},      'label',lbl, 'row',NaN);
     RTL = @(lbl)               struct('fn','roundTripProjectLayoutState',  'args',{{}},          'label',lbl, 'row',NaN);
+    P3D = @(fIdx, tf, lbl)     struct('fn','setPath3DDialogVisible',       'args',{{fIdx, tf}},  'label',lbl, 'row',NaN);
     SVS = @(fIdx, fr, t, vf, df, lbl) struct('fn','setVideoSync', ...
                                               'args',{{fIdx, fr, t, vf, df, true}}, 'label',lbl, 'row',NaN);
     % v-runner: EditDialog dispatch macros
@@ -3363,6 +3415,27 @@ function cases = i_buildCaseMatrix()
         'dual video sync', 'goToFrame on F2 leaves F1 video frame and data index unchanged', ...
         {BVR('reset board-off'), SVS(1, 1, 0, 30, 50, 'sync F1'), SVS(2, 1, 0, 30, 50, 'sync F2'), ...
          GTF(2, 12, 'F2 go to frame 12')});
+
+    % K-PATH3D: 3D Path Phase 1 lifecycle, board-off and layout round-trip coverage.
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-01 open/close Flight 1 3D Path', ...
+        '3D Path lifecycle', 'dialog desired/visible state follows direct toggle', ...
+        {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), P3D(1, false, 'close F1 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-02 board-off hides and board-on restores 3D Path', ...
+        '3D Path board-off', 'visible dialog hides during board-off and restores after board-on', ...
+        {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), BV(2, 'lower board off'), ...
+         BV(2, 'lower board on'), P3D(1, false, 'close F1 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-03 arm 3D Path while board-off', ...
+        '3D Path board-off guard', 'desired state can be armed but dialog stays hidden until board-on', ...
+        {BVR('reset board-off'), BV(1, 'upper board off'), P3D(2, true, 'arm F2 3D Path'), ...
+         BV(1, 'upper board on'), P3D(2, false, 'close F2 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-04 3D Path layout round-trip', ...
+        '3D Path project state', 'Path3DVisible survives in-memory UiState.Layout round-trip', ...
+        {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), RTL('round-trip layout with 3D Path'), ...
+         P3D(1, false, 'close F1 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-05 3D Path follows time changes', ...
+        '3D Path time update', 'past trajectory renders while main current index changes', ...
+        {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), ATC(1, 10, 'move F1 time'), ...
+         ATC(1, 20, 'move F1 time again'), P3D(1, false, 'close F1 3D Path')});
 
     % K-PANEL-CAPTURE: mandatory external/control-panel capture coverage.
     captureSpecs = { ...

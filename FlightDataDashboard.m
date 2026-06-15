@@ -894,7 +894,11 @@
                                    'selectedTab', 0, 'plotCounts', [], 'totalPlotCount', 0, ...
                                    'markerCount', 0, 'interactiveMarkerCount', 0, ...
                                    'lineCount', 0, 'interactiveLineCount', 0, ...
-                                   'firstMarkerX', NaN, 'firstLineX', NaN));
+                                   'firstMarkerX', NaN, 'firstLineX', NaN), ...
+                'path3DDesiredVisible', false, ...
+                'path3DDialogVisible', false, ...
+                'path3DAxesValid', false, ...
+                'path3DPastPointCount', 0);
         end
 
         function s = collectTestBoardState(app, fIdx)
@@ -925,6 +929,21 @@
                     s.sideHandleVisible.video = app.isUiVisible(app.UI(fIdx).vidViewerDialog);
                 elseif isfield(app.UI(fIdx), 'panelVideo')
                     s.sideHandleVisible.video = app.isUiVisible(app.UI(fIdx).panelVideo);
+                end
+                if numel(app.Path3DVisible) >= fIdx
+                    s.path3DDesiredVisible = logical(app.Path3DVisible(fIdx));
+                end
+                if isfield(app.UI(fIdx), 'path3DDialog') && ~isempty(app.UI(fIdx).path3DDialog) ...
+                        && isvalid(app.UI(fIdx).path3DDialog)
+                    s.path3DDialogVisible = app.isUiVisible(app.UI(fIdx).path3DDialog);
+                end
+                if isfield(app.UI(fIdx), 'path3DAxes') && ~isempty(app.UI(fIdx).path3DAxes) ...
+                        && isvalid(app.UI(fIdx).path3DAxes)
+                    s.path3DAxesValid = true;
+                end
+                if isfield(app.UI(fIdx), 'path3DPastTrajectory') && ~isempty(app.UI(fIdx).path3DPastTrajectory) ...
+                        && isvalid(app.UI(fIdx).path3DPastTrajectory)
+                    s.path3DPastPointCount = numel(app.UI(fIdx).path3DPastTrajectory.XData);
                 end
                 if isfield(app.UI(fIdx), 'panelAttitudeGrid') && ~isempty(app.UI(fIdx).panelAttitudeGrid) ...
                         && isvalid(app.UI(fIdx).panelAttitudeGrid)
@@ -1193,6 +1212,11 @@
                 if double(beforeState.UserLayoutPresetCount) ~= double(afterState.UserLayoutPresetCount)
                     issueCount = issueCount + 1;
                     issues{issueCount} = 'UserLayoutPresetCount mismatch';
+                end
+                if isfield(beforeState, 'path3DDesiredVisible') && isfield(afterState, 'path3DDesiredVisible') ...
+                        && ~isequal(logical(beforeState.path3DDesiredVisible), logical(afterState.path3DDesiredVisible))
+                    issueCount = issueCount + 1;
+                    issues{issueCount} = 'Path3DVisible mismatch';
                 end
                 for fIdx = 1:2
                     fields = {'attitude', 'mapOnly', 'altOnly', 'video', 'info', 'dataView'};
