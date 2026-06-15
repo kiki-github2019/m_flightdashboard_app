@@ -879,6 +879,23 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
                         'NED %.4f -> ENU expected %.4f actual %.4f', checks{cIdx, 1}, checks{cIdx, 2}, got);
                 end
             end
+        case 'assertWaitUntilCap'
+            % [C1] i_waitUntil must terminate on an always-false predicate (no infinite poll).
+            tTimeout = 0.2; tPoll = 0.05;
+            capExpected = max(200, ceil(tTimeout / max(tPoll, 1e-3)) * 2);
+            if capExpected < 200
+                error('AutoTest:WaitUntilCap', 'MAX_WAIT_ITER floor dropped below 200 (=%d)', capExpected);
+            end
+            tStart = tic;
+            okWait = i_waitUntil(@() false, tTimeout, tPoll);
+            elapsed = toc(tStart);
+            if okWait
+                error('AutoTest:WaitUntilCap', 'i_waitUntil returned true for always-false predicate');
+            end
+            if elapsed > tTimeout * 3 + 1.0
+                error('AutoTest:WaitUntilCap', ...
+                    'i_waitUntil did not terminate within bound (elapsed=%.3fs, timeout=%.3fs)', elapsed, tTimeout);
+            end
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
             if ~beforeState.BoardOffState(offIdx), return; end
@@ -3552,6 +3569,11 @@ function cases = i_buildCaseMatrix()
         {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), ...
          P3DS(1, 'save/load disk project with F1 3D visible'), ...
          P3D(1, false, 'close F1 3D Path')});
+
+    % META: runner-internal self-tests (no FDD/app state dependency).
+    cases(end + 1) = mk('META', 'META-WAITUNTIL-01 i_waitUntil terminates on false predicate', ...
+        'waitUntil cap', 'always-false predicate returns false within bounded time (guards infinite poll)', ...
+        {struct('fn', 'assertWaitUntilCap', 'args', {{}}, 'label', 'verify waitUntil poll cap', 'row', NaN)});
 
     % E04 is the ONLY case that needs actual AVI data loaded.
     for k = 1:numel(cases)
