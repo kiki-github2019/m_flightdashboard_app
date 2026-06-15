@@ -618,6 +618,18 @@ function dataFiles = i_defaultDataFiles()
                  2, 'flight_data2.dat'};
 end
 
+function v = i_boardCurrentIndex(app, fIdx)
+    % [C4] safe scalar read of a board's current index for poll predicates.
+    v = -inf;
+    try
+        st = app.testHook('getTestState');
+        if numel(st.boards) >= fIdx
+            v = double(st.boards(fIdx).currentIndex);
+        end
+    catch
+    end
+end
+
 function ok = i_waitUntil(predicate, timeoutS, pollS)
     % v-fixL6: replaces fixed pause - poll until predicate is true + drawnow.
     %          returns false on timeout. predicate-internal throw is treated as a skipped round.
@@ -895,6 +907,22 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if elapsed > tTimeout * 3 + 1.0
                 error('AutoTest:WaitUntilCap', ...
                     'i_waitUntil did not terminate within bound (elapsed=%.3fs, timeout=%.3fs)', elapsed, tTimeout);
+            end
+        case 'assertPath3DTimerUpdate'
+            % [C4] active flight-play timer must advance currentIndex and keep past trajectory valid.
+            fIdx = act.args{1};
+            startIdx = i_boardCurrentIndex(app, fIdx);
+            app.testHook('startFlightPlay', fIdx);
+            advanced = i_waitUntil(@() i_boardCurrentIndex(app, fIdx) >= startIdx + 1, 3, 0.05);
+            app.testHook('stopFlightPlay', fIdx);   % always stop before asserting (determinism)
+            if ~advanced
+                error('AutoTest:Path3DTimer', 'board %d currentIndex did not advance under flight play', fIdx);
+            end
+            ps = app.testHook('getPath3DState');
+            if ps.pastPointCount(fIdx) < 1 || ~ps.pastXYZConsistent(fIdx) || ~ps.pastHasFinite(fIdx)
+                error('AutoTest:Path3DTimer', ...
+                    'board %d 3D Path past invalid after timer update (count=%d consistent=%d finite=%d)', ...
+                    fIdx, ps.pastPointCount(fIdx), ps.pastXYZConsistent(fIdx), ps.pastHasFinite(fIdx));
             end
         case 'boardOffAddPlotTab'
             offIdx = act.args{1};
@@ -3583,6 +3611,11 @@ function cases = i_buildCaseMatrix()
         {BVR('reset board-off'), BV(1, 'upper board off'), P3D(1, true, 'arm F1 3D Path (hidden)'), ...
          P3DS(1, 'save/load disk project with F1 armed under board-off'), ...
          BV(1, 'upper board on'), P3D(1, false, 'close F1 3D Path')});
+    cases(end + 1) = mk('K-PATH3D', 'K-PATH3D-12 flight-play timer updates 3D Path past', ...
+        '3D Path timer sync', 'active flight-play timer advances current index and keeps past trajectory valid', ...
+        {BVR('reset board-off'), P3D(1, true, 'open F1 3D Path'), ...
+         struct('fn', 'assertPath3DTimerUpdate', 'args', {{1}}, 'label', 'verify timer-driven 3D past update', 'row', NaN), ...
+         P3D(1, false, 'close F1 3D Path')});
 
     % META: runner-internal self-tests (no FDD/app state dependency).
     cases(end + 1) = mk('META', 'META-WAITUNTIL-01 i_waitUntil terminates on false predicate', ...
@@ -3600,8 +3633,9 @@ function cases = i_buildCaseMatrix()
             cases(k).requireAvi = true;
         elseif contains(lower(cases(k).title), 'videoviewer') || contains(lower(cases(k).title), 'video viewer')
             cases(k).requireAvi = true;   % v-fix12: video viewer capture needs AVI
-        elseif contains(cases(k).title, 'H-FLIGHT-PLAY')
+        elseif contains(cases(k).title, 'H-FLIGHT-PLAY') || contains(cases(k).title, 'K-PATH3D-12')
             % v5-I: row timer verification - no AVI needed. Do not load even under LoadAvi='always' (save R2025a hang resources)
+            % [C4] K-PATH3D-12 drives the flight-play timer too -> forbid AVI for the same reason.
             cases(k).forbidAvi = true;
         end
     end
