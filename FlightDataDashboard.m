@@ -557,7 +557,10 @@
                         case 'attitude', btn = app.UI(fIdx).btnAtt;            routeName = 'attitude';
                         case {'map', 'maponly'}, btn = app.UI(fIdx).btnMap;    routeName = 'mapOnly';
                         case 'altonly',  btn = app.UI(fIdx).btnAlt;            routeName = 'altOnly';
-                        case {'path3d', '3d'}, btn = app.UI(fIdx).btnPath3D;   routeName = 'path3D';
+                        case {'path3d', '3d'}
+                            % [#4] field guard: partial merge/apply may lack btnPath3D
+                            if isfield(app.UI(fIdx), 'btnPath3D'), btn = app.UI(fIdx).btnPath3D; else, btn = gobjects(0); end
+                            routeName = 'path3D';
                         case 'info',     btn = app.UI(fIdx).btnInfo;           routeName = 'info';
                         case {'dataview', 'plot'}, btn = app.UI(fIdx).btnDataView; routeName = 'dataView';
                         case 'video',    btn = app.UI(fIdx).btnVid;            routeName = 'video';
@@ -14264,11 +14267,17 @@
                     app.applyBodyGridRowHeights();
                 end
                 % [#2] backward-compatible: old .fdproj without Path3DVisible -> default false
-                if isfield(layout, 'Path3DVisible') && numel(layout.Path3DVisible) >= 2
-                    app.Path3DVisible = logical(layout.Path3DVisible);
-                else
-                    app.Path3DVisible = [false, false];
+                % [#3] normalize to exactly 1x2 logical so snapshot compare never sees a length mismatch
+                vis = [false, false];
+                if isfield(layout, 'Path3DVisible')
+                    try
+                        tmp = logical(layout.Path3DVisible(:)');
+                        n = min(2, numel(tmp));
+                        vis(1:n) = tmp(1:n);
+                    catch
+                    end
                 end
+                app.Path3DVisible = vis;
                 for fIdx = 1:2
                     app.setPath3DDialogVisible(fIdx, app.Path3DVisible(fIdx));
                 end
