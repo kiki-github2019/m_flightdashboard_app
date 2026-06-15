@@ -909,7 +909,12 @@
                 'path3DAxesValid', false, ...
                 'path3DDroneTransformValid', false, ...
                 'path3DBodyAxesValid', false, ...
+                'path3DFullPointCount', 0, ...
+                'path3DFullXYZConsistent', false, ...
+                'path3DFullHasFinite', false, ...
                 'path3DPastPointCount', 0, ...
+                'path3DPastXYZConsistent', false, ...
+                'path3DPastHasFinite', false, ...
                 'path3DWayPointsCount', 0, ...
                 'path3DHasBodyAttitude', false, ...
                 'path3DAttitudeEnabled', false);
@@ -966,9 +971,14 @@
                         s.path3DBodyAxesValid = false;
                     end
                 end
+                if isfield(app.UI(fIdx), 'path3DFullTrajectory')
+                    [s.path3DFullPointCount, s.path3DFullXYZConsistent, s.path3DFullHasFinite] = ...
+                        app.path3DLineState(app.UI(fIdx).path3DFullTrajectory);
+                end
                 if isfield(app.UI(fIdx), 'path3DPastTrajectory') && ~isempty(app.UI(fIdx).path3DPastTrajectory) ...
                         && isvalid(app.UI(fIdx).path3DPastTrajectory)
-                    s.path3DPastPointCount = numel(app.UI(fIdx).path3DPastTrajectory.XData);
+                    [s.path3DPastPointCount, s.path3DPastXYZConsistent, s.path3DPastHasFinite] = ...
+                        app.path3DLineState(app.UI(fIdx).path3DPastTrajectory);
                 end
                 % [#3] 3D path option-derived state (waypoints / attitude source / gate)
                 try
@@ -10094,9 +10104,9 @@
         function M = path3DDroneTransformMatrix(app, fIdx, idx, x0, y0, z0, x, y, z)
             M = eye(4);
             try
-                scales = app.path3DDroneScale(x, y, z);
+                glyphScale = app.path3DDroneScale(x, y, z);
                 R = app.path3DRotationMatrixAtIndex(fIdx, idx);
-                M(1:3, 1:3) = R * diag(scales);
+                M(1:3, 1:3) = R * glyphScale;
                 M(1:3, 4) = [double(x0); double(y0); double(z0)];
             catch ME
                 app.logCaught(ME, 'path3D:drone-transform');
@@ -10104,22 +10114,24 @@
             end
         end
 
-        function scales = path3DDroneScale(~, x, y, z)
+        function glyphScale = path3DDroneScale(~, x, y, z)
             x = x(isfinite(x));
             y = y(isfinite(y));
             z = z(isfinite(z));
             xySpan = 1e-3;
-            zSpan = 1;
             if ~isempty(x)
                 xySpan = max(xySpan, max(x) - min(x));
             end
             if ~isempty(y)
                 xySpan = max(xySpan, max(y) - min(y));
             end
-            if ~isempty(z)
-                zSpan = max(zSpan, max(z) - min(z));
+            if ~isempty(z) && ~isempty(x) && ~isempty(y)
+                % Keep the glyph itself uniformly scaled. Lat/lon and altitude
+                % use different physical units, so using z-span as a separate
+                % scale distorts the attitude axes.
+                xySpan = max(xySpan, sqrt(max(eps, (max(x) - min(x)) * (max(y) - min(y)))));
             end
-            scales = [xySpan * 0.035, xySpan * 0.035, zSpan * 0.035];
+            glyphScale = xySpan * 0.035;
         end
 
         function R = path3DRotationMatrixAtIndex(app, fIdx, idx)
@@ -10353,6 +10365,29 @@
             end
         end
 
+        function [pointCount, xyzConsistent, hasFinite] = path3DLineState(~, hLine)
+            pointCount = 0;
+            xyzConsistent = false;
+            hasFinite = false;
+            try
+                if isempty(hLine) || ~isvalid(hLine)
+                    return;
+                end
+                x = hLine.XData;
+                y = hLine.YData;
+                z = hLine.ZData;
+                pointCount = numel(x);
+                xyzConsistent = pointCount == numel(y) && pointCount == numel(z);
+                if xyzConsistent && pointCount > 0
+                    hasFinite = any(isfinite(double(x(:))) & isfinite(double(y(:))) & isfinite(double(z(:))));
+                end
+            catch
+                pointCount = 0;
+                xyzConsistent = false;
+                hasFinite = false;
+            end
+        end
+
         function [ok, times, x, y, z] = getPath3DSeries(app, fIdx)
             ok = false;
             times = [];
@@ -10548,9 +10583,18 @@
         end
 
         function state = getPath3DStateForTest(app)
-            state = struct('visible', false(1, 2), 'desiredVisible', logical(app.Path3DVisible), ...
+            desiredVisible = false(1, 2);
+            try
+                tmp = logical(app.Path3DVisible(:)');
+                n = min(2, numel(tmp));
+                desiredVisible(1:n) = tmp(1:n);
+            catch
+            end
+            state = struct('visible', false(1, 2), 'desiredVisible', desiredVisible, ...
                 'hasAxes', false(1, 2), 'hasDroneTransform', false(1, 2), ...
-                'hasBodyAxes', false(1, 2), 'pastPointCount', zeros(1, 2));
+                'hasBodyAxes', false(1, 2), ...
+                'fullPointCount', zeros(1, 2), 'fullXYZConsistent', false(1, 2), 'fullHasFinite', false(1, 2), ...
+                'pastPointCount', zeros(1, 2), 'pastXYZConsistent', false(1, 2), 'pastHasFinite', false(1, 2));
             for vIdx = 1:min(2, numel(app.UI))
                 try
                     if isfield(app.UI(vIdx), 'path3DDialog') && ~isempty(app.UI(vIdx).path3DDialog) ...
@@ -10561,9 +10605,14 @@
                             && isvalid(app.UI(vIdx).path3DAxes)
                         state.hasAxes(vIdx) = true;
                     end
+                    if isfield(app.UI(vIdx), 'path3DFullTrajectory')
+                        [state.fullPointCount(vIdx), state.fullXYZConsistent(vIdx), state.fullHasFinite(vIdx)] = ...
+                            app.path3DLineState(app.UI(vIdx).path3DFullTrajectory);
+                    end
                     if isfield(app.UI(vIdx), 'path3DPastTrajectory') && ~isempty(app.UI(vIdx).path3DPastTrajectory) ...
                             && isvalid(app.UI(vIdx).path3DPastTrajectory)
-                        state.pastPointCount(vIdx) = numel(app.UI(vIdx).path3DPastTrajectory.XData);
+                        [state.pastPointCount(vIdx), state.pastXYZConsistent(vIdx), state.pastHasFinite(vIdx)] = ...
+                            app.path3DLineState(app.UI(vIdx).path3DPastTrajectory);
                     end
                     if isfield(app.UI(vIdx), 'path3DDroneTransform') && ~isempty(app.UI(vIdx).path3DDroneTransform) ...
                             && isvalid(app.UI(vIdx).path3DDroneTransform)

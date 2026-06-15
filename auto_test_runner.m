@@ -830,9 +830,19 @@ function i_applyAction(app, act, beforeState, outDir, caseIdx, stepIdx, captureO
             if ~ps.hasAxes(fIdx)
                 error('AutoTest:Path3DRender', 'board %d 3D Path axes invalid', fIdx);
             end
+            if ps.fullPointCount(fIdx) < 1 || ~ps.fullXYZConsistent(fIdx) || ~ps.fullHasFinite(fIdx)
+                error('AutoTest:Path3DRender', ...
+                    'board %d 3D Path full trajectory invalid (count=%d consistent=%d finite=%d)', ...
+                    fIdx, ps.fullPointCount(fIdx), ps.fullXYZConsistent(fIdx), ps.fullHasFinite(fIdx));
+            end
             if ps.pastPointCount(fIdx) < 1
                 error('AutoTest:Path3DRender', 'board %d 3D Path past trajectory empty (count=%d)', ...
                     fIdx, ps.pastPointCount(fIdx));
+            end
+            if ~ps.pastXYZConsistent(fIdx) || ~ps.pastHasFinite(fIdx)
+                error('AutoTest:Path3DRender', ...
+                    'board %d 3D Path past trajectory invalid (count=%d consistent=%d finite=%d)', ...
+                    fIdx, ps.pastPointCount(fIdx), ps.pastXYZConsistent(fIdx), ps.pastHasFinite(fIdx));
             end
             if ~ps.hasDroneTransform(fIdx)
                 error('AutoTest:Path3DRender', 'board %d 3D Path drone transform missing', fIdx);
@@ -1585,11 +1595,19 @@ function [ok, msg, issues] = i_validateState(st, exp) %#ok<*AGROW>
         end
         if isfield(st.boards(fIdx), 'path3DDialogVisible') && st.boards(fIdx).path3DDialogVisible ...
                 && st.boards(fIdx).dataLoaded && st.boards(fIdx).path3DAxesValid ...
-                && st.boards(fIdx).path3DPastPointCount < 1
-            issues{end + 1} = sprintf('board %d 3D Path past trajectory did not render', fIdx);
+                && (st.boards(fIdx).path3DFullPointCount < 1 || st.boards(fIdx).path3DPastPointCount < 1)
+            issues{end + 1} = sprintf('board %d 3D Path full/past trajectory did not render', fIdx);
         end
         if isfield(st.boards(fIdx), 'path3DDialogVisible') && st.boards(fIdx).path3DDialogVisible ...
                 && st.boards(fIdx).dataLoaded
+            if ~isfield(st.boards(fIdx), 'path3DFullXYZConsistent') || ~st.boards(fIdx).path3DFullXYZConsistent ...
+                    || ~isfield(st.boards(fIdx), 'path3DFullHasFinite') || ~st.boards(fIdx).path3DFullHasFinite
+                issues{end + 1} = sprintf('board %d 3D Path full trajectory invalid', fIdx);
+            end
+            if ~isfield(st.boards(fIdx), 'path3DPastXYZConsistent') || ~st.boards(fIdx).path3DPastXYZConsistent ...
+                    || ~isfield(st.boards(fIdx), 'path3DPastHasFinite') || ~st.boards(fIdx).path3DPastHasFinite
+                issues{end + 1} = sprintf('board %d 3D Path past trajectory invalid', fIdx);
+            end
             if ~isfield(st.boards(fIdx), 'path3DDroneTransformValid') || ~st.boards(fIdx).path3DDroneTransformValid
                 issues{end + 1} = sprintf('board %d 3D Path drone transform missing', fIdx);
             end
