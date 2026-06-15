@@ -4780,6 +4780,7 @@
 
             drawnow;
             app.refreshBoardOffSummaryPanel(fIdx, true);
+            app.alignPlotAxesInTab(fIdx, tabIdx);
         end
 
         function applyPlotAxesAlignment(app, axList)
@@ -6449,6 +6450,7 @@
                     app.setLinkXWithinTab(fIdx, t, logical(tabSpec.LinkXWithinTab));
                 end
             end
+            app.alignAllPlotAxes(fIdx);
         end
     end
 
@@ -8031,6 +8033,7 @@
                 end
                 app.markProjectDirtyAndScheduleRefresh('plot-props');
                 app.refreshEditDialog();
+                for aff = 1:2, app.alignAllPlotAxes(aff); end   % [plot-align] height/label/axis edits may shift Y label width
             catch ME
                 app.logCaught(ME, 'plot-apply');
             end
@@ -12722,6 +12725,7 @@
                     end
                 end
                 app.syncBoardOffPlotMarkers(fIdx, sourceIdx);
+                app.alignBoardOffPlotAxes(fIdx);
             catch ME
                 app.logCaught(ME, 'boardRebuild');
             end
@@ -12866,6 +12870,7 @@
                 app.syncBoardOffSelectedTab(offIdx);
                 app.plotSelectedVariable(sourceIdx);
                 app.refreshBoardOffSummaryPanel(offIdx, true);
+                app.alignBoardOffPlotAxes(offIdx);
             catch ME
                 app.logCaught(ME, 'boardOffPlotSelected');
             end
