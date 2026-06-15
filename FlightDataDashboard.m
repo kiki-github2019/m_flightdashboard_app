@@ -9319,11 +9319,12 @@
                         continue;
                     end
                     g = app.UI(fIdx).ctrlGrid;
-                    btns = {app.UI(fIdx).btnAtt, app.UI(fIdx).btnMap, app.UI(fIdx).btnAlt, app.UI(fIdx).btnVid};
+                    % [3D Path] include btnPath3D so responsive layout keeps the new column aligned
+                    btns = {app.UI(fIdx).btnAtt, app.UI(fIdx).btnMap, app.UI(fIdx).btnAlt, app.UI(fIdx).btnPath3D, app.UI(fIdx).btnVid};
                     if narrow
                         g.RowHeight = {'1x', '1x'};
                         g.ColumnWidth = {100, 150, 110, 120, '1x'};
-                        cols = [1 2 3 4];
+                        cols = [1 2 3 4 5];
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
@@ -9339,8 +9340,8 @@
                         end
                     else
                         g.RowHeight = {'1x'};
-                        g.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 70};
-                        cols = [6 7 8 9];
+                        g.ColumnWidth = {100, 150, 110, 120, '1x', 70, 70, 70, 80, 70};
+                        cols = [6 7 8 9 10];
                         for b = 1:numel(btns)
                             h = btns{b};
                             if ~isempty(h) && isvalid(h)
@@ -9778,9 +9779,9 @@
                 ax.YColor = t.plotTickFg;
                 ax.ZColor = t.plotTickFg;
                 ax.GridColor = t.plotGridColor;
-                xlabel(ax, 'Lon');
-                ylabel(ax, 'Lat');
-                zlabel(ax, 'Alt');
+                xlabel(ax, 'East (Lon)');
+                ylabel(ax, 'North (Lat)');
+                zlabel(ax, 'Up (Alt)');
                 grid(ax, 'on');
                 view(ax, 3);
                 try
@@ -9972,9 +9973,9 @@
                 [ok, times, x, y, z] = app.getPath3DSeries(fIdx);
                 hold(ax, 'on');
                 grid(ax, 'on');
-                xlabel(ax, 'Lon');
-                ylabel(ax, 'Lat');
-                zlabel(ax, 'Alt');
+                xlabel(ax, 'East (Lon)');
+                ylabel(ax, 'North (Lat)');
+                zlabel(ax, 'Up (Alt)');
                 view(ax, 3);
                 if ~ok
                     title(ax, 'No flight data');
